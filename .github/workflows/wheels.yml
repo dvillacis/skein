@@ -117,4 +117,14 @@ jobs:
         # No `password:` field — pypa/gh-action-pypi-publish auto-
         # detects the OIDC token from `id-token: write` and uses it
         # against the configured Trusted Publisher on PyPI.
+        #
+        # `skip-existing: true` makes a partial-publish-then-retry
+        # safe: PyPI files are immutable (`file already exists` is a
+        # hard 400), so if any file in the dist set has already been
+        # uploaded by a previous run we silently skip it rather than
+        # failing the whole job. Useful when, e.g., the wheels
+        # uploaded successfully but the sdist failed metadata
+        # validation, requiring a retry of just the sdist.
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
