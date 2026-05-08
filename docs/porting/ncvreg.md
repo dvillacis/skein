@@ -32,8 +32,8 @@ alpha <- coef(fit)[1]
 Python:
 
 ```python
-import skein
-fit = skein.MCPPathCV(gamma=3.0, cv=10).fit(X, y)
+import skein_glm
+fit = skein_glm.MCPPathCV(gamma=3.0, cv=10).fit(X, y)
 beta = fit.coef_
 alpha = fit.intercept_
 ```
@@ -98,7 +98,7 @@ coef(fit, lambda = 0.1)    # coefficients at a specific λ
 
 ```python
 # Python
-fit = skein.MCPPathRegressor(gamma=3.0, n_lambdas=100).fit(X, y)
+fit = skein_glm.MCPPathRegressor(gamma=3.0, n_lambdas=100).fit(X, y)
 # fit.coefs_ is (100, p), fit.lambdas_ is (100,)
 # Pick a specific λ:
 import numpy as np
@@ -119,7 +119,7 @@ fit <- cv.ncvreg(X, y, penalty = "MCP", lambda = my_lambda, nfolds = 10)
 # Python
 import numpy as np
 my_lambda = 10 ** np.linspace(0, -3, 50)
-fit = skein.MCPPathCV(gamma=3.0, lambdas=my_lambda, cv=10).fit(X, y)
+fit = skein_glm.MCPPathCV(gamma=3.0, lambdas=my_lambda, cv=10).fit(X, y)
 ```
 
 ### BIC selection
@@ -135,8 +135,8 @@ sel <- summary(fit, lambda = "BIC")
 
 ```python
 # Python
-path = skein.MCPPathRegressor(gamma=3.0, n_lambdas=100).fit(X, y)
-best_idx, scores = skein.select_by_ic(path, X, y, criterion="bic")
+path = skein_glm.MCPPathRegressor(gamma=3.0, n_lambdas=100).fit(X, y)
+best_idx, scores = skein_glm.select_by_ic(path, X, y, criterion="bic")
 beta_best = path.coefs_[best_idx]
 ```
 
@@ -154,11 +154,11 @@ risk <- predict(fit, X_new, lambda = lambda_min, type = "link")
 
 ```python
 # Python
-fit = skein.CoxMCPPathRegressor(gamma=3.0, n_lambdas=100).fit(X, time, event)
+fit = skein_glm.CoxMCPPathRegressor(gamma=3.0, n_lambdas=100).fit(X, time, event)
 risk = fit.predict(X_new)   # shape (n_new, n_lambdas), η = Xβ
 
 # Or with CV-selected λ:
-cv = skein.CoxMCPPathCV(gamma=3.0, cv=10).fit(X, time, event)
+cv = skein_glm.CoxMCPPathCV(gamma=3.0, cv=10).fit(X, time, event)
 risk_at_lambda_min = cv.predict(X_new)   # 1D, at the best λ
 ```
 
@@ -176,12 +176,12 @@ on both sides.
 ### lambda.min behavior under CV
 
 `ncvreg::cv.ncvreg` returns both `lambda.min` and `lambda.1se`
-(one-standard-error rule). `skein.MCPPathCV` only returns
+(one-standard-error rule). `skein_glm.MCPPathCV` only returns
 `lambda_best_` (= the equivalent of `lambda.min`). The 1se rule is
 on the M5.x roadmap; for now you can compute it manually:
 
 ```python
-cv = skein.MCPPathCV(gamma=3.0, cv=10).fit(X, y)
+cv = skein_glm.MCPPathCV(gamma=3.0, cv=10).fit(X, y)
 mean_scores = cv.cv_mean_scores_   # shape (n_lambdas,)
 std_scores = cv.cv_std_scores_     # shape (n_lambdas,)
 
@@ -210,7 +210,7 @@ first). `skein` does:
 ```python
 import scipy.sparse as sp
 X_sp = sp.csc_matrix(X)
-fit = skein.MCPPathCV(gamma=3.0).fit(X_sp, y)
+fit = skein_glm.MCPPathCV(gamma=3.0).fit(X_sp, y)
 ```
 
 This alone can be a major speedup if your X is mostly zero.

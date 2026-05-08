@@ -35,10 +35,10 @@ $$
 **MCP at large $\gamma$ is numerically equivalent to lasso**:
 
 ```python
-import skein
+import skein_glm
 # γ = 1e6 is "lasso for all practical purposes" — the MCP nonconvexity
 # only kicks in when |β_j| > γ·λ, which is essentially never at this γ.
-model = skein.MCPRegressor(lambda_=0.1, gamma=1e6).fit(X, y)
+model = skein_glm.MCPRegressor(lambda_=0.1, gamma=1e6).fit(X, y)
 ```
 
 For a true lasso fit, use either `MCPRegressor(gamma=1e6)` or
@@ -70,9 +70,9 @@ L1 component, then divide by the ridge shrinkage factor
 $1 + (1-\alpha)\lambda \cdot \text{step}$.
 
 ```python
-skein.ElasticNetRegressor(lambda_=0.1, alpha=0.5)        # single λ
-skein.ElasticNetPathRegressor(alpha=0.5, n_lambdas=50)   # full path
-skein.ElasticNetPathCV(alpha=0.5, cv=10)                  # CV-selected λ
+skein_glm.ElasticNetRegressor(lambda_=0.1, alpha=0.5)        # single λ
+skein_glm.ElasticNetPathRegressor(alpha=0.5, n_lambdas=50)   # full path
+skein_glm.ElasticNetPathCV(alpha=0.5, cv=10)                  # CV-selected λ
 ```
 
 Matches `glmnet`'s `glmnet(family = "gaussian", alpha = ...)` shape.
@@ -100,8 +100,8 @@ $\gamma$** behaves more like lasso. Common defaults: $\gamma = 3$
 aggressive sparsification.
 
 ```python
-skein.MCPRegressor(lambda_=0.1, gamma=3.0)               # single λ
-skein.MCPPathRegressor(gamma=3.0, n_lambdas=50)          # full path
+skein_glm.MCPRegressor(lambda_=0.1, gamma=3.0)               # single λ
+skein_glm.MCPPathRegressor(gamma=3.0, n_lambdas=50)          # full path
 ```
 
 Why MCP over lasso: lasso is asymptotically biased — it shrinks
@@ -131,8 +131,8 @@ recover similar active sets in practice; MCP tends to be slightly
 more aggressive at sparsifying.
 
 ```python
-skein.SCADRegressor(lambda_=0.1, a=3.7)
-skein.SCADPathRegressor(a=3.7, n_lambdas=50)
+skein_glm.SCADRegressor(lambda_=0.1, a=3.7)
+skein_glm.SCADPathRegressor(a=3.7, n_lambdas=50)
 ```
 
 ## Group penalties
@@ -167,8 +167,8 @@ Either every coefficient in group $g$ is zero, or all of them are
 non-zero. Within an active group, coefficients aren't sparsified.
 
 ```python
-skein.GroupLassoRegressor(groups=groups, lambda_=0.1)
-skein.GroupLassoPathRegressor(groups=groups, n_lambdas=50)
+skein_glm.GroupLassoRegressor(groups=groups, lambda_=0.1)
+skein_glm.GroupLassoPathRegressor(groups=groups, n_lambdas=50)
 ```
 
 ### Group MCP / Group SCAD
@@ -184,7 +184,7 @@ Same advantage as scalar MCP — nearly unbiased estimates of the
 **truly active groups** — at the cost of a nonconvex objective.
 
 ```python
-skein.GroupMCPPathRegressor(groups=groups, gamma=3.0, n_lambdas=50)
+skein_glm.GroupMCPPathRegressor(groups=groups, gamma=3.0, n_lambdas=50)
 ```
 
 This is the headline algorithm: solved via Local Linear Approximation
@@ -206,7 +206,7 @@ group lasso; $\alpha = 1$ is pure scalar lasso; $\alpha = 0.5$ is
 balanced.
 
 ```python
-skein.SparseGroupLassoPathRegressor(groups=groups, alpha=0.5, n_lambdas=50)
+skein_glm.SparseGroupLassoPathRegressor(groups=groups, alpha=0.5, n_lambdas=50)
 ```
 
 ### Sparse-group MCP
@@ -215,7 +215,7 @@ The nonconvex sparse-group: MCP shape applied to both the within-group
 $|\beta_j|$ terms and the across-group $\|\beta_g\|_2$ terms.
 
 ```python
-skein.SparseGroupMCPPathRegressor(groups=groups, gamma=3.0, alpha=0.5, n_lambdas=50)
+skein_glm.SparseGroupMCPPathRegressor(groups=groups, gamma=3.0, alpha=0.5, n_lambdas=50)
 ```
 
 ## How nonconvex is solved

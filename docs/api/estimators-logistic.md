@@ -11,24 +11,24 @@ logistic base class.
 
 ## Scalar — single λ
 
-::: skein.estimators.LogisticMCPRegressor
-::: skein.estimators.LogisticSCADRegressor
+::: skein_glm.estimators.LogisticMCPRegressor
+::: skein_glm.estimators.LogisticSCADRegressor
 
 ## Scalar — path
 
-::: skein.estimators.LogisticMCPPathRegressor
-::: skein.estimators.LogisticSCADPathRegressor
+::: skein_glm.estimators.LogisticMCPPathRegressor
+::: skein_glm.estimators.LogisticSCADPathRegressor
 
 ## Group — single λ
 
-::: skein.estimators.LogisticGroupLassoRegressor
-::: skein.estimators.LogisticGroupMCPRegressor
-::: skein.estimators.LogisticSparseGroupLassoRegressor
-::: skein.estimators.LogisticSparseGroupMCPRegressor
+::: skein_glm.estimators.LogisticGroupLassoRegressor
+::: skein_glm.estimators.LogisticGroupMCPRegressor
+::: skein_glm.estimators.LogisticSparseGroupLassoRegressor
+::: skein_glm.estimators.LogisticSparseGroupMCPRegressor
 
 ## Group — path
 
-::: skein.estimators.LogisticGroupLassoPathRegressor
-::: skein.estimators.LogisticGroupMCPPathRegressor
-::: skein.estimators.LogisticSparseGroupLassoPathRegressor
-::: skein.estimators.LogisticSparseGroupMCPPathRegressor
+::: skein_glm.estimators.LogisticGroupLassoPathRegressor
+::: skein_glm.estimators.LogisticGroupMCPPathRegressor
+::: skein_glm.estimators.LogisticSparseGroupLassoPathRegressor
+::: skein_glm.estimators.LogisticSparseGroupMCPPathRegressor

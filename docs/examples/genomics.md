@@ -15,7 +15,7 @@ data when you swap in `MmapDesignF64` for the design.
 
 ```python
 import numpy as np
-import skein
+import skein_glm
 
 rng = np.random.default_rng(42)
 
@@ -58,7 +58,7 @@ group_weights = np.sqrt(group_sizes.astype(float))
 
 # Sparse-group MCP via LLA. α = 0.5 balances within-gene L1 and
 # across-gene L2; γ = 3 is moderate nonconvexity.
-fit = skein.SparseGroupMCPPathCV(
+fit = skein_glm.SparseGroupMCPPathCV(
     groups=groups,
     weights=group_weights,
     gamma=3.0,
@@ -110,7 +110,7 @@ biased as a sparse-group lasso fit would be:
 
 ```python
 # Compare to convex sparse-group lasso (no nonconvex shrinkage).
-fit_lasso = skein.SparseGroupLassoPathCV(
+fit_lasso = skein_glm.SparseGroupLassoPathCV(
     groups=groups,
     weights=group_weights,
     alpha=0.5,
@@ -154,8 +154,8 @@ hundreds of thousands or millions. The fit scales naturally:
 2. **Open it as `MmapDesignF32`** and fit:
 
    ```python
-   design = skein.MmapDesignF32("gen.bin", n_rows=n, n_cols=p)
-   fit = skein.MCPPathCV(gamma=3.0, n_lambdas=50, cv=10).fit(design, y)
+   design = skein_glm.MmapDesignF32("gen.bin", n_rows=n, n_cols=p)
+   fit = skein_glm.MCPPathCV(gamma=3.0, n_lambdas=50, cv=10).fit(design, y)
    ```
 
    v0.1 surface for genotype-sized fits: `MCPPathCV` and

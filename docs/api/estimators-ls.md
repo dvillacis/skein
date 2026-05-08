@@ -16,26 +16,26 @@ for any analysis that picks λ post-hoc.
 
 ## Scalar — single λ
 
-::: skein.estimators.MCPRegressor
-::: skein.estimators.SCADRegressor
-::: skein.estimators.ElasticNetRegressor
+::: skein_glm.estimators.MCPRegressor
+::: skein_glm.estimators.SCADRegressor
+::: skein_glm.estimators.ElasticNetRegressor
 
 ## Scalar — path
 
-::: skein.estimators.MCPPathRegressor
-::: skein.estimators.SCADPathRegressor
-::: skein.estimators.ElasticNetPathRegressor
+::: skein_glm.estimators.MCPPathRegressor
+::: skein_glm.estimators.SCADPathRegressor
+::: skein_glm.estimators.ElasticNetPathRegressor
 
 ## Group — single λ
 
-::: skein.estimators.GroupLassoRegressor
-::: skein.estimators.GroupMCPRegressor
-::: skein.estimators.SparseGroupLassoRegressor
-::: skein.estimators.SparseGroupMCPRegressor
+::: skein_glm.estimators.GroupLassoRegressor
+::: skein_glm.estimators.GroupMCPRegressor
+::: skein_glm.estimators.SparseGroupLassoRegressor
+::: skein_glm.estimators.SparseGroupMCPRegressor
 
 ## Group — path
 
-::: skein.estimators.GroupLassoPathRegressor
-::: skein.estimators.GroupMCPPathRegressor
-::: skein.estimators.SparseGroupLassoPathRegressor
-::: skein.estimators.SparseGroupMCPPathRegressor
+::: skein_glm.estimators.GroupLassoPathRegressor
+::: skein_glm.estimators.GroupMCPPathRegressor
+::: skein_glm.estimators.SparseGroupLassoPathRegressor
+::: skein_glm.estimators.SparseGroupMCPPathRegressor

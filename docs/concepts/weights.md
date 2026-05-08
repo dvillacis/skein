@@ -67,13 +67,13 @@ MCP, SCAD, etc.). Pass via the estimator's `weights=` argument:
 
 ```python
 import numpy as np
-import skein
+import skein_glm
 
 # Don't penalize the first feature (e.g., a known-relevant baseline);
 # penalize others at uniform weight 1.
 weights = np.ones(p)
 weights[0] = 0.0
-model = skein.MCPPathRegressor(gamma=3.0, weights=weights).fit(X, y)
+model = skein_glm.MCPPathRegressor(gamma=3.0, weights=weights).fit(X, y)
 ```
 
 ### Use cases
@@ -130,7 +130,7 @@ $$
 groups = np.array([0, 0, 1, 1, 1, 2, 2, 2, 2])
 group_sizes = np.bincount(groups)
 weights = np.sqrt(group_sizes)   # group-size correction
-model = skein.GroupLassoPathRegressor(
+model = skein_glm.GroupLassoPathRegressor(
     groups=groups, weights=weights, n_lambdas=50,
 ).fit(X, y)
 ```
@@ -150,7 +150,7 @@ The sparse-group lasso / MCP penalties have a fourth weight axis —
 via `coord_weights=` on `SparseGroup*` estimators:
 
 ```python
-skein.SparseGroupMCPPathRegressor(
+skein_glm.SparseGroupMCPPathRegressor(
     groups=groups,
     weights=group_weights,         # per-group L2 penalty
     coord_weights=coord_weights,   # per-feature L1 penalty
@@ -169,7 +169,7 @@ A logistic group MCP fit with all three weight types active:
 
 ```python
 import numpy as np
-import skein
+import skein_glm
 
 n, p, G = 1000, 100, 20
 X = np.random.standard_normal((n, p))
@@ -181,7 +181,7 @@ feature_weights = np.ones(p)
 feature_weights[:3] = 0.5                            # known-relevant features
 group_weights = np.sqrt(np.bincount(groups))         # size correction
 
-model = skein.LogisticGroupMCPPathRegressor(
+model = skein_glm.LogisticGroupMCPPathRegressor(
     groups=groups,
     weights=group_weights,
     gamma=3.0,

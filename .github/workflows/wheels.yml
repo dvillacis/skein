@@ -7,12 +7,12 @@ name: Wheels
 #
 # One-time PyPI setup before the first publish works:
 #
-#   1. Create the project page at https://pypi.org/account/login
-#      (or use the "pending" trusted-publisher flow below to
-#      reserve the name `skein` on first publish).
+#   1. The "pending" trusted-publisher flow below reserves the
+#      PyPI project name `skein-glm` on first publish, so no
+#      separate "create project" step is needed.
 #   2. Go to https://pypi.org/manage/account/publishing/ →
 #      "Add a new pending publisher" → fill in:
-#        PyPI project name: skein
+#        PyPI project name: skein-glm
 #        Owner:             dvillacis
 #        Repository name:   skein
 #        Workflow filename: wheels.yml

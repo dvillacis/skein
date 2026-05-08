@@ -14,7 +14,7 @@ important — token frequencies span several orders of magnitude.
 ```python
 import numpy as np
 import scipy.sparse as sp
-import skein
+import skein_glm
 
 rng = np.random.default_rng(0)
 
@@ -62,7 +62,7 @@ Logistic MCP path with CV, standardize=True (so high-frequency tokens
 don't get pre-emptively penalized for having larger column norms):
 
 ```python
-fit = skein.LogisticMCPPathCV(
+fit = skein_glm.LogisticMCPPathCV(
     gamma=3.0,
     n_lambdas=50,
     lambda_min_ratio=1e-3,
@@ -140,7 +140,7 @@ The MCP nonconvexity helps both ways here:
 ## Compare to lasso (MCP at γ=∞)
 
 ```python
-fit_lasso = skein.LogisticMCPPathCV(
+fit_lasso = skein_glm.LogisticMCPPathCV(
     gamma=1e6,                        # ≈ lasso
     n_lambdas=50,
     lambda_min_ratio=1e-3,

@@ -12,7 +12,7 @@ Status: v0.1 scaffold. The trait surface is set and a minimal cyclic CD solver v
 
 ```
 crates/skein-core/   pure Rust: traits + algorithms (no Python deps)
-crates/skein-py/     PyO3 bindings, builds cdylib `skein._core`
+crates/skein-py/     PyO3 bindings, builds cdylib `skein_glm._core`
 python/skein/        sklearn-compatible estimators + Python ABCs
 tests/               pytest smoke tests (require maturin develop first)
 benches/             criterion (Rust) + asv (Python) — empty in v0.1
@@ -54,8 +54,8 @@ Solver entry point is `cd_solve` in `crates/skein-core/src/solver/cd.rs`. It's i
 
 ## Python ↔ Rust binding
 
-`crates/skein-py/src/lib.rs` is the PyO3 layer. `[tool.maturin]` in `pyproject.toml` builds it as the `skein._core` module (python source lives in `python/`, manifest lives at the workspace path). The Python-facing surface is deliberately thin: `_core.solve_mcp_ls` and `_core.solve_scad_ls` take numpy arrays + scalars and return `(coef, info_dict)`. The sklearn wrappers in `python/skein/estimators.py` (`MCPRegressor`, `SCADRegressor`) are `BaseEstimator + RegressorMixin` and store results on `coef_`, `info_`, `n_features_in_`.
+`crates/skein-py/src/lib.rs` is the PyO3 layer. `[tool.maturin]` in `pyproject.toml` builds it as the `skein_glm._core` module (python source lives in `python/skein_glm/`, manifest lives at the workspace path). The Python-facing surface is deliberately thin: `_core.solve_mcp_ls` and `_core.solve_scad_ls` take numpy arrays + scalars and return `(coef, info_dict)`. The sklearn wrappers in `python/skein_glm/estimators.py` (`MCPRegressor`, `SCADRegressor`) are `BaseEstimator + RegressorMixin` and store results on `coef_`, `info_`, `n_features_in_`.
 
-When adding a new solver to Rust, surface it by adding a `#[pyfunction]` to `crates/skein-py/src/lib.rs`, register it in `_core(...)`, and write a thin sklearn estimator in `python/skein/estimators.py` that calls it.
+When adding a new solver to Rust, surface it by adding a `#[pyfunction]` to `crates/skein-py/src/lib.rs`, register it in `_core(...)`, and write a thin sklearn estimator in `python/skein_glm/estimators.py` that calls it.
 
 The Python ABCs in `python/skein/penalties.py` and `python/skein/datafits.py` are the extension surface for downstream per-paper projects to prototype custom penalties / datafits in Python before optionally porting to Rust. Keep them in lockstep with the Rust traits.

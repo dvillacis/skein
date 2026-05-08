@@ -1,8 +1,15 @@
 //! Python bindings for skein-core.
 //!
-//! Exposes the smallest surface needed for the Python `skein.estimators`
-//! layer: build a problem (design + datafit + penalty), solve it (or solve
-//! along a λ-path), return β plus an info dict.
+//! Compiled extension lives at `skein_glm._core` on the Python side
+//! (the PyPI distribution name is `skein-glm` because the `skein`
+//! name is taken on PyPI by an unrelated YARN-interface library).
+//! The Rust crate names (`skein-core`, `skein-py`) keep the short
+//! form.
+//!
+//! Exposes the smallest surface needed for the Python
+//! `skein_glm.estimators` layer: build a problem (design + datafit +
+//! penalty), solve it (or solve along a λ-path), return β plus an
+//! info dict.
 
 // clippy 1.95's `useless_conversion` lint is a false positive against
 // PyO3 0.22's macro-generated `PyResult<...>` returns — it points at the

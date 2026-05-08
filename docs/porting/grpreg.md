@@ -31,8 +31,8 @@ alpha <- coef(fit)[1]
 Python:
 
 ```python
-import skein
-fit = skein.GroupMCPPathCV(groups=g, gamma=3.0, cv=10).fit(X, y)
+import skein_glm
+fit = skein_glm.GroupMCPPathCV(groups=g, gamma=3.0, cv=10).fit(X, y)
 beta = fit.coef_
 alpha = fit.intercept_
 ```
@@ -128,7 +128,7 @@ g = np.array([0, 0, 1, 1, 1, 2])   # groups of sizes 2, 3, 1
 group_sizes = np.bincount(g)
 weights = np.sqrt(group_sizes.astype(float))   # [√2, √3, 1]
 
-fit = skein.GroupLassoPathRegressor(
+fit = skein_glm.GroupLassoPathRegressor(
     groups=g, weights=weights, n_lambdas=50,
 ).fit(X, y)
 ```
@@ -157,7 +157,7 @@ print(predict(fit, type = "groups"))   # which groups are active
 
 ```python
 # Python
-fit = skein.GroupMCPPathCV(groups=g, gamma=3.0, cv=10).fit(X, y)
+fit = skein_glm.GroupMCPPathCV(groups=g, gamma=3.0, cv=10).fit(X, y)
 beta = fit.coef_
 intercept = fit.intercept_
 
@@ -179,7 +179,7 @@ prob <- predict(fit, X_new, type = "response", lambda = 0.05)
 
 ```python
 # Python
-fit = skein.LogisticGroupLassoPathRegressor(
+fit = skein_glm.LogisticGroupLassoPathRegressor(
     groups=g, n_lambdas=100,
 ).fit(X, y_bin)
 # At a specific λ:
@@ -191,7 +191,7 @@ prob_at_0p05 = fit.predict_proba(X_new)[:, idx]
 
 ```python
 # Mixed across- and within-group sparsity.
-fit = skein.SparseGroupLassoPathRegressor(
+fit = skein_glm.SparseGroupLassoPathRegressor(
     groups=g, alpha=0.5, n_lambdas=50,
 ).fit(X, y)
 ```
@@ -208,7 +208,7 @@ fit <- grpsurv(X, y = Surv(time, event), group, penalty = "grMCP")
 
 ```python
 # Python
-fit = skein.CoxGroupMCPPathRegressor(
+fit = skein_glm.CoxGroupMCPPathRegressor(
     groups=g, gamma=3.0, n_lambdas=50,
 ).fit(X, time, event)
 risk = fit.predict(X_new)

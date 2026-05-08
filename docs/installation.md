@@ -3,7 +3,7 @@
 ## From PyPI (recommended)
 
 ```bash
-pip install skein
+pip install skein-glm
 ```
 
 Pre-built ABI3 wheels are published for:
@@ -91,13 +91,13 @@ requires the MSVC toolchain (Visual Studio Build Tools is enough);
 ## Verifying the install
 
 ```python
-import skein
+import skein_glm
 import numpy as np
 
 rng = np.random.default_rng(0)
 X = rng.standard_normal((100, 10))
 y = X[:, 0] - 2 * X[:, 1] + 0.1 * rng.standard_normal(100)
-model = skein.MCPRegressor(lambda_=0.05, gamma=3.0).fit(X, y)
+model = skein_glm.MCPRegressor(lambda_=0.05, gamma=3.0).fit(X, y)
 print(model.coef_)         # should recover [~1, ~-2, 0, ..., 0]
 print(model.intercept_)    # near 0
 ```

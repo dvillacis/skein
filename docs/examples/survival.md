@@ -14,7 +14,7 @@ baseline hazard absorbs it), and the fit signature takes
 
 ```python
 import numpy as np
-import skein
+import skein_glm
 
 rng = np.random.default_rng(7)
 
@@ -66,7 +66,7 @@ group_sizes = np.bincount(groups)
 group_weights = np.sqrt(group_sizes.astype(float))
 
 # Cox + sparse-group MCP, CV-selected λ, standardize for safety.
-fit = skein.CoxSparseGroupMCPPathCV(
+fit = skein_glm.CoxSparseGroupMCPPathCV(
     groups=groups,
     weights=group_weights,
     gamma=3.0,
@@ -123,7 +123,7 @@ If you want to trace which features come on / drop off as λ
 decreases (a common diagnostic in genomics):
 
 ```python
-path = skein.CoxSparseGroupMCPPathRegressor(
+path = skein_glm.CoxSparseGroupMCPPathRegressor(
     groups=groups,
     weights=group_weights,
     gamma=3.0,
@@ -160,7 +160,7 @@ relaxes.
 What happens if you drop the group structure and use scalar Cox MCP?
 
 ```python
-fit_scalar = skein.CoxMCPPathCV(
+fit_scalar = skein_glm.CoxMCPPathCV(
     gamma=3.0,
     n_lambdas=40,
     lambda_min_ratio=1e-3,

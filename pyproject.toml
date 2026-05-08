@@ -3,8 +3,8 @@ requires = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "skein"
-version = "0.1.0"
+name = "skein-glm"
+version = "0.1.1"
 description = "Weighted structured nonconvex sparse models (Python + Rust)"
 readme = "README.md"
 license = { text = "MIT" }
@@ -47,7 +47,7 @@ Repository = "https://github.com/dvillacis/skein"
 
 [tool.maturin]
 manifest-path = "crates/skein-py/Cargo.toml"
-module-name = "skein._core"
+module-name = "skein_glm._core"
 python-source = "python"
 features = ["pyo3/extension-module"]
 

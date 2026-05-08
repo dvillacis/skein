@@ -54,7 +54,7 @@ through every solver.
 
 ```
 crates/skein-core/   pure Rust: traits + algorithms (no Python)
-crates/skein-py/     PyO3 bindings (cdylib → skein._core)
+crates/skein-py/     PyO3 bindings (cdylib → skein_glm._core)
 python/skein/        sklearn-compatible estimators + ABCs for extensions
 tests/               pytest smoke tests
 benches/             criterion (Rust) + asv (Python)

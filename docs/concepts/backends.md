@@ -36,7 +36,7 @@ The reference implementation. Backed by `ndarray::Array2<f64>`.
 Used automatically when you pass a numpy 2D array to any estimator.
 
 ```python
-model = skein.MCPPathRegressor(...).fit(X, y)   # X is np.ndarray
+model = skein_glm.MCPPathRegressor(...).fit(X, y)   # X is np.ndarray
 ```
 
 `col_sq_norms` is precomputed at construction. Hot path is direct
@@ -51,7 +51,7 @@ zero entries. `col_sq_norms` is precomputed.
 ```python
 import scipy.sparse as sp
 X_sparse = sp.csc_matrix(X)
-model = skein.MCPPathRegressor(...).fit(X_sparse, y)
+model = skein_glm.MCPPathRegressor(...).fit(X_sparse, y)
 ```
 
 Used automatically when you pass a `scipy.sparse.csc_matrix`. CSR
@@ -74,8 +74,8 @@ buf = np.ascontiguousarray(X_disk, dtype=np.float64).tobytes(order="F")
 with open("X.bin", "wb") as f:
     f.write(buf)
 
-design = skein.MmapDesignF64("X.bin", n_rows=n, n_cols=p)
-model = skein.MCPPathRegressor(...).fit(design, y)
+design = skein_glm.MmapDesignF64("X.bin", n_rows=n, n_cols=p)
+model = skein_glm.MCPPathRegressor(...).fit(design, y)
 ```
 
 Why column-major: the CD hot path `col_dot(j, v)` reads each column
@@ -100,7 +100,7 @@ buf32 = np.ascontiguousarray(X_disk, dtype=np.float32).tobytes(order="F")
 with open("X32.bin", "wb") as f:
     f.write(buf32)
 
-design = skein.MmapDesignF32("X32.bin", n_rows=n, n_cols=p)
+design = skein_glm.MmapDesignF32("X32.bin", n_rows=n, n_cols=p)
 ```
 
 This is "f32-on-disk" — not "true mixed precision" (which would also
@@ -122,7 +122,7 @@ chunks = [
     ("chunk_1.bin", 10_000_000),
     ("chunk_2.bin",  7_345_678),
 ]
-design = skein.ChunkedDesignF64(chunks, n_cols=50_000)
+design = skein_glm.ChunkedDesignF64(chunks, n_cols=50_000)
 # total n = 27_345_678
 ```
 

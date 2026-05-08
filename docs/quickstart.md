@@ -6,7 +6,7 @@ have a small synthetic problem set up:
 
 ```python
 import numpy as np
-import skein
+import skein_glm
 
 rng = np.random.default_rng(0)
 n, p = 200, 50
@@ -19,7 +19,7 @@ y = X @ true_beta + 0.1 * rng.standard_normal(n)
 ## Single-λ MCP regression
 
 ```python
-model = skein.MCPRegressor(lambda_=0.05, gamma=3.0).fit(X, y)
+model = skein_glm.MCPRegressor(lambda_=0.05, gamma=3.0).fit(X, y)
 print(model.coef_[:5])        # near [1.5, -2.0, 0.8, 0, 0]
 print(model.intercept_)       # near 0
 print(model.score(X, y))      # R² on training data
@@ -37,7 +37,7 @@ want for any analysis that picks λ post-hoc (cross-validation,
 information criteria, plotting the path).
 
 ```python
-model = skein.MCPPathRegressor(
+model = skein_glm.MCPPathRegressor(
     gamma=3.0, n_lambdas=50, lambda_min_ratio=1e-3,
     standardize=True,
 ).fit(X, y)
@@ -53,7 +53,7 @@ Use `lambdas=` to supply an explicit grid; otherwise `skein` derives
 ## Cross-validation
 
 ```python
-cv = skein.MCPPathCV(gamma=3.0, n_lambdas=50, cv=5, random_state=0).fit(X, y)
+cv = skein_glm.MCPPathCV(gamma=3.0, n_lambdas=50, cv=5, random_state=0).fit(X, y)
 print(cv.lambda_best_)            # CV-selected λ
 print(cv.coef_, cv.intercept_)    # refit β at λ_best on the full data
 print(cv.cv_mean_scores_.shape)   # (50,) — mean test MSE per λ
@@ -66,8 +66,8 @@ GLM / Cox families.
 ## Information criteria (AIC / BIC / EBIC)
 
 ```python
-path = skein.MCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y)
-best_idx, scores = skein.select_by_ic(path, X, y, criterion="bic")
+path = skein_glm.MCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y)
+best_idx, scores = skein_glm.select_by_ic(path, X, y, criterion="bic")
 print(best_idx, path.lambdas_[best_idx])
 print(path.coefs_[best_idx])
 ```
@@ -81,7 +81,7 @@ default (the high-dimensional recommendation from `ncvreg::BIC`).
 groups = np.repeat(np.arange(p // 5), 5)   # 10 groups of 5 features each
 y_bin = (X[:, :3].sum(axis=1) > 0).astype(float)
 
-clf = skein.LogisticGroupMCPPathRegressor(
+clf = skein_glm.LogisticGroupMCPPathRegressor(
     groups=groups, gamma=3.0, n_lambdas=20,
 ).fit(X, y_bin)
 
@@ -101,7 +101,7 @@ coefficient is non-zero.
 time = rng.exponential(1.0 / np.exp(X[:, :3].sum(axis=1)))
 event = (rng.uniform(size=n) < 0.7).astype(float)
 
-cox = skein.CoxMCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, time, event)
+cox = skein_glm.CoxMCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, time, event)
 risk = cox.predict(X)                       # shape (n, n_lambdas)
                                             # prognostic index η = Xβ;
                                             # higher → shorter survival
@@ -124,7 +124,7 @@ X_dense = rng.standard_normal((n, p))
 X_dense[X_dense < 0.5] = 0.0
 X_sparse = sp.csc_matrix(X_dense)
 
-model = skein.MCPPathRegressor(
+model = skein_glm.MCPPathRegressor(
     gamma=3.0, n_lambdas=20, standardize=True,
 ).fit(X_sparse, y)
 
@@ -146,10 +146,10 @@ buf = np.ascontiguousarray(X_disk, dtype=np.float64).tobytes(order="F")
 with open("X.bin", "wb") as f:
     f.write(buf)
 
-design = skein.MmapDesignF64("X.bin", n_rows=100_000, n_cols=1_000)
+design = skein_glm.MmapDesignF64("X.bin", n_rows=100_000, n_cols=1_000)
 y_big = rng.standard_normal(100_000)
 
-model = skein.MCPPathRegressor(gamma=3.0, n_lambdas=20).fit(design, y_big)
+model = skein_glm.MCPPathRegressor(gamma=3.0, n_lambdas=20).fit(design, y_big)
 ```
 
 For half the disk footprint (and half the page-cache pressure),
@@ -168,8 +168,8 @@ chunks = [
     ("chunk_1.bin", 10_000_000),
     ("chunk_2.bin",  7_345_678),
 ]
-design = skein.ChunkedDesignF64(chunks, n_cols=50_000)
-model = skein.MCPPathRegressor(...).fit(design, y_big)
+design = skein_glm.ChunkedDesignF64(chunks, n_cols=50_000)
+model = skein_glm.MCPPathRegressor(...).fit(design, y_big)
 ```
 
 Each chunk is a separate column-major file with the same `n_cols`.
@@ -190,7 +190,7 @@ X_inflated = rng.standard_normal((n, p))
 X_inflated[:, 0] *= 100.0     # column 0 is on a different scale
 
 # With standardize=True, all columns are penalized comparably.
-model = skein.MCPPathRegressor(
+model = skein_glm.MCPPathRegressor(
     gamma=3.0, n_lambdas=50, standardize=True,
 ).fit(X_inflated, y)
 ```

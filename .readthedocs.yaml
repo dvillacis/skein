@@ -14,8 +14,8 @@ build:
     # RTD provisions a stable Rust toolchain when this key is set;
     # `pip install .[docs]` below then uses maturin (via the
     # pyproject build-system) to compile the Rust extension during
-    # the install step. Without this, `from skein._core import …` in
-    # `python/skein/__init__.py` would fail at docs-build time and
+    # the install step. Without this, `from skein_glm._core import …` in
+    # `python/skein_glm/__init__.py` would fail at docs-build time and
     # mkdocstrings couldn't introspect any class.
     #
     # Need Rust ≥ 1.85 so cargo can parse manifests with Cargo's

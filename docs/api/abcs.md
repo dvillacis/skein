@@ -1,6 +1,6 @@
 # Extension ABCs
 
-The Python ABCs in `skein.penalties` and `skein.datafits` mirror the
+The Python ABCs in `skein_glm.penalties` and `skein_glm.datafits` mirror the
 Rust traits in `skein-core`. Implement these to prototype new
 penalties / datafits in Python before porting to Rust.
 
@@ -10,10 +10,10 @@ examples.
 
 ## Penalty ABCs
 
-::: skein.penalties.Penalty
+::: skein_glm.penalties.Penalty
 
-::: skein.penalties.GroupPenalty
+::: skein_glm.penalties.GroupPenalty
 
 ## Datafit ABC
 
-::: skein.datafits.Datafit
+::: skein_glm.datafits.Datafit

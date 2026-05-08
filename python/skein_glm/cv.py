@@ -20,7 +20,7 @@ from numpy.typing import NDArray
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.model_selection import KFold
 
-from skein.estimators import (
+from skein_glm.estimators import (
     CoxGroupLassoPathRegressor,
     CoxGroupMCPPathRegressor,
     CoxMCPPathRegressor,

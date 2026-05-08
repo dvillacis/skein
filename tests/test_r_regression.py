@@ -36,7 +36,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-skein = pytest.importorskip("skein")
+skein = pytest.importorskip("skein_glm")
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 ACTIVE_EPS = 1e-6

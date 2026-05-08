@@ -22,11 +22,11 @@ pub trait Datafit: Sync + Send {
 }
 ```
 
-In Python (`skein.datafits.Datafit` ABC, mirrors the Rust trait for
+In Python (`skein_glm.datafits.Datafit` ABC, mirrors the Rust trait for
 prototyping new datafits without porting to Rust first):
 
 ```python
-from skein.datafits import Datafit
+from skein_glm.datafits import Datafit
 class MyDatafit(Datafit):
     def value(self, design, beta): ...
     def coord_grad(self, design, j, residual): ...
@@ -51,8 +51,8 @@ in place after each update — this is the core of the M1 production
 CD solver.
 
 ```python
-import skein
-model = skein.MCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y)
+import skein_glm
+model = skein_glm.MCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y)
 ```
 
 ## Generalized linear models via prox-Newton
@@ -87,7 +87,7 @@ with $y_i \in \{0, 1\}$. Numerically stable cross-entropy via
 `softplus(η)`. Per-sample weights honored throughout.
 
 ```python
-clf = skein.LogisticMCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y_bin)
+clf = skein_glm.LogisticMCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y_bin)
 clf.predict(X)         # class labels {0, 1}, shape (n, n_lambdas)
 clf.predict_proba(X)   # P(y=1), shape (n, n_lambdas)
 clf.decision_function(X)  # η = Xβ + α, shape (n, n_lambdas)
@@ -104,7 +104,7 @@ defined for any non-negative real). The solver clamps $\eta$ to
 $[-30, 30]$ before exponentiation for numerical stability.
 
 ```python
-model = skein.PoissonMCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y_count)
+model = skein_glm.PoissonMCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y_count)
 model.predict(X)          # μ = exp(η), the conditional mean
 model.decision_function(X)  # η = log-rate
 ```
@@ -127,7 +127,7 @@ The fit signature is `fit(X, time, event)` — three arguments instead
 of two:
 
 ```python
-cox = skein.CoxMCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, time, event)
+cox = skein_glm.CoxMCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, time, event)
 cox.predict(X)            # prognostic index η = Xβ; higher → shorter survival
 cox.decision_function(X)  # same as predict() for Cox
 ```

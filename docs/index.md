@@ -45,7 +45,7 @@ When someone asks "why not just `skglm`, `glmnet`, or `ncvreg`?":
 
 ```python
 import numpy as np
-from skein import MCPPathRegressor, LogisticGroupMCPPathRegressor, CoxMCPRegressor
+from skein_glm import MCPPathRegressor, LogisticGroupMCPPathRegressor, CoxMCPRegressor
 
 # Nonconvex sparse least squares with a λ-path.
 rng = np.random.default_rng(0)

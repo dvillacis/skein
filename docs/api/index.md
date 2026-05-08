@@ -38,8 +38,8 @@ estimators total. Cox has 12 (no SCAD distinction at single-λ).
 
 | Module                    | Page                |
 |---------------------------|---------------------|
-| `skein.penalties.Penalty`, `skein.penalties.GroupPenalty` | [ABCs](abcs.md)              |
-| `skein.datafits.Datafit`  | [ABCs](abcs.md)     |
+| `skein_glm.penalties.Penalty`, `skein_glm.penalties.GroupPenalty` | [ABCs](abcs.md)              |
+| `skein_glm.datafits.Datafit`  | [ABCs](abcs.md)     |
 
 ## A note on inherited members
 

@@ -15,4 +15,4 @@ Effective df is the number of nonzero coefficients per λ — the
 Zou-Hastie-Tibshirani unbiased estimator and the standard
 `ncvreg`/`glmnet` convention.
 
-::: skein.ic.select_by_ic
+::: skein_glm.ic.select_by_ic

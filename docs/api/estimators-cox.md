@@ -11,24 +11,24 @@ roadmap), so survival probabilities aren't directly available.
 
 ## Scalar — single λ
 
-::: skein.estimators.CoxMCPRegressor
-::: skein.estimators.CoxSCADRegressor
+::: skein_glm.estimators.CoxMCPRegressor
+::: skein_glm.estimators.CoxSCADRegressor
 
 ## Scalar — path
 
-::: skein.estimators.CoxMCPPathRegressor
-::: skein.estimators.CoxSCADPathRegressor
+::: skein_glm.estimators.CoxMCPPathRegressor
+::: skein_glm.estimators.CoxSCADPathRegressor
 
 ## Group — single λ
 
-::: skein.estimators.CoxGroupLassoRegressor
-::: skein.estimators.CoxGroupMCPRegressor
-::: skein.estimators.CoxSparseGroupLassoRegressor
-::: skein.estimators.CoxSparseGroupMCPRegressor
+::: skein_glm.estimators.CoxGroupLassoRegressor
+::: skein_glm.estimators.CoxGroupMCPRegressor
+::: skein_glm.estimators.CoxSparseGroupLassoRegressor
+::: skein_glm.estimators.CoxSparseGroupMCPRegressor
 
 ## Group — path
 
-::: skein.estimators.CoxGroupLassoPathRegressor
-::: skein.estimators.CoxGroupMCPPathRegressor
-::: skein.estimators.CoxSparseGroupLassoPathRegressor
-::: skein.estimators.CoxSparseGroupMCPPathRegressor
+::: skein_glm.estimators.CoxGroupLassoPathRegressor
+::: skein_glm.estimators.CoxGroupMCPPathRegressor
+::: skein_glm.estimators.CoxSparseGroupLassoPathRegressor
+::: skein_glm.estimators.CoxSparseGroupMCPPathRegressor

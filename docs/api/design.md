@@ -4,8 +4,8 @@ Python helper classes for the out-of-RAM backends. Used in place of
 a numpy array when fitting:
 
 ```python
-design = skein.MmapDesignF64("X.bin", n_rows=n, n_cols=p)
-model = skein.MCPPathRegressor(...).fit(design, y)
+design = skein_glm.MmapDesignF64("X.bin", n_rows=n, n_cols=p)
+model = skein_glm.MCPPathRegressor(...).fit(design, y)
 ```
 
 Estimators with mmap / chunked support sniff `isinstance(x, ...)` to
@@ -20,12 +20,12 @@ model and when to use each helper.
 
 ## Memory-mapped (single file)
 
-::: skein.mmap.MmapDesignF64
+::: skein_glm.mmap.MmapDesignF64
 
-::: skein.mmap.MmapDesignF32
+::: skein_glm.mmap.MmapDesignF32
 
 ## Row-block-chunked (multiple files)
 
-::: skein.mmap.ChunkedDesignF64
+::: skein_glm.mmap.ChunkedDesignF64
 
-::: skein.mmap.ChunkedDesignF32
+::: skein_glm.mmap.ChunkedDesignF32

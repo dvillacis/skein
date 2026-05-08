@@ -13,8 +13,8 @@ import numpy as np
 from numpy.typing import NDArray
 from sklearn.base import BaseEstimator, RegressorMixin
 
-from skein import _core
-from skein.mmap import (
+from skein_glm import _core
+from skein_glm.mmap import (
     ChunkedDesignF32,
     ChunkedDesignF64,
     MmapDesignF32,
@@ -95,8 +95,8 @@ class MCPRegressor(_NonconvexRegressorBase):
     The single-λ companion to :class:`MCPPathRegressor`. Use this
     when you've already chosen ``lambda_`` (via external CV, prior
     knowledge, etc.); use :class:`MCPPathRegressor` or
-    :class:`skein.MCPPathCV` when you want to fit a full path or
-    have skein pick λ for you.
+    :class:`skein_glm.MCPPathCV` when you want to fit a full path or
+    have skein_glm pick λ for you.
 
     Parameters
     ----------
@@ -122,7 +122,7 @@ class MCPRegressor(_NonconvexRegressorBase):
 
     See Also
     --------
-    skein.MCPPathRegressor : Full λ-path with warm starts.
+    skein_glm.MCPPathRegressor : Full λ-path with warm starts.
     """
 
     def __init__(
@@ -302,8 +302,8 @@ class ElasticNetRegressor(_NonconvexRegressorBase):
 
     See Also
     --------
-    skein.ElasticNetPathRegressor : Full λ-path with warm starts.
-    skein.MCPRegressor : Nonconvex sparse alternative.
+    skein_glm.ElasticNetPathRegressor : Full λ-path with warm starts.
+    skein_glm.MCPRegressor : Nonconvex sparse alternative.
     """
 
     def __init__(
@@ -406,8 +406,8 @@ class MCPPathRegressor(_PathRegressorBase):
     sparsifies as ``gamma`` shrinks.
 
     Accepts numpy arrays, ``scipy.sparse.csc_matrix``,
-    :class:`skein.MmapDesignF64` / :class:`skein.MmapDesignF32`,
-    and :class:`skein.ChunkedDesignF64` / :class:`skein.ChunkedDesignF32`
+    :class:`skein_glm.MmapDesignF64` / :class:`skein_glm.MmapDesignF32`,
+    and :class:`skein_glm.ChunkedDesignF64` / :class:`skein_glm.ChunkedDesignF32`
     transparently.
 
     Parameters
@@ -465,18 +465,18 @@ class MCPPathRegressor(_PathRegressorBase):
 
     See Also
     --------
-    skein.MCPRegressor : Single-λ version.
-    skein.MCPPathCV : K-fold cross-validated path with auto λ-selection.
-    skein.SCADPathRegressor : SCAD-penalized analogue.
+    skein_glm.MCPRegressor : Single-λ version.
+    skein_glm.MCPPathCV : K-fold cross-validated path with auto λ-selection.
+    skein_glm.SCADPathRegressor : SCAD-penalized analogue.
 
     Examples
     --------
     >>> import numpy as np
-    >>> import skein
+    >>> import skein_glm
     >>> rng = np.random.default_rng(0)
     >>> X = rng.standard_normal((200, 50))
     >>> y = X[:, :3] @ [1.5, -2.0, 0.8] + 0.1 * rng.standard_normal(200)
-    >>> model = skein.MCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y)
+    >>> model = skein_glm.MCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y)
     >>> model.coefs_.shape
     (50, 50)
     """
@@ -749,18 +749,18 @@ class ElasticNetPathRegressor(_PathRegressorBase):
 
     See Also
     --------
-    skein.ElasticNetRegressor : Single-λ version.
-    skein.ElasticNetPathCV : K-fold cross-validated path with auto λ-selection.
-    skein.MCPPathRegressor : Nonconvex sparse alternative.
+    skein_glm.ElasticNetRegressor : Single-λ version.
+    skein_glm.ElasticNetPathCV : K-fold cross-validated path with auto λ-selection.
+    skein_glm.MCPPathRegressor : Nonconvex sparse alternative.
 
     Examples
     --------
     >>> import numpy as np
-    >>> import skein
+    >>> import skein_glm
     >>> rng = np.random.default_rng(0)
     >>> X = rng.standard_normal((200, 50))
     >>> y = X[:, :3] @ [1.5, -2.0, 0.8] + 0.1 * rng.standard_normal(200)
-    >>> model = skein.ElasticNetPathRegressor(alpha=0.5, n_lambdas=50).fit(X, y)
+    >>> model = skein_glm.ElasticNetPathRegressor(alpha=0.5, n_lambdas=50).fit(X, y)
     >>> model.coefs_.shape
     (50, 50)
     """

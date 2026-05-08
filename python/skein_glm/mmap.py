@@ -31,7 +31,7 @@ order='F')`:
 
 Then construct the wrapper and pass it to a supporting estimator:
 
-    >>> from skein import MmapDesignF64, MCPPathRegressor
+    >>> from skein_glm import MmapDesignF64, MCPPathRegressor
     >>> design = MmapDesignF64("x.bin", n_rows=100_000, n_cols=1_000)
     >>> model = MCPPathRegressor(gamma=3.0, n_lambdas=50).fit(design, y)
 
@@ -181,8 +181,8 @@ class ChunkedDesignF64:
         >>> chunks = [("chunk_0.bin", 10_000_000),
         ...           ("chunk_1.bin", 10_000_000),
         ...           ("chunk_2.bin",  7_345_678)]
-        >>> design = skein.ChunkedDesignF64(chunks, n_cols=50_000)
-        >>> model = skein.MCPPathRegressor(...).fit(design, y)
+        >>> design = skein_glm.ChunkedDesignF64(chunks, n_cols=50_000)
+        >>> model = skein_glm.MCPPathRegressor(...).fit(design, y)
     """
 
     dtype: str = "f64"

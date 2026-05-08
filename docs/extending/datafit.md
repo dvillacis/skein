@@ -1,6 +1,6 @@
 # Extending: custom datafits
 
-The `Datafit` ABC in `skein.datafits` mirrors the Rust trait in
+The `Datafit` ABC in `skein_glm.datafits` mirrors the Rust trait in
 `skein-core::datafit`. Implement it to add a new loss function —
 robust regression (Huber, quantile), heavy-tailed regression
 (Student-t), zero-inflated counts, etc.
@@ -119,7 +119,7 @@ region but always valid (the inner CD just takes smaller steps).
 ```python
 import numpy as np
 from numpy.typing import NDArray
-from skein.datafits import Datafit
+from skein_glm.datafits import Datafit
 
 
 class HuberLoss(Datafit):

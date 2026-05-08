@@ -38,7 +38,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from skein.estimators import _is_sparse  # noqa: F401  (kept for potential downstream use)
+from skein_glm.estimators import _is_sparse  # noqa: F401  (kept for potential downstream use)
 
 
 _DEFAULT_ACTIVE_EPS = 1e-12
@@ -159,17 +159,17 @@ def select_by_ic(
 
     Examples
     --------
-    >>> import skein
-    >>> path = skein.MCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y)
-    >>> best_idx, scores = skein.select_by_ic(path, X, y, criterion="bic")
+    >>> import skein_glm
+    >>> path = skein_glm.MCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y)
+    >>> best_idx, scores = skein_glm.select_by_ic(path, X, y, criterion="bic")
     >>> beta_best = path.coefs_[best_idx]
     >>> intercept_best = path.intercepts_[best_idx]
 
     For Cox PH:
 
-    >>> cox_path = skein.CoxMCPPathRegressor(gamma=3.0, n_lambdas=50).fit(
+    >>> cox_path = skein_glm.CoxMCPPathRegressor(gamma=3.0, n_lambdas=50).fit(
     ...     X, time, event)
-    >>> best_idx, _ = skein.select_by_ic(cox_path, X, time, event, criterion="ebic")
+    >>> best_idx, _ = skein_glm.select_by_ic(cox_path, X, time, event, criterion="ebic")
     """
     if criterion not in ("aic", "bic", "ebic"):
         raise ValueError(

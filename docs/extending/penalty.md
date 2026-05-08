@@ -1,6 +1,6 @@
 # Extending: custom penalties
 
-The `Penalty` and `GroupPenalty` ABCs in `skein.penalties` mirror
+The `Penalty` and `GroupPenalty` ABCs in `skein_glm.penalties` mirror
 the Rust traits in `skein-core::penalty`. The intended workflow:
 
 1. **Prototype** your penalty in Python by implementing the ABC.
@@ -71,7 +71,7 @@ $$
 ```python
 import numpy as np
 from numpy.typing import NDArray
-from skein.penalties import Penalty
+from skein_glm.penalties import Penalty
 
 
 class CappedL1(Penalty):

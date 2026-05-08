@@ -1,6 +1,6 @@
-"""skein: weighted structured nonconvex sparse models."""
+"""skein_glm: weighted structured nonconvex sparse models."""
 
-from skein._core import (
+from skein_glm._core import (
     solve_cox_group_lasso_path,
     solve_cox_group_mcp_path,
     solve_cox_mcp_path,
@@ -30,7 +30,7 @@ from skein._core import (
     solve_sparse_group_lasso_ls_path,
     solve_sparse_group_mcp_ls_path,
 )
-from skein.estimators import (
+from skein_glm.estimators import (
     CoxGroupLassoPathRegressor,
     CoxGroupLassoRegressor,
     CoxGroupMCPPathRegressor,
@@ -82,7 +82,7 @@ from skein.estimators import (
     SparseGroupMCPPathRegressor,
     SparseGroupMCPRegressor,
 )
-from skein.cv import (
+from skein_glm.cv import (
     CoxGroupLassoPathCV,
     CoxGroupMCPPathCV,
     CoxMCPPathCV,
@@ -109,15 +109,15 @@ from skein.cv import (
     SparseGroupLassoPathCV,
     SparseGroupMCPPathCV,
 )
-from skein.ic import select_by_ic
-from skein.mmap import (
+from skein_glm.ic import select_by_ic
+from skein_glm.mmap import (
     ChunkedDesignF32,
     ChunkedDesignF64,
     MmapDesignF32,
     MmapDesignF64,
 )
-from skein.penalties import Penalty, GroupPenalty
-from skein.datafits import Datafit
+from skein_glm.penalties import Penalty, GroupPenalty
+from skein_glm.datafits import Datafit
 
 __all__ = [
     "solve_mcp_ls",

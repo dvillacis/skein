@@ -4,7 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-skein = pytest.importorskip("skein")
+skein = pytest.importorskip("skein_glm")
 
 
 def _toy_problem(seed: int = 0, *, alpha: float = 0.0):

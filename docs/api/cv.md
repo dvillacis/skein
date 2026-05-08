@@ -16,31 +16,31 @@ share the same fit/predict surface as their non-CV counterparts.
 
 ## LS family
 
-::: skein.cv.MCPPathCV
-::: skein.cv.SCADPathCV
-::: skein.cv.ElasticNetPathCV
-::: skein.cv.GroupLassoPathCV
-::: skein.cv.GroupMCPPathCV
-::: skein.cv.SparseGroupLassoPathCV
-::: skein.cv.SparseGroupMCPPathCV
+::: skein_glm.cv.MCPPathCV
+::: skein_glm.cv.SCADPathCV
+::: skein_glm.cv.ElasticNetPathCV
+::: skein_glm.cv.GroupLassoPathCV
+::: skein_glm.cv.GroupMCPPathCV
+::: skein_glm.cv.SparseGroupLassoPathCV
+::: skein_glm.cv.SparseGroupMCPPathCV
 
 ## Logistic family
 
-::: skein.cv.LogisticMCPPathCV
-::: skein.cv.LogisticSCADPathCV
-::: skein.cv.LogisticGroupLassoPathCV
-::: skein.cv.LogisticGroupMCPPathCV
-::: skein.cv.LogisticSparseGroupLassoPathCV
-::: skein.cv.LogisticSparseGroupMCPPathCV
+::: skein_glm.cv.LogisticMCPPathCV
+::: skein_glm.cv.LogisticSCADPathCV
+::: skein_glm.cv.LogisticGroupLassoPathCV
+::: skein_glm.cv.LogisticGroupMCPPathCV
+::: skein_glm.cv.LogisticSparseGroupLassoPathCV
+::: skein_glm.cv.LogisticSparseGroupMCPPathCV
 
 ## Poisson family
 
-::: skein.cv.PoissonMCPPathCV
-::: skein.cv.PoissonSCADPathCV
-::: skein.cv.PoissonGroupLassoPathCV
-::: skein.cv.PoissonGroupMCPPathCV
-::: skein.cv.PoissonSparseGroupLassoPathCV
-::: skein.cv.PoissonSparseGroupMCPPathCV
+::: skein_glm.cv.PoissonMCPPathCV
+::: skein_glm.cv.PoissonSCADPathCV
+::: skein_glm.cv.PoissonGroupLassoPathCV
+::: skein_glm.cv.PoissonGroupMCPPathCV
+::: skein_glm.cv.PoissonSparseGroupLassoPathCV
+::: skein_glm.cv.PoissonSparseGroupMCPPathCV
 
 ## Cox family
 
@@ -48,9 +48,9 @@ Cox CV uses `StratifiedKFold` by event indicator (so heavy
 censoring doesn't produce event-empty train folds). Folds with zero
 events are defensively skipped.
 
-::: skein.cv.CoxMCPPathCV
-::: skein.cv.CoxSCADPathCV
-::: skein.cv.CoxGroupLassoPathCV
-::: skein.cv.CoxGroupMCPPathCV
-::: skein.cv.CoxSparseGroupLassoPathCV
-::: skein.cv.CoxSparseGroupMCPPathCV
+::: skein_glm.cv.CoxMCPPathCV
+::: skein_glm.cv.CoxSCADPathCV
+::: skein_glm.cv.CoxGroupLassoPathCV
+::: skein_glm.cv.CoxGroupMCPPathCV
+::: skein_glm.cv.CoxSparseGroupLassoPathCV
+::: skein_glm.cv.CoxSparseGroupMCPPathCV

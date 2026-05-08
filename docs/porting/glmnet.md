@@ -5,13 +5,12 @@ for L1 / elastic-net regularized GLMs. If you're moving from R to
 Python and want to keep your `cv.glmnet`-based workflow, this page
 maps `glmnet`'s API onto `skein`.
 
-`skein` doesn't ship a native lasso or elastic net (M6 roadmap), so
-"lasso" in this guide means **MCP at large γ** — numerically
-indistinguishable from lasso but solved through `skein`'s nonconvex
-machinery. The advantages: better statistical properties (less
-biased estimates of large coefficients), the same code path lets you
-turn the nonconvexity dial back when you want it, and the entire
-`skein` weight-axis story is available.
+`skein` ships native elastic net (`ElasticNet*Regressor`, matching
+glmnet's `alpha ∈ [0, 1]` exactly) and a nonconvex MCP/SCAD path. We
+generally recommend MCP at γ=3 over lasso for less-biased estimates
+of truly active features; if you specifically want lasso, either
+`ElasticNetRegressor(alpha=1.0)` or `MCPRegressor(gamma=1e6)` works
+(the former is exact; the latter is numerically indistinguishable).
 
 ## The three top-line translations
 
@@ -33,8 +32,8 @@ alpha_hat <- as.numeric(coef(fit, s = "lambda.min"))[1]
 In Python:
 
 ```python
-import skein
-cv_fit = skein.MCPPathCV(gamma=1e6, cv=10).fit(X, y)
+import skein_glm
+cv_fit = skein_glm.MCPPathCV(gamma=1e6, cv=10).fit(X, y)
 beta_hat = cv_fit.coef_
 alpha_hat = cv_fit.intercept_
 ```
@@ -59,7 +58,7 @@ alpha_hat = cv_fit.intercept_
 | `x`                     | `X` (positional)                  | numpy array, scipy.sparse, MmapDesignF64/32, ChunkedDesignF64/32. |
 | `y`                     | `y` (positional)                  | For Cox: `fit(X, time, event)`.                      |
 | `family`                | (choose estimator class)          | See family map above.                                |
-| `alpha`                 | `alpha` on `ElasticNet*Regressor` | `skein.ElasticNet*Regressor(alpha=...)` matches `glmnet`'s `alpha ∈ [0, 1]` exactly. `α=1` is lasso, `α=0` is ridge. |
+| `alpha`                 | `alpha` on `ElasticNet*Regressor` | `skein_glm.ElasticNet*Regressor(alpha=...)` matches `glmnet`'s `alpha ∈ [0, 1]` exactly. `α=1` is lasso, `α=0` is ridge. |
 | `lambda`                | `lambdas`                         | numpy array. Pass `None` to auto-compute.            |
 | `nlambda`               | `n_lambdas`                       | Default 100 (matches glmnet).                        |
 | `lambda.min.ratio`      | `lambda_min_ratio`                | Default 1e-3 if `n > p`, 1e-2 if `n < p` (glmnet); skein defaults to 1e-3 always. |
@@ -112,8 +111,8 @@ beta <- coef(fit, s = "lambda.min")
 
 ```python
 # Python
-import skein
-fit = skein.MCPPathCV(gamma=1e6, cv=10).fit(X, y)
+import skein_glm
+fit = skein_glm.MCPPathCV(gamma=1e6, cv=10).fit(X, y)
 y_hat = fit.predict(X_new)
 beta = fit.coef_
 intercept = fit.intercept_
@@ -129,7 +128,7 @@ prob <- predict(fit, newx = x_new, type = "response", s = "lambda.min")
 
 ```python
 # Python
-fit = skein.LogisticMCPPathCV(gamma=1e6, cv=10).fit(X, y, sample_weight=w)
+fit = skein_glm.LogisticMCPPathCV(gamma=1e6, cv=10).fit(X, y, sample_weight=w)
 # v0.1: LogisticMCPPathCV picks lambda_best_ at fit time and refits;
 # `fit.predict_proba(X_new)` returns a 1D probability vector.
 prob = fit.predict_proba(X_new)
@@ -140,7 +139,7 @@ For path inspection (every λ at once), use the `*PathRegressor`
 instead of `*PathCV`:
 
 ```python
-path = skein.LogisticMCPPathRegressor(gamma=1e6, n_lambdas=50).fit(X, y)
+path = skein_glm.LogisticMCPPathRegressor(gamma=1e6, n_lambdas=50).fit(X, y)
 prob_path = path.predict_proba(X_new)   # shape (n_new, n_lambdas)
 ```
 
@@ -154,7 +153,7 @@ risk <- predict(fit, newx = x_new, s = "lambda.min")
 
 ```python
 # Python
-fit = skein.CoxMCPPathCV(gamma=1e6, cv=10).fit(X, time, event)
+fit = skein_glm.CoxMCPPathCV(gamma=1e6, cv=10).fit(X, time, event)
 risk = fit.predict(X_new)   # the prognostic index η = Xβ
 ```
 
@@ -180,12 +179,12 @@ fit_adaptive <- cv.glmnet(x, y, family = "gaussian", penalty.factor = penalty)
 import numpy as np
 
 # Stage 1: coarse fit.
-init = skein.MCPPathCV(gamma=1e6).fit(X, y)
+init = skein_glm.MCPPathCV(gamma=1e6).fit(X, y)
 beta_init = init.coef_
 weights = 1.0 / (np.abs(beta_init) + 1e-3)
 
 # Stage 2: refit with adaptive weights.
-adaptive = skein.MCPPathCV(gamma=1e6, weights=weights).fit(X, y)
+adaptive = skein_glm.MCPPathCV(gamma=1e6, weights=weights).fit(X, y)
 ```
 
 The M5.x roadmap promotes this two-stage idiom to a one-shot
@@ -207,7 +206,7 @@ fit <- cv.glmnet(x_sp, y, family = "binomial")
 # Python
 import scipy.sparse as sp
 X_sp = sp.csc_matrix(X)
-fit = skein.LogisticMCPPathCV(gamma=1e6).fit(X_sp, y)
+fit = skein_glm.LogisticMCPPathCV(gamma=1e6).fit(X_sp, y)
 ```
 
 CSR inputs are converted to CSC at the boundary in skein. Group and
