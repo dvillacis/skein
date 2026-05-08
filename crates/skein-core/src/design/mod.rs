@@ -5,6 +5,7 @@
 //! rewriting the optimization code.
 
 mod augmented;
+mod chunked;
 mod dense;
 mod mmap;
 mod mmap_f32;
@@ -12,6 +13,7 @@ mod sparse_csc;
 mod standardized;
 
 pub use augmented::Augmented;
+pub use chunked::Chunked;
 pub use dense::DenseMatrix;
 pub use mmap::MmapMatrix;
 pub use mmap_f32::MmapMatrixF32;

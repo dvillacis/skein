@@ -131,3 +131,117 @@ class MmapDesignF32:
             f"MmapDesignF32(path={self.path!r}, "
             f"n_rows={self.n_rows}, n_cols={self.n_cols})"
         )
+
+
+def _validate_chunked_args(
+    cls_name: str,
+    chunks: list,
+    n_cols: int,
+    bytes_per_elem: int,
+) -> tuple[list[tuple[str, int]], int]:
+    """Validate a list of `(path, n_rows)` chunks, return the
+    canonicalized list and the total `n_rows` summed across chunks."""
+    if not chunks:
+        raise ValueError(f"{cls_name}: chunks list must not be empty")
+    if n_cols <= 0:
+        raise ValueError(f"{cls_name}: n_cols must be > 0 (got {n_cols})")
+    canonical: list[tuple[str, int]] = []
+    total_rows = 0
+    for i, item in enumerate(chunks):
+        if not isinstance(item, tuple) or len(item) != 2:
+            raise TypeError(
+                f"{cls_name}: chunks[{i}] must be a (path, n_rows) tuple, "
+                f"got {item!r}"
+            )
+        path_raw, n_rows = item
+        if not isinstance(n_rows, int) or n_rows <= 0:
+            raise ValueError(
+                f"{cls_name}: chunks[{i}] n_rows must be a positive int "
+                f"(got {n_rows!r})"
+            )
+        path = _validate_mmap_args(
+            f"{cls_name}[{i}]", path_raw, n_rows, n_cols, bytes_per_elem
+        )
+        canonical.append((path, n_rows))
+        total_rows += n_rows
+    return canonical, total_rows
+
+
+class ChunkedDesignF64:
+    """Reference to a row-block-chunked on-disk `f64` matrix.
+
+    Each chunk is a separate column-major raw `f64` file with the
+    same `n_cols`. The solver streams chunk-by-chunk, accumulating
+    `Σ_chunks X_chunk[:, j]ᵀ v_chunk` for each `col_dot` call.
+
+    Use when `n` is too large for a single mmap (or your data
+    pipeline already produces shards). Construct from a list of
+    `(path, n_rows_per_chunk)` tuples; total `n_rows` is the sum.
+
+        >>> chunks = [("chunk_0.bin", 10_000_000),
+        ...           ("chunk_1.bin", 10_000_000),
+        ...           ("chunk_2.bin",  7_345_678)]
+        >>> design = skein.ChunkedDesignF64(chunks, n_cols=50_000)
+        >>> model = skein.MCPPathRegressor(...).fit(design, y)
+    """
+
+    dtype: str = "f64"
+
+    def __init__(
+        self,
+        chunks: list[tuple[str, int]],
+        n_cols: int,
+    ) -> None:
+        self.chunks, self.n_rows = _validate_chunked_args(
+            "ChunkedDesignF64", chunks, n_cols, 8
+        )
+        self.n_cols = n_cols
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (self.n_rows, self.n_cols)
+
+    @property
+    def n_chunks(self) -> int:
+        return len(self.chunks)
+
+    def __repr__(self) -> str:
+        return (
+            f"ChunkedDesignF64(n_chunks={self.n_chunks}, "
+            f"n_rows={self.n_rows}, n_cols={self.n_cols})"
+        )
+
+
+class ChunkedDesignF32:
+    """Reference to a row-block-chunked on-disk `f32` matrix.
+
+    Same as `ChunkedDesignF64` but each chunk holds 4-byte values.
+    Halves the disk footprint and page-cache pressure; pays the same
+    f32→f64 cast on each column read as `MmapDesignF32`.
+    """
+
+    dtype: str = "f32"
+
+    def __init__(
+        self,
+        chunks: list[tuple[str, int]],
+        n_cols: int,
+    ) -> None:
+        self.chunks, self.n_rows = _validate_chunked_args(
+            "ChunkedDesignF32", chunks, n_cols, 4
+        )
+        self.n_cols = n_cols
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (self.n_rows, self.n_cols)
+
+    @property
+    def n_chunks(self) -> int:
+        return len(self.chunks)
+
+    def __repr__(self) -> str:
+        return (
+            f"ChunkedDesignF32(n_chunks={self.n_chunks}, "
+            f"n_rows={self.n_rows}, n_cols={self.n_cols})"
+        )

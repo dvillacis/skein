@@ -2250,6 +2250,145 @@ def test_mmap_f32_with_standardize(tmp_path):
     assert np.sign(last[4]) == np.sign(true_beta[4])
 
 
+def _split_into_chunks(x: np.ndarray, n_chunks: int):
+    """Yield (start, end) row-index pairs for `n_chunks` roughly
+    equal-sized splits."""
+    n = x.shape[0]
+    base = n // n_chunks
+    rem = n % n_chunks
+    start = 0
+    for k in range(n_chunks):
+        size = base + (1 if k < rem else 0)
+        yield start, start + size
+        start += size
+
+
+def test_chunked_design_constructor_validates_each_chunk(tmp_path):
+    """Each (path, n_rows) pair is validated against file size."""
+    x_a = np.zeros((3, 2), dtype=np.float64)
+    p_a = tmp_path / "a.bin"
+    _write_fortran_f64(x_a, p_a)
+    # Claim chunk has 4 rows but file has 3 — must raise.
+    with pytest.raises(ValueError, match="bytes"):
+        skein.ChunkedDesignF64([(str(p_a), 4)], n_cols=2)
+
+
+def test_chunked_design_rejects_empty_chunks_list(tmp_path):
+    with pytest.raises(ValueError, match="empty"):
+        skein.ChunkedDesignF64([], n_cols=5)
+
+
+def test_chunked_mcp_path_matches_dense(tmp_path):
+    """LS-MCP path on a 3-chunk ChunkedDesignF64 matches the dense
+    path on the flat X within 1e-7."""
+    rng = np.random.default_rng(53)
+    n, p = 60, 8
+    x = rng.standard_normal((n, p))
+    true_beta = np.zeros(p)
+    true_beta[:3] = [1.5, -2.0, 0.8]
+    y = x @ true_beta + 0.1 * rng.standard_normal(n)
+
+    chunks: list[tuple[str, int]] = []
+    for k, (lo, hi) in enumerate(_split_into_chunks(x, 3)):
+        path = tmp_path / f"c{k}.bin"
+        _write_fortran_f64(x[lo:hi], path)
+        chunks.append((str(path), hi - lo))
+    chunked = skein.ChunkedDesignF64(chunks, n_cols=p)
+    assert chunked.n_chunks == 3
+    assert chunked.n_rows == n
+
+    lambdas = np.array([0.5, 0.2, 0.08, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        gamma=1e6, lambdas=lambdas, tol=1e-12, max_iter=10000,
+        screening="off", fit_intercept=True,
+    )
+    dense = skein.MCPPathRegressor(**common).fit(x, y)
+    via_chunked = skein.MCPPathRegressor(**common).fit(chunked, y)
+    np.testing.assert_allclose(dense.coefs_, via_chunked.coefs_, atol=1e-7)
+    np.testing.assert_allclose(dense.intercepts_, via_chunked.intercepts_, atol=1e-7)
+    assert via_chunked.n_features_in_ == p
+
+
+def test_chunked_logistic_mcp_path_matches_dense(tmp_path):
+    rng = np.random.default_rng(59)
+    n, p = 200, 8
+    x = rng.standard_normal((n, p))
+    eta = x @ np.array([1.5, 0.0, -1.0, 0.0, 0.8, 0.0, 0.0, 0.0])
+    y = (rng.uniform(size=n) < 1.0 / (1.0 + np.exp(-eta))).astype(np.float64)
+
+    chunks: list[tuple[str, int]] = []
+    for k, (lo, hi) in enumerate(_split_into_chunks(x, 4)):
+        path = tmp_path / f"c{k}.bin"
+        _write_fortran_f64(x[lo:hi], path)
+        chunks.append((str(path), hi - lo))
+    chunked = skein.ChunkedDesignF64(chunks, n_cols=p)
+
+    lambdas = np.array([0.3, 0.1, 0.05, 0.02, 0.01], dtype=np.float64)
+    common = dict(
+        gamma=1e6, lambdas=lambdas, tol=1e-12, max_iter=5000,
+        max_outer=30, outer_tol=1e-10, fit_intercept=True,
+    )
+    dense = skein.LogisticMCPPathRegressor(**common).fit(x, y)
+    via_chunked = skein.LogisticMCPPathRegressor(**common).fit(chunked, y)
+    np.testing.assert_allclose(dense.coefs_, via_chunked.coefs_, atol=1e-6)
+    np.testing.assert_allclose(dense.intercepts_, via_chunked.intercepts_, atol=1e-6)
+
+
+def test_chunked_f32_mcp_path_matches_f32_rounded_dense(tmp_path):
+    rng = np.random.default_rng(67)
+    n, p = 80, 8
+    x = rng.standard_normal((n, p))
+    x_rounded = x.astype(np.float32).astype(np.float64)
+    true_beta = np.zeros(p)
+    true_beta[:3] = [1.5, -2.0, 0.8]
+    y = x_rounded @ true_beta + 0.1 * rng.standard_normal(n)
+
+    chunks: list[tuple[str, int]] = []
+    for k, (lo, hi) in enumerate(_split_into_chunks(x, 3)):
+        path = tmp_path / f"c{k}.bin"
+        _write_fortran_f32(x[lo:hi], path)
+        chunks.append((str(path), hi - lo))
+    chunked = skein.ChunkedDesignF32(chunks, n_cols=p)
+
+    lambdas = np.array([0.5, 0.2, 0.08, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        gamma=1e6, lambdas=lambdas, tol=1e-12, max_iter=10000,
+        screening="off", fit_intercept=True,
+    )
+    dense = skein.MCPPathRegressor(**common).fit(x_rounded, y)
+    via_chunked = skein.MCPPathRegressor(**common).fit(chunked, y)
+    np.testing.assert_allclose(dense.coefs_, via_chunked.coefs_, atol=1e-5)
+    np.testing.assert_allclose(dense.intercepts_, via_chunked.intercepts_, atol=1e-5)
+
+
+def test_chunked_with_standardize_matches_dense(tmp_path):
+    """Chunked + Augmented + Standardized stack converges to the same
+    β as the dense standardize=True path."""
+    rng = np.random.default_rng(71)
+    n, p = 60, 6
+    x = rng.standard_normal((n, p))
+    x[:, 0] *= 30.0
+    true_beta = np.array([0.05, 0.0, -1.5, 0.0, 0.8, 0.0])
+    y = x @ true_beta + 0.1 * rng.standard_normal(n)
+
+    chunks: list[tuple[str, int]] = []
+    for k, (lo, hi) in enumerate(_split_into_chunks(x, 3)):
+        path = tmp_path / f"c{k}.bin"
+        _write_fortran_f64(x[lo:hi], path)
+        chunks.append((str(path), hi - lo))
+    chunked = skein.ChunkedDesignF64(chunks, n_cols=p)
+
+    lambdas = np.array([0.5, 0.2, 0.08, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        gamma=1e6, lambdas=lambdas, tol=1e-12, max_iter=20000,
+        screening="off", fit_intercept=True, standardize=True,
+    )
+    dense = skein.MCPPathRegressor(**common).fit(x, y)
+    via_chunked = skein.MCPPathRegressor(**common).fit(chunked, y)
+    np.testing.assert_allclose(dense.coefs_, via_chunked.coefs_, atol=1e-6)
+    np.testing.assert_allclose(dense.intercepts_, via_chunked.intercepts_, atol=1e-6)
+
+
 def test_logistic_mcp_path_standardize_recovers_signal_with_inflated_scale():
     """End-to-end signal recovery on a logistic problem where one
     feature has a 50× inflated scale. Without standardize the inflated

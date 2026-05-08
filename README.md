@@ -31,10 +31,11 @@ place; design-matrix backends (sparse, mmap, chunked) are next. See
   penalty) combination; type stubs; warm-started λ-paths; standardization
   with original-scale `coef_` / `intercept_` recovery (dense backend).
 
-**Coming next:** chunked row-block streaming and true mixed-precision
-(f32 path solve, f64 active-set refinement) on top of the f64/f32
-mmap backends already in place — pushing `n` from "fits in 256 GB of
-RAM" to "fits on disk" to "streams from disk one chunk at a time."
+**Coming next:** true mixed-precision (parameterize the solver core
+over `T: Float`; bulk path in f32, active-set refinement in f64).
+The data-side scale story is now in place — dense, sparse CSC,
+memory-mapped f64/f32, and row-block-chunked f64/f32 — so the
+remaining wins live inside the solver itself.
 
 ## Layout
 

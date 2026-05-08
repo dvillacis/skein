@@ -17,13 +17,13 @@ load-bearing piece; everything after stacks on top of it.
 | M1 — Production CD core | ✅ done | path solver, screening, Anderson, KKT-stop, standardization |
 | M2 — LLA + group block-CD + parallel | ✅ done | inner CD, working set, LLA outer, path, Rayon, op-norm Lipschitz, sparse-group, gap-safe, PyO3, criterion benches |
 | M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + M3.5 Cox PH Breslow (Rust + PyO3 + estimators) done; multinomial + Efron ties pending |
-| M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) done; chunked + true mixed precision + GPU pending |
+| M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7 |
 | M7 — Multi-task | ⏳ | multi-response GLMs |
 | M8 — Distribution & DX | ⏳ | wheels, CI, docs, comparison benches |
 
-Test count at this snapshot: **191 cargo + 132 pytest, all green.**
+Test count at this snapshot: **199 cargo + 138 pytest, all green.**
 
 ---
 
@@ -517,13 +517,31 @@ matching the dense LS group path).
   an end-to-end "f32 vs f64 within truncation" check that asserts
   identical support recovery.
 
+- ✅ **`Chunked<C>` (row-block streaming)**: generic over the chunk
+  backend `C: DesignMatrix`, so `Chunked<MmapMatrix>` is f64 chunked,
+  `Chunked<MmapMatrixF32>` is f32 chunked, `Chunked<DenseMatrix>` is
+  in-memory chunked (mostly for tests). Each `col_dot(j, v)` splits
+  `v` into per-chunk segments and sums; `matvec` concatenates;
+  `rmatvec` slices `r` and sums per-feature; `col_sq_norm` is
+  precomputed once at construction by summing across chunks. Validates
+  uniform `n_features` across chunks. Composes with `Augmented` and
+  `Standardized` the same way every other backend does. v1 is serial;
+  per-chunk `rayon::par_iter` is a one-line follow-up once benches
+  justify it. PyO3: 4 entry points (LS-MCP and logistic-MCP × {f64,
+  f32}) reusing the existing `mmap_*_path_inner` generics. Python
+  helpers `ChunkedDesignF64(chunks, n_cols)` and `ChunkedDesignF32`
+  taking a list of `(path, n_rows)` pairs; estimator dispatch picks
+  the right `_chunked[_f32]` entry via `x.dtype`. 8 cargo tests on
+  `Chunked<DenseMatrix>` (mirroring the mmap suites; uneven chunk
+  sizes covered) plus a solver-equivalence test. 6 pytest tests
+  covering constructor validation (per-chunk + empty-list), dense↔
+  chunked equivalence for LS-MCP and logistic-MCP, f32 chunked
+  equivalence on f32-rounded reference, and chunked + standardize.
+
 - **True mixed precision**: parameterize the solver core over
   `T: Float` and refine the active set in f64 after a bulk f32 path.
   Different problem from f32-on-disk; needs touching every algorithm
   in `solver/`.
-- **`ChunkedMatrix`**: row-block streaming for out-of-core LS / GLM
-  fits where columns are accessed via partial `Xᵀr` reductions per
-  chunk. This is what makes `n` in the hundreds of millions tractable.
 - **GPU backend** (stretch): `cubla`s / `wgpu` matvecs behind the same
   trait. Only worth it once dense `n × p` matvec is the bottleneck;
   measure first.

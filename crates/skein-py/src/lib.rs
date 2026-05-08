@@ -19,7 +19,8 @@ use pyo3::types::PyDict;
 use skein_core::{
     datafit::{BinomialLogit, CoxPH, GlmDatafit, LeastSquares, PoissonLog},
     design::{
-        Augmented, DenseMatrix, DesignMatrix, MmapMatrix, MmapMatrixF32, SparseCSC, Standardized,
+        Augmented, Chunked, DenseMatrix, DesignMatrix, MmapMatrix, MmapMatrixF32, SparseCSC,
+        Standardized,
     },
     groups::Groups,
     penalty::{GroupLasso, GroupPenalty, Mcp, Scad, SparseGroupLasso},
@@ -4841,6 +4842,210 @@ fn solve_logistic_mcp_path_mmap_f32<'py>(
     )
 }
 
+// =====================================================================
+// Chunked (row-block streaming) entry points
+// =====================================================================
+//
+// `Chunked<C>` lets the solver treat a list of equal-`p` row-block
+// chunks as one design matrix. Each chunk is a separate column-major
+// raw f64/f32 file on disk; the wrapper routes hot-path calls to the
+// chunks and stitches the results.
+//
+// PyO3 surface mirrors the mmap entries 1:1 — same Augmented +
+// Standardized tower-of-wrappers logic from `mmap_*_path_inner`,
+// just with the design built from a list of chunks instead of a
+// single mmap. v1: LS-MCP and logistic-MCP × {f64, f32}.
+
+/// Open a list of `(path, n_rows)` pairs as `Chunked<MmapMatrix>` (f64).
+fn open_chunked_f64(
+    chunks: Vec<(String, usize)>,
+    n_cols: usize,
+) -> PyResult<Chunked<MmapMatrix>> {
+    if chunks.is_empty() {
+        return Err(PyValueError::new_err(
+            "chunks list must not be empty",
+        ));
+    }
+    let mut opened = Vec::with_capacity(chunks.len());
+    for (i, (path, n_rows)) in chunks.into_iter().enumerate() {
+        let mmap = MmapMatrix::open(&path, n_rows, n_cols).map_err(|e| {
+            PyValueError::new_err(format!("MmapMatrix::open failed for chunk {i} ({path}): {e}"))
+        })?;
+        opened.push(mmap);
+    }
+    Ok(Chunked::new(opened))
+}
+
+/// Same as `open_chunked_f64` but for `Chunked<MmapMatrixF32>`.
+fn open_chunked_f32(
+    chunks: Vec<(String, usize)>,
+    n_cols: usize,
+) -> PyResult<Chunked<MmapMatrixF32>> {
+    if chunks.is_empty() {
+        return Err(PyValueError::new_err(
+            "chunks list must not be empty",
+        ));
+    }
+    let mut opened = Vec::with_capacity(chunks.len());
+    for (i, (path, n_rows)) in chunks.into_iter().enumerate() {
+        let mmap = MmapMatrixF32::open(&path, n_rows, n_cols).map_err(|e| {
+            PyValueError::new_err(format!(
+                "MmapMatrixF32::open failed for chunk {i} ({path}): {e}"
+            ))
+        })?;
+        opened.push(mmap);
+    }
+    Ok(Chunked::new(opened))
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    chunks, n_cols, y, *, gamma=3.0,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, screening="strong", acceleration=Some(5),
+    fit_intercept=true, standardize_x=false,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_mcp_ls_path_chunked<'py>(
+    py: Python<'py>,
+    chunks: Vec<(String, usize)>,
+    n_cols: usize,
+    y: PyReadonlyArray1<f64>,
+    gamma: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    screening: &str,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+) -> PyResult<PathOutput<'py>> {
+    let design = open_chunked_f64(chunks, n_cols)?;
+    let n_rows = design.n_samples();
+    let (y_arr, user_weights) = mmap_validate_inputs(n_rows, n_cols, y, weights)?;
+    mmap_ls_mcp_path_inner(
+        py, design, n_rows, n_cols, y_arr, user_weights, gamma,
+        lambdas, n_lambdas, lambda_min_ratio,
+        max_iter, tol, screening, acceleration,
+        fit_intercept, standardize_x,
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    chunks, n_cols, y, *, gamma=3.0,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, screening="strong", acceleration=Some(5),
+    fit_intercept=true, standardize_x=false,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_mcp_ls_path_chunked_f32<'py>(
+    py: Python<'py>,
+    chunks: Vec<(String, usize)>,
+    n_cols: usize,
+    y: PyReadonlyArray1<f64>,
+    gamma: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    screening: &str,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+) -> PyResult<PathOutput<'py>> {
+    let design = open_chunked_f32(chunks, n_cols)?;
+    let n_rows = design.n_samples();
+    let (y_arr, user_weights) = mmap_validate_inputs(n_rows, n_cols, y, weights)?;
+    mmap_ls_mcp_path_inner(
+        py, design, n_rows, n_cols, y_arr, user_weights, gamma,
+        lambdas, n_lambdas, lambda_min_ratio,
+        max_iter, tol, screening, acceleration,
+        fit_intercept, standardize_x,
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    chunks, n_cols, y, *, gamma=3.0,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_logistic_mcp_path_chunked<'py>(
+    py: Python<'py>,
+    chunks: Vec<(String, usize)>,
+    n_cols: usize,
+    y: PyReadonlyArray1<f64>,
+    gamma: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    let design = open_chunked_f64(chunks, n_cols)?;
+    let n_rows = design.n_samples();
+    let (y_arr, user_weights) = mmap_validate_inputs(n_rows, n_cols, y, weights)?;
+    validate_y_binary(y_arr.view())?;
+    mmap_logistic_mcp_path_inner(
+        py, design, n_rows, n_cols, y_arr, user_weights, gamma,
+        lambdas, n_lambdas, lambda_min_ratio,
+        max_iter, tol, acceleration,
+        fit_intercept, standardize_x, max_outer, outer_tol,
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    chunks, n_cols, y, *, gamma=3.0,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_logistic_mcp_path_chunked_f32<'py>(
+    py: Python<'py>,
+    chunks: Vec<(String, usize)>,
+    n_cols: usize,
+    y: PyReadonlyArray1<f64>,
+    gamma: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    let design = open_chunked_f32(chunks, n_cols)?;
+    let n_rows = design.n_samples();
+    let (y_arr, user_weights) = mmap_validate_inputs(n_rows, n_cols, y, weights)?;
+    validate_y_binary(y_arr.view())?;
+    mmap_logistic_mcp_path_inner(
+        py, design, n_rows, n_cols, y_arr, user_weights, gamma,
+        lambdas, n_lambdas, lambda_min_ratio,
+        max_iter, tol, acceleration,
+        fit_intercept, standardize_x, max_outer, outer_tol,
+    )
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_mcp_ls, m)?)?;
@@ -4897,5 +5102,9 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_logistic_mcp_path_mmap, m)?)?;
     m.add_function(wrap_pyfunction!(solve_mcp_ls_path_mmap_f32, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_mcp_path_mmap_f32, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_mcp_ls_path_chunked, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_mcp_ls_path_chunked_f32, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_logistic_mcp_path_chunked, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_logistic_mcp_path_chunked_f32, m)?)?;
     Ok(())
 }
