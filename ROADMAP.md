@@ -17,13 +17,13 @@ load-bearing piece; everything after stacks on top of it.
 | M1 — Production CD core | ✅ done | path solver, screening, Anderson, KKT-stop, standardization |
 | M2 — LLA + group block-CD + parallel | ✅ done | inner CD, working set, LLA outer, path, Rayon, op-norm Lipschitz, sparse-group, gap-safe, PyO3, criterion benches |
 | M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + M3.5 Cox PH Breslow (Rust + PyO3 + estimators) done; multinomial + Efron ties pending |
-| M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) done; mmap + chunked + mixed precision + GPU pending |
+| M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x f64 `MmapMatrix` (LS + logistic MCP) done; f32 mmap + chunked + mixed precision + GPU pending |
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7 |
 | M7 — Multi-task | ⏳ | multi-response GLMs |
 | M8 — Distribution & DX | ⏳ | wheels, CI, docs, comparison benches |
 
-Test count at this snapshot: **175 cargo + 122 pytest, all green.**
+Test count at this snapshot: **185 cargo + 127 pytest, all green.**
 
 ---
 
@@ -474,14 +474,35 @@ matching the dense LS group path).
   a 50×-inflated column.
 
 ### M4.x — mmap, chunked, mixed precision, GPU
-- **`MmapMatrix`**: memory-mapped dense `f32`/`f64` from disk. The
-  trait already restricts the solver to `col_dot` / `columns`, so this
-  drops in without algorithm changes.
+
+- ✅ **`MmapMatrix` (f64)**: memory-mapped column-major (Fortran-order)
+  raw `f64` dense matrix. `col_sq_norms` precomputed once at open time
+  (one full pass through the file paid by the OS page cache); CD's
+  `col_dot` reads each column as a contiguous slice through the mmap,
+  so the hot path matches `DenseMatrix` performance once warm. Auto-
+  `Sync + Send`. Composes cleanly with `Standardized<MmapMatrix>` for
+  on-the-fly column scaling. Intercept handled by a new generic
+  `Augmented<D>` wrapper that adds a virtual 1s column at index
+  `n_features` (no file rewrite needed); same wrapper composes with
+  any future backend. PyO3 surface (v1, scope deliberately minimal):
+  `solve_mcp_ls_path_mmap` and `solve_logistic_mcp_path_mmap`. Python
+  helper `MmapDesignF64(path, n_rows, n_cols)`; `MCPPathRegressor` and
+  `LogisticMCPPathRegressor` dispatch on `isinstance(x,
+  MmapDesignF64)` and route to the `_mmap` entry points. 6 cargo
+  tests on `MmapMatrix` + 4 cargo tests on `Augmented<D>` (plus a
+  mmap solver-equivalence test against pre-loaded `DenseMatrix`),
+  5 pytest tests covering constructor validation, dense↔mmap
+  equivalence for LS-MCP path, LS-MCP + standardize, and logistic-
+  MCP path. Expanding to the other 22 GLM/Cox entry points is
+  mechanical mirroring of the `_sparse` surface and is deferred
+  until there's user demand.
+
+- **`MmapMatrix` (f32)**: same backend, `T: Float` parameterized.
+  Half the disk I/O; pairs with mixed-precision below.
 - **`ChunkedMatrix`**: row-block streaming for out-of-core LS / GLM
   fits where columns are accessed via partial `Xᵀr` reductions per
   chunk. This is what makes `n` in the hundreds of millions tractable.
-- **`Float32` / mixed precision**: parameterize the core over
-  `T: Float`. Path solver in f32 for the bulk of work, refine at the
+- **Mixed precision**: f32 mmap for the bulk of the path; refine the
   active set in f64.
 - **GPU backend** (stretch): `cubla`s / `wgpu` matvecs behind the same
   trait. Only worth it once dense `n × p` matvec is the bottleneck;

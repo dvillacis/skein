@@ -14,6 +14,11 @@ from numpy.typing import NDArray
 from sklearn.base import BaseEstimator, RegressorMixin
 
 from skein import _core
+from skein.mmap import MmapDesignF64
+
+
+def _is_mmap(x) -> bool:
+    return isinstance(x, MmapDesignF64)
 
 
 def _is_sparse(x) -> bool:
@@ -282,7 +287,27 @@ class MCPPathRegressor(_PathRegressorBase):
             if self.weights is not None
             else None
         )
-        if _is_sparse(x):
+        if _is_mmap(x):
+            if y.ndim != 1 or y.shape[0] != x.n_rows:
+                raise ValueError(
+                    f"y must be 1D with length {x.n_rows}, got shape {y.shape}"
+                )
+            coefs, intercepts, lambdas_used, info = _core.solve_mcp_ls_path_mmap(
+                x.path, x.n_rows, x.n_cols, y,
+                gamma=self.gamma,
+                lambdas=lams,
+                n_lambdas=self.n_lambdas,
+                lambda_min_ratio=self.lambda_min_ratio,
+                weights=w,
+                max_iter=self.max_iter,
+                tol=self.tol,
+                screening=self.screening,
+                acceleration=self.acceleration,
+                fit_intercept=self.fit_intercept,
+                standardize_x=self.standardize,
+            )
+            self.n_features_in_ = x.n_cols
+        elif _is_sparse(x):
             data, indices, indptr, n_rows, n_cols = _as_csc_arrays(x)
             if y.ndim != 1 or y.shape[0] != n_rows:
                 raise ValueError(
@@ -1340,6 +1365,39 @@ class LogisticMCPPathRegressor(_LogisticPathRegressorBase):
         self.outer_tol = outer_tol
 
     def fit(self, x, y) -> "LogisticMCPPathRegressor":
+        if _is_mmap(x):
+            y_arr = np.ascontiguousarray(y, dtype=np.float64)
+            if y_arr.ndim != 1 or y_arr.shape[0] != x.n_rows:
+                raise ValueError(
+                    f"y must be 1D with length {x.n_rows}, got shape {y_arr.shape}"
+                )
+            _validate_y_binary(y_arr)
+            w = (
+                np.ascontiguousarray(self.weights, dtype=np.float64)
+                if self.weights is not None
+                else None
+            )
+            lams = (
+                np.ascontiguousarray(self.lambdas, dtype=np.float64)
+                if self.lambdas is not None
+                else None
+            )
+            coefs, intercepts, lambdas_used, info = _core.solve_logistic_mcp_path_mmap(
+                x.path, x.n_rows, x.n_cols, y_arr,
+                gamma=self.gamma, lambdas=lams,
+                n_lambdas=self.n_lambdas, lambda_min_ratio=self.lambda_min_ratio,
+                weights=w, max_iter=self.max_iter, tol=self.tol,
+                acceleration=self.acceleration,
+                fit_intercept=self.fit_intercept,
+                standardize_x=self.standardize,
+                max_outer=self.max_outer, outer_tol=self.outer_tol,
+            )
+            self.coefs_ = coefs
+            self.intercepts_ = intercepts
+            self.lambdas_ = lambdas_used
+            self.info_ = info
+            self.n_features_in_ = x.n_cols
+            return self
         common, payload, n_features = _glm_dispatch_inputs(
             self, x, y, validate_y=_validate_y_binary, is_path=True,
         )

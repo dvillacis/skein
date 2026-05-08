@@ -31,10 +31,10 @@ place; design-matrix backends (sparse, mmap, chunked) are next. See
   penalty) combination; type stubs; warm-started λ-paths; standardization
   with original-scale `coef_` / `intercept_` recovery (dense backend).
 
-**Coming next:** out-of-core design-matrix backends (M4.x) —
-memory-mapped `f32`/`f64` from disk and chunked row-block streaming
-for `n` in the hundreds of millions, the regime where `glmnet`
-gives up.
+**Coming next:** chunked row-block streaming and `f32`/mixed-precision
+on top of the f64 mmap backend already in place — pushing `n` from
+"fits in 256 GB of RAM" to "fits on disk" to "streams from disk in
+half-precision."
 
 ## Layout
 

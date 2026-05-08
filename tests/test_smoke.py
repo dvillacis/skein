@@ -2018,6 +2018,110 @@ def test_cox_mcp_path_dense_sparse_equivalence_with_standardize():
     np.testing.assert_allclose(dense.coefs_, sparse.coefs_, atol=1e-5)
 
 
+# ====================================================================
+# Memory-mapped backend (M4.x mmap)
+# ====================================================================
+
+
+def _write_fortran_f64(x: np.ndarray, path) -> None:
+    """Write a 2D f64 array to disk in column-major (Fortran) order
+    using raw bytes, no header. NOTE: `np.tofile()` always writes in
+    C order regardless of array layout, so we go through `tobytes(
+    order='F')` and write the buffer ourselves."""
+    buf = np.ascontiguousarray(x, dtype=np.float64).tobytes(order="F")
+    with open(str(path), "wb") as f:
+        f.write(buf)
+
+
+def test_mmap_design_constructor_validates_file_size(tmp_path):
+    """Mismatched (n, p) vs file size must raise immediately."""
+    x = np.zeros((3, 2), dtype=np.float64)
+    p = tmp_path / "x.bin"
+    _write_fortran_f64(x, p)
+    # Claim shape (3, 3) — file only has 6 f64s.
+    with pytest.raises(ValueError, match="bytes"):
+        skein.MmapDesignF64(str(p), n_rows=3, n_cols=3)
+
+
+def test_mmap_design_constructor_rejects_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        skein.MmapDesignF64(str(tmp_path / "nonexistent.bin"), 10, 5)
+
+
+def test_mmap_mcp_path_matches_dense(tmp_path):
+    """LS + MCP path on MmapDesignF64 must match the dense path on the
+    same X within 1e-7 across a shared lambda grid."""
+    rng = np.random.default_rng(31)
+    n, p = 60, 8
+    x = rng.standard_normal((n, p))
+    true_beta = np.zeros(p)
+    true_beta[:3] = [1.5, -2.0, 0.8]
+    y = x @ true_beta + 0.1 * rng.standard_normal(n)
+
+    file = tmp_path / "x.bin"
+    _write_fortran_f64(x, file)
+    mmap_design = skein.MmapDesignF64(str(file), n, p)
+
+    lambdas = np.array([0.5, 0.2, 0.08, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        gamma=1e6, lambdas=lambdas, tol=1e-12, max_iter=10000,
+        screening="off", fit_intercept=True,
+    )
+    dense = skein.MCPPathRegressor(**common).fit(x, y)
+    via_mmap = skein.MCPPathRegressor(**common).fit(mmap_design, y)
+    np.testing.assert_allclose(dense.coefs_, via_mmap.coefs_, atol=1e-7)
+    np.testing.assert_allclose(dense.intercepts_, via_mmap.intercepts_, atol=1e-7)
+    assert via_mmap.n_features_in_ == p
+
+
+def test_mmap_mcp_path_with_standardize_matches_dense(tmp_path):
+    """Mmap + Augmented + Standardized stack: result equals the dense
+    standardize=True path on the same X."""
+    rng = np.random.default_rng(37)
+    n, p = 50, 6
+    x = rng.standard_normal((n, p))
+    x[:, 0] *= 30.0
+    true_beta = np.array([0.05, 0.0, -1.5, 0.0, 0.8, 0.0])
+    y = x @ true_beta + 0.1 * rng.standard_normal(n)
+
+    file = tmp_path / "x.bin"
+    _write_fortran_f64(x, file)
+    mmap_design = skein.MmapDesignF64(str(file), n, p)
+
+    lambdas = np.array([0.5, 0.2, 0.08, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        gamma=1e6, lambdas=lambdas, tol=1e-12, max_iter=20000,
+        screening="off", fit_intercept=True, standardize=True,
+    )
+    dense = skein.MCPPathRegressor(**common).fit(x, y)
+    via_mmap = skein.MCPPathRegressor(**common).fit(mmap_design, y)
+    np.testing.assert_allclose(dense.coefs_, via_mmap.coefs_, atol=1e-6)
+    np.testing.assert_allclose(dense.intercepts_, via_mmap.intercepts_, atol=1e-6)
+
+
+def test_mmap_logistic_mcp_path_matches_dense(tmp_path):
+    rng = np.random.default_rng(43)
+    n, p = 200, 8
+    x = rng.standard_normal((n, p))
+    eta = x @ np.array([1.5, 0.0, -1.0, 0.0, 0.8, 0.0, 0.0, 0.0])
+    y = (rng.uniform(size=n) < 1.0 / (1.0 + np.exp(-eta))).astype(np.float64)
+
+    file = tmp_path / "x.bin"
+    _write_fortran_f64(x, file)
+    mmap_design = skein.MmapDesignF64(str(file), n, p)
+
+    lambdas = np.array([0.3, 0.1, 0.05, 0.02, 0.01], dtype=np.float64)
+    common = dict(
+        gamma=1e6, lambdas=lambdas, tol=1e-12, max_iter=5000,
+        max_outer=30, outer_tol=1e-10,
+        fit_intercept=True,
+    )
+    dense = skein.LogisticMCPPathRegressor(**common).fit(x, y)
+    via_mmap = skein.LogisticMCPPathRegressor(**common).fit(mmap_design, y)
+    np.testing.assert_allclose(dense.coefs_, via_mmap.coefs_, atol=1e-6)
+    np.testing.assert_allclose(dense.intercepts_, via_mmap.intercepts_, atol=1e-6)
+
+
 def test_logistic_mcp_path_standardize_recovers_signal_with_inflated_scale():
     """End-to-end signal recovery on a logistic problem where one
     feature has a 50× inflated scale. Without standardize the inflated

@@ -4,11 +4,15 @@
 //! the door open for sparse, memory-mapped, or chunked backends without
 //! rewriting the optimization code.
 
+mod augmented;
 mod dense;
+mod mmap;
 mod sparse_csc;
 mod standardized;
 
+pub use augmented::Augmented;
 pub use dense::DenseMatrix;
+pub use mmap::MmapMatrix;
 pub use sparse_csc::SparseCSC;
 pub use standardized::Standardized;
 

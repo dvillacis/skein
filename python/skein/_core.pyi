@@ -1164,3 +1164,44 @@ def solve_cox_sparse_group_mcp_path_sparse(
 ) -> tuple[
     NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], dict,
 ]: ...
+def solve_mcp_ls_path_mmap(
+    path: str,
+    n_rows: int,
+    n_cols: int,
+    y: NDArray[np.float64],
+    *,
+    gamma: float = ...,
+    lambdas: NDArray[np.float64] | None = ...,
+    n_lambdas: int = ...,
+    lambda_min_ratio: float = ...,
+    weights: NDArray[np.float64] | None = ...,
+    max_iter: int = ...,
+    tol: float = ...,
+    screening: str = ...,
+    acceleration: int | None = ...,
+    fit_intercept: bool = ...,
+    standardize_x: bool = ...,
+) -> tuple[
+    NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], dict,
+]: ...
+def solve_logistic_mcp_path_mmap(
+    path: str,
+    n_rows: int,
+    n_cols: int,
+    y: NDArray[np.float64],
+    *,
+    gamma: float = ...,
+    lambdas: NDArray[np.float64] | None = ...,
+    n_lambdas: int = ...,
+    lambda_min_ratio: float = ...,
+    weights: NDArray[np.float64] | None = ...,
+    max_iter: int = ...,
+    tol: float = ...,
+    acceleration: int | None = ...,
+    fit_intercept: bool = ...,
+    standardize_x: bool = ...,
+    max_outer: int = ...,
+    outer_tol: float = ...,
+) -> tuple[
+    NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], dict,
+]: ...
