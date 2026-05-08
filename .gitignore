@@ -1,0 +1,32 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Maturin
+/wheels/
+
+# Virtual envs
+.venv/
+.env
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store

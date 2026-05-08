@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/skein-core", "crates/skein-py"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["David Villacis <david@villacis.net>"]
+repository = "https://github.com/dvillacis/skein"
+rust-version = "1.75"
+
+[workspace.dependencies]
+ndarray = "0.16"
+rayon = "1.10"
+num-traits = "0.2"
+thiserror = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

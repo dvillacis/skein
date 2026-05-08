@@ -1,0 +1,377 @@
+//! Cox proportional-hazards regression via diagonal-IRLS prox-Newton
+//! (Breslow tie handling).
+//!
+//! `CoxPH` holds right-censored survival outcomes `(time, event)` where
+//! `event ∈ {0, 1}` (1 = observed event, 0 = right-censored) and
+//! produces the local quadratic surrogate at any β as a
+//! [`LeastSquares`] datafit. The Breslow log partial likelihood is
+//!
+//! ```text
+//!     log L(β) = Σ_{k: δ_k=1} [ η_k − log S(t_k) ]
+//!     S(t)    = Σ_{j ∈ R(t)} exp(η_j)            R(t) = {j : t_j ≥ t}
+//! ```
+//!
+//! and the per-sample diagonal score / Hessian (dropping the Hessian's
+//! off-diagonal terms — this is the classical diagonal-IRLS Cox step,
+//! matching what `glmnet` / `ncvreg` use):
+//!
+//! ```text
+//!     CumH(t_i)   = Σ_{k: δ_k=1, t_k ≤ t_i} 1 / S(t_k)
+//!     CumH2(t_i)  = Σ_{k: δ_k=1, t_k ≤ t_i} 1 / S(t_k)²
+//!     g_i         = −δ_i + exp(η_i) · CumH(t_i)            [-∂(log L)/∂η_i]
+//!     w_i         = exp(η_i) · CumH(t_i) − exp(2η_i) · CumH2(t_i)
+//!     z_i         = η_i − g_i / w_i
+//! ```
+//!
+//! Ties at the same time share `S(t)`; samples in a tie-block all see
+//! the same `S` and the running `CumH`/`CumH2` jump only after the block
+//! has been fully processed (Breslow's approximation).
+//!
+//! `η` is clamped to `[-30, 30]` before `exp()` for overflow safety;
+//! `w_i` is floored at `1e-6` so the working response stays finite when
+//! the diagonal Hessian collapses.
+//!
+//! v0.1 scope: Breslow ties only; no per-sample weights (weighted Cox
+//! has subtle conventions — frequency vs. probability weighting — and
+//! lands in M3.x). No `fit_intercept`: the baseline hazard absorbs any
+//! constant, and `S(t)` is invariant to a uniform shift of `η`.
+
+use super::{GlmDatafit, LeastSquares};
+use crate::design::DesignMatrix;
+use ndarray::{Array1, ArrayView1};
+
+/// Clamp η before exp() to bound `exp(η) ∈ [exp(-30), exp(30)]`.
+const ETA_CLAMP: f64 = 30.0;
+
+/// Lower bound on the diagonal Hessian to keep the working response
+/// finite when `w_i` collapses (e.g. unique-event sample where the
+/// diagonal entry can degenerate).
+const W_FLOOR: f64 = 1e-6;
+
+/// Cox proportional-hazards regression with right-censored outcomes.
+///
+/// Construct with `(time, event)` — both length `n`, `time ≥ 0` finite,
+/// `event ∈ {0, 1}`, and at least one event observed. The constructor
+/// precomputes the time-sort permutation once; subsequent
+/// `surrogate_at(β)` calls reuse it.
+pub struct CoxPH {
+    time: Array1<f64>,
+    event: Array1<f64>,
+    /// Permutation of `0..n` putting samples in ascending time order.
+    sort_order: Vec<usize>,
+}
+
+impl CoxPH {
+    pub fn new(time: Array1<f64>, event: Array1<f64>) -> Self {
+        assert_eq!(
+            time.len(),
+            event.len(),
+            "time and event must have the same length"
+        );
+        let n = time.len();
+        assert!(n > 0, "CoxPH requires at least one sample");
+        for i in 0..n {
+            let t = time[i];
+            assert!(
+                t.is_finite() && t >= 0.0,
+                "CoxPH requires time ≥ 0 (finite); got {} at index {}",
+                t,
+                i
+            );
+            let d = event[i];
+            assert!(
+                d == 0.0 || d == 1.0,
+                "CoxPH requires event ∈ {{0, 1}}; got {} at index {}",
+                d,
+                i
+            );
+        }
+        let n_events: usize = event.iter().map(|&v| (v > 0.5) as usize).sum();
+        assert!(
+            n_events >= 1,
+            "CoxPH requires at least one event (sample with event = 1)"
+        );
+
+        let mut sort_order: Vec<usize> = (0..n).collect();
+        sort_order.sort_by(|&a, &b| {
+            time[a]
+                .partial_cmp(&time[b])
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Self {
+            time,
+            event,
+            sort_order,
+        }
+    }
+
+    pub fn time(&self) -> ArrayView1<'_, f64> {
+        self.time.view()
+    }
+
+    pub fn event(&self) -> ArrayView1<'_, f64> {
+        self.event.view()
+    }
+
+    /// Negative Breslow log partial likelihood divided by `n`:
+    /// `(1/n) Σ_{k: δ_k=1} [ log S(t_k) − η_k ]`.
+    pub fn loss(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> f64 {
+        let n_f = design.n_samples() as f64;
+        let eta = design.matvec(beta);
+
+        let exp_eta_sorted = self.exp_eta_in_sort_order(&eta);
+        let s = self.compute_s_per_sample(&exp_eta_sorted);
+
+        let mut total = 0.0_f64;
+        for (k, &orig) in self.sort_order.iter().enumerate() {
+            if self.event[orig] > 0.5 {
+                let eta_k = eta[orig].clamp(-ETA_CLAMP, ETA_CLAMP);
+                total += s[k].max(1e-300).ln() - eta_k;
+            }
+        }
+        total / n_f
+    }
+
+    /// Build the diagonal-IRLS weighted-LS surrogate at `β`.
+    pub fn surrogate_at(
+        &self,
+        design: &dyn DesignMatrix,
+        beta: ArrayView1<'_, f64>,
+    ) -> LeastSquares {
+        let n = design.n_samples();
+        let eta = design.matvec(beta);
+        let exp_eta_sorted = self.exp_eta_in_sort_order(&eta);
+        let s = self.compute_s_per_sample(&exp_eta_sorted);
+        let (cum_h, cum_h2) = self.compute_cum_h(&s);
+
+        let mut w = Array1::<f64>::zeros(n);
+        let mut z = Array1::<f64>::zeros(n);
+        for (k, &orig) in self.sort_order.iter().enumerate() {
+            let eta_k = eta[orig].clamp(-ETA_CLAMP, ETA_CLAMP);
+            let exp_eta_k = exp_eta_sorted[k];
+            let cum_h_k = cum_h[k];
+            let cum_h2_k = cum_h2[k];
+            let event_k = self.event[orig];
+
+            let w_raw = exp_eta_k * cum_h_k - exp_eta_k * exp_eta_k * cum_h2_k;
+            let w_floored = w_raw.max(W_FLOOR);
+            let g_raw = -event_k + exp_eta_k * cum_h_k;
+
+            w[orig] = w_floored;
+            z[orig] = eta_k - g_raw / w_floored;
+        }
+        LeastSquares::with_sample_weights(z, w)
+    }
+
+    /// `exp(η_i)` for each i, returned in time-sorted order.
+    fn exp_eta_in_sort_order(&self, eta: &Array1<f64>) -> Vec<f64> {
+        self.sort_order
+            .iter()
+            .map(|&orig| eta[orig].clamp(-ETA_CLAMP, ETA_CLAMP).exp())
+            .collect()
+    }
+
+    /// `S(t_i) = Σ_{j ∈ R(t_i)} exp(η_j)` per sample, in time-sorted
+    /// order. Tied times share the same `S` value (Breslow risk set).
+    fn compute_s_per_sample(&self, exp_eta_sorted: &[f64]) -> Vec<f64> {
+        let n = exp_eta_sorted.len();
+        let mut s = vec![0.0_f64; n];
+        let mut cum = 0.0_f64;
+
+        // Walk backward through tie-blocks; for each block, add this
+        // block's contributions to `cum`, then assign that running sum
+        // as `S` for every sample in the block.
+        let mut i = n;
+        while i > 0 {
+            let block_end = i; // exclusive
+            let block_t = self.time[self.sort_order[i - 1]];
+            let mut block_start = i - 1;
+            while block_start > 0 && self.time[self.sort_order[block_start - 1]] == block_t {
+                block_start -= 1;
+            }
+            cum += exp_eta_sorted[block_start..block_end].iter().sum::<f64>();
+            s[block_start..block_end].fill(cum);
+            i = block_start;
+        }
+        s
+    }
+
+    /// `CumH(t_i)` and `CumH2(t_i)` per sample, in time-sorted order.
+    /// Walks forward through tie-blocks, accumulating `events_in_block /
+    /// S_block` and `events_in_block / S_block²` after fully processing
+    /// each block (Breslow approximation: ties share the same `S`).
+    fn compute_cum_h(&self, s_per_sample: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let n = s_per_sample.len();
+        let mut cum_h = vec![0.0_f64; n];
+        let mut cum_h2 = vec![0.0_f64; n];
+        let mut running_h = 0.0_f64;
+        let mut running_h2 = 0.0_f64;
+
+        let mut i = 0;
+        while i < n {
+            let block_t = self.time[self.sort_order[i]];
+            let block_start = i;
+            let mut block_end = i + 1;
+            while block_end < n && self.time[self.sort_order[block_end]] == block_t {
+                block_end += 1;
+            }
+
+            let mut events_in_block = 0_usize;
+            for k in block_start..block_end {
+                if self.event[self.sort_order[k]] > 0.5 {
+                    events_in_block += 1;
+                }
+            }
+            let s_block = s_per_sample[block_start].max(1e-300);
+            running_h += events_in_block as f64 / s_block;
+            running_h2 += events_in_block as f64 / (s_block * s_block);
+
+            for k in block_start..block_end {
+                cum_h[k] = running_h;
+                cum_h2[k] = running_h2;
+            }
+            i = block_end;
+        }
+        (cum_h, cum_h2)
+    }
+}
+
+impl GlmDatafit for CoxPH {
+    fn surrogate_at(
+        &self,
+        design: &dyn DesignMatrix,
+        beta: ArrayView1<'_, f64>,
+    ) -> LeastSquares {
+        CoxPH::surrogate_at(self, design, beta)
+    }
+
+    fn loss(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> f64 {
+        CoxPH::loss(self, design, beta)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::datafit::Datafit;
+    use crate::design::DenseMatrix;
+    use approx::assert_abs_diff_eq;
+    use ndarray::array;
+
+    /// Tiny 3-sample example with ascending unique times — values
+    /// hand-derivable from the Breslow formulas:
+    ///
+    /// - Sample 0: t=1, δ=1
+    /// - Sample 1: t=2, δ=1
+    /// - Sample 2: t=3, δ=0
+    ///
+    /// At β=0, exp(η)=1 everywhere, so S(1)=3, S(2)=2, S(3)=1.
+    fn tiny_problem() -> (DenseMatrix, CoxPH) {
+        let x = array![[1.0, 0.5], [0.5, 1.0], [0.2, 0.8]];
+        let time = array![1.0, 2.0, 3.0];
+        let event = array![1.0, 1.0, 0.0];
+        (DenseMatrix::new(x), CoxPH::new(time, event))
+    }
+
+    #[test]
+    fn cox_loss_at_zero_matches_log_six_over_three() {
+        // log L = δ_0 (0 - log 3) + δ_1 (0 - log 2) + δ_2 (0 - log 1)
+        //       = -log 3 - log 2 = -log 6
+        // NLL = log 6 ; divided by n=3.
+        let (design, glm) = tiny_problem();
+        let beta = Array1::<f64>::zeros(2);
+        let loss = glm.loss(&design, beta.view());
+        let expected = (6.0_f64).ln() / 3.0;
+        assert_abs_diff_eq!(loss, expected, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn cox_surrogate_at_zero_diagonal_weights_and_residual() {
+        // CumH:  sample 0 = 1/3
+        //        sample 1 = 1/3 + 1/2 = 5/6
+        //        sample 2 = 5/6
+        // CumH2: sample 0 = 1/9
+        //        sample 1 = 1/9 + 1/4 = 13/36
+        //        sample 2 = 13/36
+        // w_i = exp(η)·CumH − exp(2η)·CumH2  (η=0)
+        //      sample 0: 1/3 - 1/9 = 2/9
+        //      sample 1: 5/6 - 13/36 = 17/36
+        //      sample 2: 5/6 - 13/36 = 17/36
+        // g_i = -δ + exp(η)·CumH
+        //      sample 0: -1 + 1/3 = -2/3
+        //      sample 1: -1 + 5/6 = -1/6
+        //      sample 2:  0 + 5/6 =  5/6
+        // z_i = η − g/w  (η=0)
+        //      sample 0: 0 - (-2/3) / (2/9) = 3
+        //      sample 1: 0 - (-1/6) / (17/36) = 36/(6·17) = 6/17
+        //      sample 2: 0 - (5/6) / (17/36) = -30/17
+        let (design, glm) = tiny_problem();
+        let beta = Array1::<f64>::zeros(2);
+        let surr = glm.surrogate_at(&design, beta.view());
+        // The surrogate stores `z`. init_residual at β=0 = Xβ − z = -z.
+        let r = surr.init_residual(&design, beta.view());
+        assert_abs_diff_eq!(r[0], -3.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(r[1], -6.0 / 17.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(r[2], 30.0 / 17.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn cox_surrogate_with_ties_shares_risk_set() {
+        // Two tied uncensored samples + one censored ⇒ Breslow risk set
+        // is the same for both events at the tied time.
+        // - Sample 0: t=1, δ=1
+        // - Sample 1: t=1, δ=1   (tied with sample 0)
+        // - Sample 2: t=2, δ=0
+        // At β=0: S(1) = 3 (all three at risk), S(2) = 1.
+        // Two events at time 1 share S=3, so CumH at t=1 = 2/3,
+        // CumH2 at t=1 = 2/9. Sample 2 (no event) has CumH(2)=2/3, CumH2=2/9.
+        // (No event at t=2.)
+        // w_0 = w_1 = w_2 = 1·(2/3) − 1·(2/9) = 6/9 − 2/9 = 4/9.
+        // g_0 = g_1 = -1 + 2/3 = -1/3; g_2 = 0 + 2/3 = 2/3.
+        // z_0 = z_1 = -(-1/3)/(4/9) = (1/3)·(9/4) = 3/4.
+        // z_2 = -(2/3)/(4/9) = -(2/3)·(9/4) = -3/2.
+        let x = array![[1.0], [1.0], [1.0]];
+        let time = array![1.0, 1.0, 2.0];
+        let event = array![1.0, 1.0, 0.0];
+        let design = DenseMatrix::new(x);
+        let glm = CoxPH::new(time, event);
+        let beta = Array1::<f64>::zeros(1);
+        let surr = glm.surrogate_at(&design, beta.view());
+        let r = surr.init_residual(&design, beta.view());
+        assert_abs_diff_eq!(r[0], -3.0 / 4.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(r[1], -3.0 / 4.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(r[2], 3.0 / 2.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn cox_handles_extreme_eta_without_overflow() {
+        let (design, glm) = tiny_problem();
+        let beta = array![100.0, 100.0]; // η huge before clamp
+        let loss = glm.loss(&design, beta.view());
+        assert!(loss.is_finite(), "loss should be finite, got {}", loss);
+        let surr = glm.surrogate_at(&design, beta.view());
+        let r = surr.init_residual(&design, beta.view());
+        for i in 0..3 {
+            assert!(r[i].is_finite(), "residual finite at i={}", i);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "at least one event")]
+    fn cox_panics_on_all_censored() {
+        let _ = CoxPH::new(array![1.0, 2.0], array![0.0, 0.0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "event ∈")]
+    fn cox_panics_on_non_binary_event() {
+        let _ = CoxPH::new(array![1.0, 2.0], array![1.0, 0.5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "time ≥ 0")]
+    fn cox_panics_on_negative_time() {
+        let _ = CoxPH::new(array![1.0, -1.0], array![1.0, 1.0]);
+    }
+}
