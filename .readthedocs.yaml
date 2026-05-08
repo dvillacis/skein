@@ -17,7 +17,11 @@ build:
     # the install step. Without this, `from skein._core import …` in
     # `python/skein/__init__.py` would fail at docs-build time and
     # mkdocstrings couldn't introspect any class.
-    rust: "1.82"
+    #
+    # Need Rust ≥ 1.85 so cargo can parse manifests with Cargo's
+    # `edition2024` feature, which `wit-bindgen-core 0.51.0` (pulled
+    # transitively via criterion's wasm-benchmarking deps) requires.
+    rust: "1.86"
 
 mkdocs:
   configuration: mkdocs.yml
