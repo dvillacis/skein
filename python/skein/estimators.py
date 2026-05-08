@@ -90,7 +90,40 @@ class _NonconvexRegressorBase(BaseEstimator, RegressorMixin):
 
 
 class MCPRegressor(_NonconvexRegressorBase):
-    """Least-squares regression with MCP penalty at a single λ."""
+    """MCP-penalized least squares at a single λ.
+
+    The single-λ companion to :class:`MCPPathRegressor`. Use this
+    when you've already chosen ``lambda_`` (via external CV, prior
+    knowledge, etc.); use :class:`MCPPathRegressor` or
+    :class:`skein.MCPPathCV` when you want to fit a full path or
+    have skein pick λ for you.
+
+    Parameters
+    ----------
+    lambda_ : float, default 0.1
+        Regularization strength. Larger → more sparsity.
+    gamma : float, default 3.0
+        MCP nonconvexity (>1). ``gamma=1e6`` is ≈ lasso.
+    weights : array-like of shape (n_features,) or None
+        Per-feature penalty weights.
+    max_iter : int, default 100
+    tol : float, default 1e-6
+    fit_intercept : bool, default True
+    standardize : bool, default False
+    screening : {"off", "strong", "gap_safe"}, default "strong"
+    acceleration : int or None, default 5
+
+    Attributes
+    ----------
+    coef_ : ndarray of shape (n_features,)
+    intercept_ : float
+    info_ : dict
+    n_features_in_ : int
+
+    See Also
+    --------
+    skein.MCPPathRegressor : Full λ-path with warm starts.
+    """
 
     def __init__(
         self,
@@ -255,7 +288,92 @@ class _PathRegressorBase(BaseEstimator):
 
 
 class MCPPathRegressor(_PathRegressorBase):
-    """MCP regression along an entire λ-path with warm starts."""
+    """MCP-penalized least squares along a λ-path with warm starts.
+
+    Solves
+
+        min_β (1/2n) ‖y − Xβ − α‖² + Σ_j w_j · ρ_MCP(β_j; λ, γ)
+
+    for a sequence of λ values, threading β across decreasing λ as
+    warm-starts. Equivalent to lasso when ``gamma`` is large
+    (``gamma=1e6`` is a good convex stand-in); aggressively
+    sparsifies as ``gamma`` shrinks.
+
+    Accepts numpy arrays, ``scipy.sparse.csc_matrix``,
+    :class:`skein.MmapDesignF64` / :class:`skein.MmapDesignF32`,
+    and :class:`skein.ChunkedDesignF64` / :class:`skein.ChunkedDesignF32`
+    transparently.
+
+    Parameters
+    ----------
+    gamma : float, default 3.0
+        MCP nonconvexity parameter (>1). Smaller is more aggressive;
+        ``gamma=3`` matches ``ncvreg``'s default. ``gamma=1e6`` is
+        numerically convex (≈ lasso).
+    lambdas : array-like or None, default None
+        Explicit λ grid (descending). If None, derived from λ_max
+        (the smallest λ that gives β = 0 by KKT) and a geometric
+        grid of length ``n_lambdas`` with ratio ``lambda_min_ratio``.
+    n_lambdas : int, default 100
+        Length of the auto-generated λ grid. Ignored if ``lambdas``
+        is given.
+    lambda_min_ratio : float, default 1e-3
+        Smallest λ in the auto-grid as a fraction of λ_max.
+    weights : array-like of shape (n_features,) or None, default None
+        Per-feature penalty weights (the ``w_j`` above). ``None``
+        means uniform weights of 1.
+    max_iter : int, default 100
+        Maximum number of CD iterations per λ.
+    tol : float, default 1e-6
+        Convergence threshold (max coordinate-update L1 in
+        coefficient space).
+    fit_intercept : bool, default True
+        If True, an unpenalized intercept is fit alongside β.
+    standardize : bool, default False
+        If True, columns of X are scaled to unit variance before
+        fitting; ``coef_`` / ``intercept_`` are returned in
+        original-feature scale.
+    screening : {"off", "strong", "gap_safe"}, default "strong"
+        Working-set strategy. "strong" = Tibshirani sequential strong
+        rule + KKT verification. "gap_safe" = Fercoq-Gramfort-Salmon
+        sphere screening. "off" disables screening.
+    acceleration : int or None, default 5
+        Anderson acceleration depth on the iterate sequence. ``None``
+        disables acceleration.
+
+    Attributes
+    ----------
+    coefs_ : ndarray of shape (n_lambdas, n_features)
+        Fitted coefficients per λ. Each row is the β at the
+        corresponding ``lambdas_[k]``.
+    intercepts_ : ndarray of shape (n_lambdas,)
+        Fitted intercepts per λ.
+    lambdas_ : ndarray of shape (n_lambdas,)
+        The λ values actually used (descending).
+    info_ : dict
+        Solver diagnostics: per-λ iteration counts, convergence
+        flags, final objective values, working-set sizes, KKT-pass
+        counts.
+    n_features_in_ : int
+        Number of features in ``X``.
+
+    See Also
+    --------
+    skein.MCPRegressor : Single-λ version.
+    skein.MCPPathCV : K-fold cross-validated path with auto λ-selection.
+    skein.SCADPathRegressor : SCAD-penalized analogue.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import skein
+    >>> rng = np.random.default_rng(0)
+    >>> X = rng.standard_normal((200, 50))
+    >>> y = X[:, :3] @ [1.5, -2.0, 0.8] + 0.1 * rng.standard_normal(200)
+    >>> model = skein.MCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y)
+    >>> model.coefs_.shape
+    (50, 50)
+    """
 
     def __init__(
         self,

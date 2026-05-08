@@ -116,33 +116,60 @@ def select_by_ic(
     ebic_gamma: float = 0.5,
     active_eps: float = _DEFAULT_ACTIVE_EPS,
 ) -> tuple[int, NDArray[np.float64]]:
-    """Pick the best-λ index of a fitted path estimator by an
-    information criterion.
+    """Pick the best λ from a fitted path estimator by AIC, BIC, or EBIC.
+
+    A single free function — no per-estimator wrapper. Dispatches on
+    the path estimator's class name to compute the right negative
+    log-likelihood (LS, logistic, Poisson, or Cox), then adds a
+    complexity penalty:
+
+    - AIC = 2k + 2·NLL
+    - BIC = log(n)·k + 2·NLL
+    - EBIC = BIC + 2γ·log C(p, k), with γ ∈ [0, 1] (default 0.5;
+      matches ``ncvreg::BIC``'s high-dim recommendation)
+
+    where k is the number of nonzero coefficients per λ (the
+    Zou-Hastie-Tibshirani unbiased df estimator, the standard
+    ``ncvreg`` / ``glmnet`` convention).
 
     Parameters
     ----------
-    path_model
-        A fitted `*PathRegressor` (LS / logistic / Poisson / Cox).
-    x
-        The design matrix used in the fit. Used to recompute NLL.
-    outcomes
-        For non-Cox estimators: a single `y` array. For Cox: `(time,
-        event)`. Mirrors each estimator's `fit` signature.
-    criterion
-        `"aic"`, `"bic"`, or `"ebic"`. Default `"bic"`.
-    ebic_gamma
-        EBIC penalty parameter `γ ∈ [0, 1]`. Default `0.5` matches
-        ncvreg's recommendation. Ignored for AIC/BIC.
-    active_eps
-        Threshold for counting a coefficient as "active". Default
-        `1e-12`.
+    path_model : *PathRegressor
+        Any fitted path estimator (LS / logistic / Poisson / Cox).
+    x : array-like
+        The design matrix used in the fit. Used to recompute the
+        per-λ negative log-likelihood.
+    *outcomes
+        For non-Cox estimators: a single ``y`` array. For Cox:
+        ``time, event``. Mirrors each estimator's ``fit`` signature.
+    criterion : {"aic", "bic", "ebic"}, default "bic"
+        Which information criterion to use.
+    ebic_gamma : float, default 0.5
+        EBIC penalty parameter γ ∈ [0, 1]. Ignored for AIC/BIC.
+    active_eps : float, default 1e-12
+        Threshold for counting a coefficient as "active" (nonzero).
 
     Returns
     -------
-    (best_idx, scores)
-        `best_idx` is the index into `path_model.lambdas_` of the
-        IC-minimizing λ. `scores` is the full per-λ score vector
-        (shape `(n_lambdas,)`).
+    best_idx : int
+        Index into ``path_model.lambdas_`` of the IC-minimizing λ.
+    scores : ndarray of shape (n_lambdas,)
+        Per-λ score vector (lower-is-better). The fitted β is
+        ``path_model.coefs_[best_idx]``.
+
+    Examples
+    --------
+    >>> import skein
+    >>> path = skein.MCPPathRegressor(gamma=3.0, n_lambdas=50).fit(X, y)
+    >>> best_idx, scores = skein.select_by_ic(path, X, y, criterion="bic")
+    >>> beta_best = path.coefs_[best_idx]
+    >>> intercept_best = path.intercepts_[best_idx]
+
+    For Cox PH:
+
+    >>> cox_path = skein.CoxMCPPathRegressor(gamma=3.0, n_lambdas=50).fit(
+    ...     X, time, event)
+    >>> best_idx, _ = skein.select_by_ic(cox_path, X, time, event, criterion="ebic")
     """
     if criterion not in ("aic", "bic", "ebic"):
         raise ValueError(

@@ -63,10 +63,34 @@ extra_javascript:
   - https://polyfill.io/v3/polyfill.min.js?features=es6
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
-# Plugin section is intentionally minimal in commit 1. The mkdocstrings
-# plugin (for auto API reference from Python docstrings) is added in
-# the M8 follow-up commit; the search plugin is enabled by default in
-# mkdocs so it doesn't need an explicit entry.
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            # Show the parent class so users see the inheritance chain
+            # (e.g. MCPPathRegressor → _PathRegressorBase → BaseEstimator).
+            show_bases: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_source: false
+            # Group by category — pulls Attributes, Parameters, etc.
+            # out of NumPy-style docstrings into proper sections.
+            docstring_style: numpy
+            docstring_section_style: table
+            members_order: source
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            merge_init_into_class: true
+            # Keep generated pages tidy — don't render every private
+            # `_attr` or special method by default.
+            filters:
+              - "!^_"
+              - "^__init__$"
+            inherited_members: false
 
 nav:
   - Home: index.md
@@ -90,4 +114,14 @@ nav:
       - Genomics (sparse-group MCP): examples/genomics.md
       - NLP (sparse logistic): examples/nlp.md
       - Survival (Cox sparse-group MCP): examples/survival.md
+  - API reference:
+      - api/index.md
+      - LS estimators: api/estimators-ls.md
+      - Logistic estimators: api/estimators-logistic.md
+      - Poisson estimators: api/estimators-poisson.md
+      - Cox estimators: api/estimators-cox.md
+      - Cross-validation: api/cv.md
+      - IC selection: api/ic.md
+      - Design helpers: api/design.md
+      - Extension ABCs: api/abcs.md
   - Roadmap: roadmap.md

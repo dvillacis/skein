@@ -2,10 +2,12 @@
 
 Weighted structured nonconvex sparse models. Rust core + Python API.
 
-> **Documentation:** [the docs site](docs/index.md) has the full
-> conceptual reference (penalties, datafits, weights, backends), a
-> quick-start tour, installation notes, and the roadmap. `mkdocs serve`
-> previews it locally; CI builds it `--strict` on every PR.
+> **Documentation:** the [docs site](docs/index.md) has the full
+> conceptual reference (penalties, datafits, weights, backends),
+> porting guides for `glmnet` / `ncvreg` / `grpreg`, worked examples,
+> and an auto-generated API reference. Hosted on Read the Docs once
+> the project is connected (config in `.readthedocs.yaml`); preview
+> locally with `mkdocs serve`. CI builds it `--strict` on every PR.
 
 `skein` targets a niche that's well-served in R (`grpreg`, `ncvreg`) but
 missing in Python at production quality: nonconvex group-structured
