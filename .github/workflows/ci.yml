@@ -50,9 +50,20 @@ jobs:
         # pyproject build-system, which works without an active
         # virtualenv (unlike bare `maturin develop --release`, which
         # refuses to install into the runner's system Python).
+        #
+        # MATURIN_PEP517_ARGS forces dev-profile compilation. Maturin's
+        # PEP 517 default is release, which on the 2-core GitHub runners
+        # turns the cold-cache build into a >40-minute affair (LTO + the
+        # full criterion / ndarray / pyo3 transitive set). Dev profile
+        # cuts that to ~3-4 min; tests run plenty fast in dev mode.
+        #
+        # `pip -v` streams the cargo build output so progress is
+        # visible instead of an opaque "still running..." heartbeat.
+        env:
+          MATURIN_PEP517_ARGS: "--profile dev"
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -v -e ".[dev]"
       - name: ruff
         run: ruff check python/ tests/
       - name: mypy
@@ -73,10 +84,13 @@ jobs:
       - name: install package + docs deps
         # mkdocstrings imports the package to introspect docstrings,
         # so we need the Rust extension built (maturin via pyproject
-        # build-system).
+        # build-system). Dev-profile compile (see python job above)
+        # keeps the docs CI fast.
+        env:
+          MATURIN_PEP517_ARGS: "--profile dev"
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[docs]"
+          python -m pip install -v -e ".[docs]"
       - name: mkdocs build (strict)
         # --strict makes any markdown / nav / mkdocstrings warning
         # fatal so we catch broken cross-references and missing
