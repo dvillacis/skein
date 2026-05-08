@@ -10,10 +10,17 @@ examples.
 
 ## Penalty ABCs
 
-::: skein_glm.penalties.Penalty
+```{eval-rst}
+.. autoclass:: skein_glm.penalties.Penalty
+   :members:
 
-::: skein_glm.penalties.GroupPenalty
+.. autoclass:: skein_glm.penalties.GroupPenalty
+   :members:
+```
 
 ## Datafit ABC
 
-::: skein_glm.datafits.Datafit
+```{eval-rst}
+.. autoclass:: skein_glm.datafits.Datafit
+   :members:
+```

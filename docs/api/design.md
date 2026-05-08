@@ -20,12 +20,20 @@ model and when to use each helper.
 
 ## Memory-mapped (single file)
 
-::: skein_glm.mmap.MmapDesignF64
+```{eval-rst}
+.. autoclass:: skein_glm.mmap.MmapDesignF64
+   :members:
 
-::: skein_glm.mmap.MmapDesignF32
+.. autoclass:: skein_glm.mmap.MmapDesignF32
+   :members:
+```
 
 ## Row-block-chunked (multiple files)
 
-::: skein_glm.mmap.ChunkedDesignF64
+```{eval-rst}
+.. autoclass:: skein_glm.mmap.ChunkedDesignF64
+   :members:
 
-::: skein_glm.mmap.ChunkedDesignF32
+.. autoclass:: skein_glm.mmap.ChunkedDesignF32
+   :members:
+```

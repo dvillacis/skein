@@ -9,24 +9,52 @@ mean — matches sklearn's `PoissonRegressor.predict`),
 
 ## Scalar — single λ
 
-::: skein_glm.estimators.PoissonMCPRegressor
-::: skein_glm.estimators.PoissonSCADRegressor
+```{eval-rst}
+.. autoclass:: skein_glm.estimators.PoissonMCPRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonSCADRegressor
+   :members:
+```
 
 ## Scalar — path
 
-::: skein_glm.estimators.PoissonMCPPathRegressor
-::: skein_glm.estimators.PoissonSCADPathRegressor
+```{eval-rst}
+.. autoclass:: skein_glm.estimators.PoissonMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonSCADPathRegressor
+   :members:
+```
 
 ## Group — single λ
 
-::: skein_glm.estimators.PoissonGroupLassoRegressor
-::: skein_glm.estimators.PoissonGroupMCPRegressor
-::: skein_glm.estimators.PoissonSparseGroupLassoRegressor
-::: skein_glm.estimators.PoissonSparseGroupMCPRegressor
+```{eval-rst}
+.. autoclass:: skein_glm.estimators.PoissonGroupLassoRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonGroupMCPRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonSparseGroupLassoRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonSparseGroupMCPRegressor
+   :members:
+```
 
 ## Group — path
 
-::: skein_glm.estimators.PoissonGroupLassoPathRegressor
-::: skein_glm.estimators.PoissonGroupMCPPathRegressor
-::: skein_glm.estimators.PoissonSparseGroupLassoPathRegressor
-::: skein_glm.estimators.PoissonSparseGroupMCPPathRegressor
+```{eval-rst}
+.. autoclass:: skein_glm.estimators.PoissonGroupLassoPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonGroupMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonSparseGroupLassoPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonSparseGroupMCPPathRegressor
+   :members:
+```

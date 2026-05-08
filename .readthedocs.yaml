@@ -23,8 +23,11 @@ build:
     # transitively via criterion's wasm-benchmarking deps) requires.
     rust: "1.86"
 
-mkdocs:
-  configuration: mkdocs.yml
+sphinx:
+  configuration: docs/conf.py
+  # `-W`-equivalent: a warning during build (broken cross-ref,
+  # missing autodoc target, etc.) fails the build instead of
+  # producing a half-broken site.
   fail_on_warning: true
 
 python:

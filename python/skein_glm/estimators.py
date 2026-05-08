@@ -707,10 +707,7 @@ class SCADPathRegressor(_PathRegressorBase):
 class ElasticNetPathRegressor(_PathRegressorBase):
     """Elastic-net least squares along a λ-path with warm starts.
 
-    Solves
-
-        min_β (1/2n) ‖y − Xβ − α_int‖² + Σ_j w_j λ [α |β_j| + (1-α) β_j² / 2]
-
+    Solves ``min_β (1/2n) ‖y − Xβ − α_int‖² + Σ_j w_j λ [α |β_j| + (1-α) β_j² / 2]``
     for a sequence of λ values, threading β across decreasing λ as
     warm-starts. Convex objective, so coordinate descent converges
     to the global optimum at every λ.

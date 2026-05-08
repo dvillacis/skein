@@ -92,7 +92,75 @@ wired end-to-end with sklearn-style `fit` / `predict` /
 Linux (x86_64 + aarch64), macOS (x86_64 + arm64), and Windows
 (AMD64).
 
-What's not yet in: multinomial / multi-task / elastic net (M3.6, M6,
-M7), comparison benchmarks vs `glmnet`/`ncvreg`/`grpreg`/`skglm`
-(M8), numerical regression tests against R reference fits. See the
-[roadmap](roadmap.md) for the full picture.
+What's not yet in: multinomial / multi-task (M3.6, M7),
+comparison benchmarks vs `glmnet`/`ncvreg`/`grpreg`/`skglm` (M8).
+See the [roadmap](roadmap.md) for the full picture.
+
+```{toctree}
+:hidden:
+:caption: Getting started
+
+installation
+quickstart
+```
+
+```{toctree}
+:hidden:
+:caption: Concepts
+
+concepts/index
+concepts/penalties
+concepts/datafits
+concepts/weights
+concepts/backends
+```
+
+```{toctree}
+:hidden:
+:caption: Porting from R
+
+porting/glmnet
+porting/ncvreg
+porting/grpreg
+```
+
+```{toctree}
+:hidden:
+:caption: Extending
+
+extending/penalty
+extending/datafit
+extending/backend
+extending/rust-api
+```
+
+```{toctree}
+:hidden:
+:caption: Examples
+
+examples/genomics
+examples/nlp
+examples/survival
+```
+
+```{toctree}
+:hidden:
+:caption: API reference
+
+api/index
+api/estimators-ls
+api/estimators-logistic
+api/estimators-poisson
+api/estimators-cox
+api/cv
+api/ic
+api/design
+api/abcs
+```
+
+```{toctree}
+:hidden:
+:caption: Project
+
+roadmap
+```

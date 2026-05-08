@@ -16,31 +16,72 @@ share the same fit/predict surface as their non-CV counterparts.
 
 ## LS family
 
-::: skein_glm.cv.MCPPathCV
-::: skein_glm.cv.SCADPathCV
-::: skein_glm.cv.ElasticNetPathCV
-::: skein_glm.cv.GroupLassoPathCV
-::: skein_glm.cv.GroupMCPPathCV
-::: skein_glm.cv.SparseGroupLassoPathCV
-::: skein_glm.cv.SparseGroupMCPPathCV
+```{eval-rst}
+.. autoclass:: skein_glm.cv.MCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.SCADPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.ElasticNetPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.GroupLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.GroupMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.SparseGroupLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.SparseGroupMCPPathCV
+   :members:
+```
 
 ## Logistic family
 
-::: skein_glm.cv.LogisticMCPPathCV
-::: skein_glm.cv.LogisticSCADPathCV
-::: skein_glm.cv.LogisticGroupLassoPathCV
-::: skein_glm.cv.LogisticGroupMCPPathCV
-::: skein_glm.cv.LogisticSparseGroupLassoPathCV
-::: skein_glm.cv.LogisticSparseGroupMCPPathCV
+```{eval-rst}
+.. autoclass:: skein_glm.cv.LogisticMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.LogisticSCADPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.LogisticGroupLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.LogisticGroupMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.LogisticSparseGroupLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.LogisticSparseGroupMCPPathCV
+   :members:
+```
 
 ## Poisson family
 
-::: skein_glm.cv.PoissonMCPPathCV
-::: skein_glm.cv.PoissonSCADPathCV
-::: skein_glm.cv.PoissonGroupLassoPathCV
-::: skein_glm.cv.PoissonGroupMCPPathCV
-::: skein_glm.cv.PoissonSparseGroupLassoPathCV
-::: skein_glm.cv.PoissonSparseGroupMCPPathCV
+```{eval-rst}
+.. autoclass:: skein_glm.cv.PoissonMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.PoissonSCADPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.PoissonGroupLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.PoissonGroupMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.PoissonSparseGroupLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.PoissonSparseGroupMCPPathCV
+   :members:
+```
 
 ## Cox family
 
@@ -48,9 +89,22 @@ Cox CV uses `StratifiedKFold` by event indicator (so heavy
 censoring doesn't produce event-empty train folds). Folds with zero
 events are defensively skipped.
 
-::: skein_glm.cv.CoxMCPPathCV
-::: skein_glm.cv.CoxSCADPathCV
-::: skein_glm.cv.CoxGroupLassoPathCV
-::: skein_glm.cv.CoxGroupMCPPathCV
-::: skein_glm.cv.CoxSparseGroupLassoPathCV
-::: skein_glm.cv.CoxSparseGroupMCPPathCV
+```{eval-rst}
+.. autoclass:: skein_glm.cv.CoxMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.CoxSCADPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.CoxGroupLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.CoxGroupMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.CoxSparseGroupLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.CoxSparseGroupMCPPathCV
+   :members:
+```
