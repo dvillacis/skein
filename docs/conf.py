@@ -17,14 +17,14 @@ docs/conf.py).
 from __future__ import annotations
 
 import importlib.metadata
-import sys
-from pathlib import Path
 
-# Make `import skein_glm` importable for autodoc; the package is
-# pip-installed via the build-system, but if someone runs sphinx
-# without installing first, fall back to the source tree.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "python"))
+# `skein_glm` must be pip-installed before sphinx-build runs (see
+# .readthedocs.yaml `python.install` and CI's `pip install .[docs]`).
+# We deliberately do NOT prepend `python/` to sys.path: the source
+# tree has skein_glm/__init__.py but no compiled _core.so — only the
+# installed copy does — and shadowing site-packages with the source
+# tree caused every autodoc import to fail with ModuleNotFoundError:
+# 'skein_glm._core' on RTD.
 
 # ---- Project ----------------------------------------------------------------
 
