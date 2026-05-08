@@ -7,12 +7,14 @@
 //! Both expose a `weights()` accessor so the solver doesn't need to know
 //! whether weights are uniform, adaptive, or supplied externally.
 
+mod elastic_net;
 mod group_lasso;
 mod group_mcp;
 mod mcp;
 mod scad;
 mod sparse_group_lasso;
 
+pub use elastic_net::ElasticNet;
 pub use group_lasso::GroupLasso;
 pub use group_mcp::GroupMcp;
 pub use mcp::Mcp;

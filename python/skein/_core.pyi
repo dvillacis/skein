@@ -1326,3 +1326,43 @@ def solve_logistic_mcp_path_chunked_f32(
 ) -> tuple[
     NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], dict,
 ]: ...
+def solve_elastic_net_ls_path(
+    x: NDArray[np.float64],
+    y: NDArray[np.float64],
+    *,
+    alpha: float = ...,
+    lambdas: NDArray[np.float64] | None = ...,
+    n_lambdas: int = ...,
+    lambda_min_ratio: float = ...,
+    weights: NDArray[np.float64] | None = ...,
+    max_iter: int = ...,
+    tol: float = ...,
+    screening: str = ...,
+    acceleration: int | None = ...,
+    fit_intercept: bool = ...,
+    standardize_x: bool = ...,
+) -> tuple[
+    NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], dict,
+]: ...
+def solve_elastic_net_ls_path_sparse(
+    x_data: NDArray[np.float64],
+    x_indices: NDArray[np.int64],
+    x_indptr: NDArray[np.int64],
+    n_rows: int,
+    n_cols: int,
+    y: NDArray[np.float64],
+    *,
+    alpha: float = ...,
+    lambdas: NDArray[np.float64] | None = ...,
+    n_lambdas: int = ...,
+    lambda_min_ratio: float = ...,
+    weights: NDArray[np.float64] | None = ...,
+    max_iter: int = ...,
+    tol: float = ...,
+    screening: str = ...,
+    acceleration: int | None = ...,
+    fit_intercept: bool = ...,
+    standardize_x: bool = ...,
+) -> tuple[
+    NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], dict,
+]: ...

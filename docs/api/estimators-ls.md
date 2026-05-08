@@ -18,11 +18,13 @@ for any analysis that picks λ post-hoc.
 
 ::: skein.estimators.MCPRegressor
 ::: skein.estimators.SCADRegressor
+::: skein.estimators.ElasticNetRegressor
 
 ## Scalar — path
 
 ::: skein.estimators.MCPPathRegressor
 ::: skein.estimators.SCADPathRegressor
+::: skein.estimators.ElasticNetPathRegressor
 
 ## Group — single λ
 

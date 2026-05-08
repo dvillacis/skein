@@ -59,7 +59,7 @@ alpha_hat = cv_fit.intercept_
 | `x`                     | `X` (positional)                  | numpy array, scipy.sparse, MmapDesignF64/32, ChunkedDesignF64/32. |
 | `y`                     | `y` (positional)                  | For Cox: `fit(X, time, event)`.                      |
 | `family`                | (choose estimator class)          | See family map above.                                |
-| `alpha`                 | (use `SparseGroupLasso*` for elastic-net) | `glmnet`'s `alpha` mixes ridge + lasso. `skein` v0.1 doesn't ship native elastic net (M6). For α∈(0,1), use `SparseGroupLassoPathRegressor` with `groups=singletons`. |
+| `alpha`                 | `alpha` on `ElasticNet*Regressor` | `skein.ElasticNet*Regressor(alpha=...)` matches `glmnet`'s `alpha ∈ [0, 1]` exactly. `α=1` is lasso, `α=0` is ridge. |
 | `lambda`                | `lambdas`                         | numpy array. Pass `None` to auto-compute.            |
 | `nlambda`               | `n_lambdas`                       | Default 100 (matches glmnet).                        |
 | `lambda.min.ratio`      | `lambda_min_ratio`                | Default 1e-3 if `n > p`, 1e-2 if `n < p` (glmnet); skein defaults to 1e-3 always. |
@@ -219,10 +219,6 @@ sparse-group penalties also accept sparse inputs.
   one-vs-rest manually for now.
 - **Multi-response Gaussian** (`family = "mgaussian"`): M7 multi-task
   roadmap.
-- **Native elastic net** (`alpha < 1`): M6 roadmap. Use
-  `SparseGroupLassoPathRegressor` with `groups = np.arange(p)` (each
-  feature in its own group) for an elastic-net-shaped penalty
-  parameterized through `alpha`.
 - **`relax = TRUE`** (relaxed lasso): not in v0.1.
 - **Offset terms**: not in v0.1 (M3.7 roadmap).
 

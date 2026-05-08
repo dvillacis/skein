@@ -27,6 +27,7 @@ from skein.estimators import (
     CoxSCADPathRegressor,
     CoxSparseGroupLassoPathRegressor,
     CoxSparseGroupMCPPathRegressor,
+    ElasticNetPathRegressor,
     GroupLassoPathRegressor,
     GroupMCPPathRegressor,
     LogisticGroupLassoPathRegressor,
@@ -273,6 +274,61 @@ class SCADPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         )
         kw.update(overrides)
         return SCADPathRegressor(**kw)
+
+
+class ElasticNetPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
+    """K-fold cross-validated elastic-net path. Same shape as
+    :class:`MCPPathCV`, but the underlying solver is
+    :class:`ElasticNetPathRegressor`. Picks the λ minimizing mean
+    test MSE on the supplied folds."""
+
+    def __init__(
+        self,
+        alpha: float = 0.5,
+        *,
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+    ) -> None:
+        self.alpha = alpha
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+
+    def _make_base_path(self, **overrides) -> ElasticNetPathRegressor:
+        kw: dict[str, Any] = dict(
+            alpha=self.alpha,
+            lambdas=self.lambdas,
+            n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio,
+            weights=self.weights,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            fit_intercept=self.fit_intercept,
+            standardize=self.standardize,
+            screening=self.screening,
+            acceleration=self.acceleration,
+        )
+        kw.update(overrides)
+        return ElasticNetPathRegressor(**kw)
 
 
 # =====================================================================

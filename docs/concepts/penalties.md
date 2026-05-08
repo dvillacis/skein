@@ -41,9 +41,43 @@ import skein
 model = skein.MCPRegressor(lambda_=0.1, gamma=1e6).fit(X, y)
 ```
 
-If you want a true lasso fit (or elastic net), the convex
-sparse-group lasso with `groups = singletons` and `alpha = 1` is also
-a clean route. Native elastic-net is on the M6 roadmap.
+For a true lasso fit, use either `MCPRegressor(gamma=1e6)` or
+`ElasticNetRegressor(alpha=1.0)` (see below). Both reach the lasso
+solution; `ElasticNet` does it without the residual `β²/(2γ)` shape
+that `MCP` carries.
+
+### Elastic net (Zou & Hastie 2005)
+
+Convex combination of $\ell_1$ (lasso) and squared $\ell_2$ (ridge):
+
+$$
+\rho_{\text{EN}}(\beta_j; \lambda, \alpha) \;=\; \alpha \, \lambda \, |\beta_j| + (1 - \alpha) \, \frac{\lambda \, \beta_j^2}{2}
+$$
+
+The parameter $\alpha \in [0, 1]$ trades between the two:
+
+- **$\alpha = 1$**: pure lasso. Hard active-set selection.
+- **$\alpha = 0$**: pure ridge. No selection — all features get
+  shrunk smoothly toward zero.
+- **$\alpha \in (0, 1)$**: classical elastic net. Selects features
+  but handles correlated groups gracefully (lasso alone tends to
+  arbitrarily pick one feature from a correlated cluster; the
+  ridge term distributes weight more evenly).
+
+Convex penalty, so coordinate descent converges to the global
+optimum at every λ. The prox is closed-form: soft-threshold the
+L1 component, then divide by the ridge shrinkage factor
+$1 + (1-\alpha)\lambda \cdot \text{step}$.
+
+```python
+skein.ElasticNetRegressor(lambda_=0.1, alpha=0.5)        # single λ
+skein.ElasticNetPathRegressor(alpha=0.5, n_lambdas=50)   # full path
+skein.ElasticNetPathCV(alpha=0.5, cv=10)                  # CV-selected λ
+```
+
+Matches `glmnet`'s `glmnet(family = "gaussian", alpha = ...)` shape.
+Per-feature weights apply to **both** the L1 and L2 components:
+`w_j · [α λ |β_j| + (1-α) λ β_j² / 2]`.
 
 ### MCP (minimax concave penalty, Zhang 2010)
 

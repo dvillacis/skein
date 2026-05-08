@@ -18,6 +18,7 @@ share the same fit/predict surface as their non-CV counterparts.
 
 ::: skein.cv.MCPPathCV
 ::: skein.cv.SCADPathCV
+::: skein.cv.ElasticNetPathCV
 ::: skein.cv.GroupLassoPathCV
 ::: skein.cv.GroupMCPPathCV
 ::: skein.cv.SparseGroupLassoPathCV

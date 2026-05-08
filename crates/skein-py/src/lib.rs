@@ -24,7 +24,7 @@ use skein_core::{
         Standardized,
     },
     groups::Groups,
-    penalty::{GroupLasso, GroupPenalty, Mcp, Scad, SparseGroupLasso},
+    penalty::{ElasticNet, GroupLasso, GroupPenalty, Mcp, Scad, SparseGroupLasso},
     solver::{
         cd_solve, prox_newton_block_solve_path, prox_newton_solve_path, solve_block_path,
         solve_block_path_lla, solve_path, surrogate_sparse_group_mcp, surrogate_weights_group_mcp,
@@ -306,6 +306,49 @@ fn solve_scad_ls_path<'py>(
         fit_intercept,
         standardize_x,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, *, alpha=0.5,
+    lambdas=None,
+    n_lambdas=100,
+    lambda_min_ratio=1e-3,
+    weights=None,
+    max_iter=100,
+    tol=1e-6,
+    screening="strong",
+    acceleration=Some(5),
+    fit_intercept=true,
+    standardize_x=false,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_elastic_net_ls_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray1<f64>,
+    alpha: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    screening: &str,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+) -> PyResult<PathOutput<'py>> {
+    if !(0.0..=1.0).contains(&alpha) {
+        return Err(PyValueError::new_err(format!(
+            "alpha must be in [0, 1]; got {alpha}"
+        )));
+    }
+    build_path_outputs(
+        py, x, y, weights, lambdas, n_lambdas, lambda_min_ratio,
+        max_iter, tol, acceleration, screening, fit_intercept, standardize_x,
+        move |lam, w| Box::new(ElasticNet::with_weights(lam, alpha, w)),
     )
 }
 
@@ -2911,6 +2954,47 @@ fn solve_scad_ls_path_sparse<'py>(
         fit_intercept,
         standardize_x,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, *, alpha=0.5,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, screening="strong", acceleration=Some(5),
+    fit_intercept=true, standardize_x=false,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_elastic_net_ls_path_sparse<'py>(
+    py: Python<'py>,
+    x_data: PyReadonlyArray1<f64>,
+    x_indices: PyReadonlyArray1<i64>,
+    x_indptr: PyReadonlyArray1<i64>,
+    n_rows: usize,
+    n_cols: usize,
+    y: PyReadonlyArray1<f64>,
+    alpha: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    screening: &str,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+) -> PyResult<PathOutput<'py>> {
+    if !(0.0..=1.0).contains(&alpha) {
+        return Err(PyValueError::new_err(format!(
+            "alpha must be in [0, 1]; got {alpha}"
+        )));
+    }
+    build_path_outputs_sparse_ls(
+        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, weights,
+        lambdas, n_lambdas, lambda_min_ratio,
+        max_iter, tol, acceleration, screening, fit_intercept, standardize_x,
+        move |lam, w| Box::new(ElasticNet::with_weights(lam, alpha, w)),
     )
 }
 
@@ -6007,6 +6091,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_scad_ls, m)?)?;
     m.add_function(wrap_pyfunction!(solve_mcp_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_scad_ls_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_elastic_net_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_lasso_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_mcp_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_sparse_group_lasso_ls_path, m)?)?;
@@ -6031,6 +6116,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_cox_sparse_group_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_mcp_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_scad_ls_path_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_elastic_net_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_lasso_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_mcp_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(

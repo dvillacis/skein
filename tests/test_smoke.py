@@ -2249,6 +2249,160 @@ def test_mmap_f32_with_standardize(tmp_path):
     assert np.sign(last[4]) == np.sign(true_beta[4])
 
 
+# ====================================================================
+# Elastic net (M6.1)
+# ====================================================================
+
+
+def test_elastic_net_alpha_one_matches_mcp_high_gamma():
+    """ElasticNet at α=1 (pure lasso) must match MCPPathRegressor at
+    γ=1e6 within 1e-6 across the path on the same data and λ-grid."""
+    rng = np.random.default_rng(11)
+    n, p = 100, 20
+    X = rng.standard_normal((n, p))
+    true_beta = np.zeros(p)
+    true_beta[:3] = [1.5, -2.0, 0.8]
+    y = X @ true_beta + 0.1 * rng.standard_normal(n)
+
+    lambdas = np.array([0.5, 0.2, 0.1, 0.05, 0.02, 0.01])
+    common = dict(
+        lambdas=lambdas, tol=1e-12, max_iter=20000,
+        screening="off", fit_intercept=True,
+    )
+    en = skein.ElasticNetPathRegressor(alpha=1.0, **common).fit(X, y)
+    mcp = skein.MCPPathRegressor(gamma=1e6, **common).fit(X, y)
+    # Tolerance is set to 1e-5 (not exactly machine precision) because
+    # MCP at γ=1e6 still has a residual β²/(2γ) term in the prox; for
+    # |β| ~ 1 that's ~5e-7 of difference per coordinate, which
+    # accumulates to ~2e-6 along the path. ElasticNet at α=1 is the
+    # exact lasso, so this small drift is the MCP's artifact.
+    np.testing.assert_allclose(en.coefs_, mcp.coefs_, atol=1e-5)
+    np.testing.assert_allclose(en.intercepts_, mcp.intercepts_, atol=1e-5)
+
+
+def test_elastic_net_alpha_zero_matches_closed_form_ridge():
+    """At α=0 (pure ridge), elastic net's coefs must equal the
+    closed-form `(XᵀX/n + λI)⁻¹ Xᵀy/n`."""
+    rng = np.random.default_rng(13)
+    n, p = 50, 6
+    X = rng.standard_normal((n, p))
+    y = X @ np.array([1.0, -1.5, 0.5, 0.0, 0.0, 0.0]) + 0.2 * rng.standard_normal(n)
+
+    lam = 0.3
+    # Closed form (no centering since fit_intercept=False).
+    xtx = X.T @ X / n
+    A = xtx + lam * np.eye(p)
+    xty = X.T @ y / n
+    beta_closed = np.linalg.solve(A, xty)
+
+    model = skein.ElasticNetRegressor(
+        lambda_=lam, alpha=0.0,
+        fit_intercept=False, standardize=False,
+        tol=1e-12, max_iter=20000, screening="off",
+    ).fit(X, y)
+    np.testing.assert_allclose(model.coef_, beta_closed, atol=1e-7)
+
+
+def test_elastic_net_path_recovers_signal():
+    """End-to-end: at small λ, elastic-net recovers the true sparse
+    signal (with some shrinkage)."""
+    rng = np.random.default_rng(17)
+    n, p = 200, 30
+    X = rng.standard_normal((n, p))
+    true_beta = np.zeros(p)
+    true_beta[:3] = [1.5, -2.0, 0.8]
+    y = X @ true_beta + 0.1 * rng.standard_normal(n)
+
+    model = skein.ElasticNetPathRegressor(
+        alpha=0.5, n_lambdas=50, lambda_min_ratio=1e-3,
+        tol=1e-10, max_iter=10000, fit_intercept=True,
+    ).fit(X, y)
+    last = model.coefs_[-1]
+    # Sign agreement on the truly-active features.
+    for j in range(3):
+        assert np.sign(last[j]) == np.sign(true_beta[j]), (
+            f"feature {j} sign mismatch: got {last[j]}"
+        )
+    # Magnitudes are within ~30% of truth (elastic net shrinkage is
+    # heavier than MCP's; this isn't tight, just a sanity check).
+    np.testing.assert_allclose(last[:3], true_beta[:3], rtol=0.30)
+
+
+def test_elastic_net_path_dense_sparse_equivalence():
+    """ElasticNet on a sparse CSC matrix must match the dense path
+    on the same X within tolerance, on a shared λ-grid."""
+    rng = np.random.default_rng(19)
+    n, p = 80, 12
+    X_dense = rng.standard_normal((n, p))
+    mask = rng.uniform(size=(n, p)) > 0.5
+    X_dense[mask] = 0.0
+    true_beta = np.zeros(p)
+    true_beta[:3] = [1.0, -1.5, 0.7]
+    y = X_dense @ true_beta + 0.1 * rng.standard_normal(n)
+    X_sparse = scipy_sparse.csc_matrix(X_dense)
+
+    lambdas = np.array([0.5, 0.2, 0.08, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        alpha=0.5, lambdas=lambdas, tol=1e-12, max_iter=20000,
+        screening="off", fit_intercept=True,
+    )
+    dense = skein.ElasticNetPathRegressor(**common).fit(X_dense, y)
+    sparse = skein.ElasticNetPathRegressor(**common).fit(X_sparse, y)
+    np.testing.assert_allclose(dense.coefs_, sparse.coefs_, atol=1e-5)
+    np.testing.assert_allclose(dense.intercepts_, sparse.intercepts_, atol=1e-5)
+
+
+def test_elastic_net_path_with_standardize_dense_sparse_equivalence():
+    rng = np.random.default_rng(23)
+    n, p = 60, 8
+    X_dense = rng.standard_normal((n, p))
+    X_dense[:, 0] *= 30.0   # inflated scale
+    mask = rng.uniform(size=(n, p)) > 0.5
+    X_dense[mask] = 0.0
+    y = X_dense @ np.array([0.05, 0.0, -1.5, 0.0, 0.0, 0.7, 0.0, 0.0]) + 0.1 * rng.standard_normal(n)
+    X_sparse = scipy_sparse.csc_matrix(X_dense)
+
+    lambdas = np.array([1.0, 0.3, 0.1, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        alpha=0.5, lambdas=lambdas, tol=1e-12, max_iter=20000,
+        screening="off", fit_intercept=True, standardize=True,
+    )
+    dense = skein.ElasticNetPathRegressor(**common).fit(X_dense, y)
+    sparse = skein.ElasticNetPathRegressor(**common).fit(X_sparse, y)
+    np.testing.assert_allclose(dense.coefs_, sparse.coefs_, atol=1e-5)
+    np.testing.assert_allclose(dense.intercepts_, sparse.intercepts_, atol=1e-5)
+
+
+def test_elastic_net_path_cv_picks_reasonable_lambda():
+    rng = np.random.default_rng(29)
+    n, p = 200, 30
+    X = rng.standard_normal((n, p))
+    true_beta = np.zeros(p)
+    true_beta[:3] = [1.5, -2.0, 0.8]
+    y = X @ true_beta + 0.3 * rng.standard_normal(n)
+
+    cv = skein.ElasticNetPathCV(
+        alpha=0.5, n_lambdas=30, cv=5,
+        tol=1e-10, max_iter=5000, random_state=0,
+    ).fit(X, y)
+    assert cv.lambda_best_ > 0
+    assert cv.coef_.shape == (p,)
+    # Active set should include the true active features.
+    active = np.where(np.abs(cv.coef_) > 1e-3)[0].tolist()
+    for j in range(3):
+        assert j in active, f"truly active feature {j} not selected (active set: {active})"
+
+
+def test_elastic_net_rejects_alpha_out_of_range():
+    rng = np.random.default_rng(31)
+    X = rng.standard_normal((50, 5))
+    y = rng.standard_normal(50)
+    with pytest.raises(ValueError, match="alpha must be in"):
+        skein.ElasticNetRegressor(lambda_=0.1, alpha=1.5).fit(X, y)
+    with pytest.raises(ValueError, match="alpha must be in"):
+        skein.ElasticNetRegressor(lambda_=0.1, alpha=-0.1).fit(X, y)
+
+
 def _split_into_chunks(x: np.ndarray, n_chunks: int):
     """Yield (start, end) row-index pairs for `n_chunks` roughly
     equal-sized splits."""

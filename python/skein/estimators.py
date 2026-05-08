@@ -270,6 +270,112 @@ class SCADRegressor(_NonconvexRegressorBase):
         return self
 
 
+class ElasticNetRegressor(_NonconvexRegressorBase):
+    """Elastic-net least squares at a single λ.
+
+    Convex penalty `α λ |β_j| + (1-α) λ β_j² / 2` per feature. ``alpha
+    = 1`` recovers pure lasso (≈ ``MCPRegressor`` at large γ);
+    ``alpha = 0`` recovers pure ridge. Matches glmnet's
+    ``cv.glmnet(family="gaussian", alpha=...)`` shape.
+
+    Parameters
+    ----------
+    lambda_ : float, default 0.1
+    alpha : float, default 0.5
+        Convex combination weight: ``α=1`` is lasso, ``α=0`` is ridge,
+        intermediate is elastic net. Must be in [0, 1].
+    weights : array-like of shape (n_features,) or None
+        Per-feature penalty weights; apply to both L1 and L2 parts.
+    max_iter : int, default 100
+    tol : float, default 1e-6
+    fit_intercept : bool, default True
+    standardize : bool, default False
+    screening : {"off", "strong", "gap_safe"}, default "strong"
+    acceleration : int or None, default 5
+
+    Attributes
+    ----------
+    coef_ : ndarray of shape (n_features,)
+    intercept_ : float
+    info_ : dict
+    n_features_in_ : int
+
+    See Also
+    --------
+    skein.ElasticNetPathRegressor : Full λ-path with warm starts.
+    skein.MCPRegressor : Nonconvex sparse alternative.
+    """
+
+    def __init__(
+        self,
+        lambda_: float = 0.1,
+        alpha: float = 0.5,
+        *,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+    ) -> None:
+        self.lambda_ = lambda_
+        self.alpha = alpha
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+
+    def fit(self, x, y: NDArray[np.float64]) -> "ElasticNetRegressor":
+        w = (
+            np.ascontiguousarray(self.weights, dtype=np.float64)
+            if self.weights is not None
+            else None
+        )
+        if _is_sparse(x):
+            y = np.ascontiguousarray(y, dtype=np.float64)
+            data, indices, indptr, n_rows, n_cols = _as_csc_arrays(x)
+            if y.ndim != 1 or y.shape[0] != n_rows:
+                raise ValueError(
+                    f"y must be 1D with length {n_rows}, got shape {y.shape}"
+                )
+            coefs, intercepts, _, info = _core.solve_elastic_net_ls_path_sparse(
+                data, indices, indptr, n_rows, n_cols, y,
+                alpha=self.alpha,
+                lambdas=np.array([self.lambda_], dtype=np.float64),
+                weights=w,
+                max_iter=self.max_iter,
+                tol=self.tol,
+                screening=self.screening,
+                acceleration=self.acceleration,
+                fit_intercept=self.fit_intercept,
+                standardize_x=self.standardize,
+            )
+            self.n_features_in_ = n_cols
+        else:
+            x, y = self._validate_xy(x, y)
+            coefs, intercepts, _, info = _core.solve_elastic_net_ls_path(
+                x, y,
+                alpha=self.alpha,
+                lambdas=np.array([self.lambda_], dtype=np.float64),
+                weights=w,
+                max_iter=self.max_iter,
+                tol=self.tol,
+                screening=self.screening,
+                acceleration=self.acceleration,
+                fit_intercept=self.fit_intercept,
+                standardize_x=self.standardize,
+            )
+            self.n_features_in_ = x.shape[1]
+        self.coef_ = coefs[0]
+        self.intercept_ = float(intercepts[0])
+        self.info_ = info
+        return self
+
+
 class _PathRegressorBase(BaseEstimator):
     """Common attributes for the path estimators."""
 
@@ -579,6 +685,151 @@ class SCADPathRegressor(_PathRegressorBase):
                 x,
                 y,
                 a=self.a,
+                lambdas=lams,
+                n_lambdas=self.n_lambdas,
+                lambda_min_ratio=self.lambda_min_ratio,
+                weights=w,
+                max_iter=self.max_iter,
+                tol=self.tol,
+                screening=self.screening,
+                acceleration=self.acceleration,
+                fit_intercept=self.fit_intercept,
+                standardize_x=self.standardize,
+            )
+            self.n_features_in_ = x.shape[1]
+        self.coefs_ = coefs
+        self.intercepts_ = intercepts
+        self.lambdas_ = lambdas_used
+        self.info_ = info
+        return self
+
+
+class ElasticNetPathRegressor(_PathRegressorBase):
+    """Elastic-net least squares along a λ-path with warm starts.
+
+    Solves
+
+        min_β (1/2n) ‖y − Xβ − α_int‖² + Σ_j w_j λ [α |β_j| + (1-α) β_j² / 2]
+
+    for a sequence of λ values, threading β across decreasing λ as
+    warm-starts. Convex objective, so coordinate descent converges
+    to the global optimum at every λ.
+
+    Recovers pure lasso at ``alpha=1`` (≈ ``MCPPathRegressor`` at
+    ``gamma=1e6``) and pure ridge at ``alpha=0``. Matches glmnet's
+    ``glmnet(family="gaussian", alpha=...)`` shape.
+
+    Parameters
+    ----------
+    alpha : float, default 0.5
+        Convex combination weight in [0, 1]. ``alpha=1`` is lasso;
+        ``alpha=0`` is ridge.
+    lambdas : array-like or None, default None
+        Explicit λ grid (descending). If None, derived from λ_max
+        (computed against the L1-effective weights ``α · w_j``) and
+        a geometric grid.
+    n_lambdas : int, default 100
+    lambda_min_ratio : float, default 1e-3
+    weights : array-like of shape (n_features,) or None
+        Per-feature penalty weights (apply to both L1 and L2 parts).
+    max_iter : int, default 100
+    tol : float, default 1e-6
+    fit_intercept : bool, default True
+    standardize : bool, default False
+    screening : {"off", "strong", "gap_safe"}, default "strong"
+    acceleration : int or None, default 5
+
+    Attributes
+    ----------
+    coefs_ : ndarray of shape (n_lambdas, n_features)
+    intercepts_ : ndarray of shape (n_lambdas,)
+    lambdas_ : ndarray of shape (n_lambdas,)
+    info_ : dict
+    n_features_in_ : int
+
+    See Also
+    --------
+    skein.ElasticNetRegressor : Single-λ version.
+    skein.ElasticNetPathCV : K-fold cross-validated path with auto λ-selection.
+    skein.MCPPathRegressor : Nonconvex sparse alternative.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import skein
+    >>> rng = np.random.default_rng(0)
+    >>> X = rng.standard_normal((200, 50))
+    >>> y = X[:, :3] @ [1.5, -2.0, 0.8] + 0.1 * rng.standard_normal(200)
+    >>> model = skein.ElasticNetPathRegressor(alpha=0.5, n_lambdas=50).fit(X, y)
+    >>> model.coefs_.shape
+    (50, 50)
+    """
+
+    def __init__(
+        self,
+        alpha: float = 0.5,
+        *,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+    ) -> None:
+        self.alpha = alpha
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+
+    def fit(self, x, y: NDArray[np.float64]) -> "ElasticNetPathRegressor":
+        y = np.ascontiguousarray(y, dtype=np.float64)
+        lams = (
+            np.ascontiguousarray(self.lambdas, dtype=np.float64)
+            if self.lambdas is not None
+            else None
+        )
+        w = (
+            np.ascontiguousarray(self.weights, dtype=np.float64)
+            if self.weights is not None
+            else None
+        )
+        if _is_sparse(x):
+            data, indices, indptr, n_rows, n_cols = _as_csc_arrays(x)
+            if y.ndim != 1 or y.shape[0] != n_rows:
+                raise ValueError(
+                    f"y must be 1D with length {n_rows}, got shape {y.shape}"
+                )
+            coefs, intercepts, lambdas_used, info = _core.solve_elastic_net_ls_path_sparse(
+                data, indices, indptr, n_rows, n_cols, y,
+                alpha=self.alpha,
+                lambdas=lams,
+                n_lambdas=self.n_lambdas,
+                lambda_min_ratio=self.lambda_min_ratio,
+                weights=w,
+                max_iter=self.max_iter,
+                tol=self.tol,
+                screening=self.screening,
+                acceleration=self.acceleration,
+                fit_intercept=self.fit_intercept,
+                standardize_x=self.standardize,
+            )
+            self.n_features_in_ = n_cols
+        else:
+            x = np.ascontiguousarray(x, dtype=np.float64)
+            coefs, intercepts, lambdas_used, info = _core.solve_elastic_net_ls_path(
+                x, y,
+                alpha=self.alpha,
                 lambdas=lams,
                 n_lambdas=self.n_lambdas,
                 lambda_min_ratio=self.lambda_min_ratio,
