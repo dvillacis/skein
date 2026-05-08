@@ -45,14 +45,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: install build + lint deps
+      - name: install package + dev deps
+        # `pip install -e ".[dev]"` triggers maturin via the
+        # pyproject build-system, which works without an active
+        # virtualenv (unlike bare `maturin develop --release`, which
+        # refuses to install into the runner's system Python).
         run: |
           python -m pip install --upgrade pip
-          python -m pip install maturin pytest numpy scipy scikit-learn ruff mypy
+          python -m pip install -e ".[dev]"
       - name: ruff
         run: ruff check python/ tests/
-      - name: maturin develop
-        run: maturin develop --release
       - name: mypy
         run: mypy python/
       - name: pytest
