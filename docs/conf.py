@@ -160,10 +160,11 @@ html_theme_options = {
     },
 }
 
-# Static assets (CSS overrides, etc.). Empty for now; extend if we
-# want a custom logo or tweak.
-html_static_path = ["_static"]
-templates_path = ["_templates"]
+# `html_static_path` and `templates_path` intentionally not set —
+# we have no custom CSS, logo, or template overrides yet, and
+# referencing empty dirs makes sphinx-build -W fail when git
+# skips them on a fresh checkout. Add them back (with a tracked
+# .gitkeep) when there's something to put in them.
 
 # ---- Misc -------------------------------------------------------------------
 
