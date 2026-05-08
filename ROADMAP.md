@@ -17,13 +17,13 @@ load-bearing piece; everything after stacks on top of it.
 | M1 — Production CD core | ✅ done | path solver, screening, Anderson, KKT-stop, standardization |
 | M2 — LLA + group block-CD + parallel | ✅ done | inner CD, working set, LLA outer, path, Rayon, op-norm Lipschitz, sparse-group, gap-safe, PyO3, criterion benches |
 | M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + M3.5 Cox PH Breslow (Rust + PyO3 + estimators) done; multinomial + Efron ties pending |
-| M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x f64 `MmapMatrix` (LS + logistic MCP) done; f32 mmap + chunked + mixed precision + GPU pending |
+| M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) done; chunked + true mixed precision + GPU pending |
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7 |
 | M7 — Multi-task | ⏳ | multi-response GLMs |
 | M8 — Distribution & DX | ⏳ | wheels, CI, docs, comparison benches |
 
-Test count at this snapshot: **185 cargo + 127 pytest, all green.**
+Test count at this snapshot: **191 cargo + 132 pytest, all green.**
 
 ---
 
@@ -497,13 +497,33 @@ matching the dense LS group path).
   mechanical mirroring of the `_sparse` surface and is deferred
   until there's user demand.
 
-- **`MmapMatrix` (f32)**: same backend, `T: Float` parameterized.
-  Half the disk I/O; pairs with mixed-precision below.
+- ✅ **`MmapMatrixF32` (f32-on-disk)**: same column-major mmap layout
+  as the f64 backend with 4-byte storage; `col_dot` / `matvec` /
+  `rmatvec` / `columns` cast f32→f64 elementwise on the way out so
+  the solver core stays f64. Half the disk footprint and half the
+  page-cache pressure for the same `(n, p)`. PyO3 entry points
+  `solve_mcp_ls_path_mmap_f32` and `solve_logistic_mcp_path_mmap_f32`;
+  Python helper `MmapDesignF32(path, n_rows, n_cols)` that the
+  `MCPPathRegressor` and `LogisticMCPPathRegressor` dispatch
+  recognizes alongside `MmapDesignF64` (picks the right `_mmap[_f32]`
+  entry point based on `x.dtype`). PyO3 entry-point bodies are now
+  generic over `D: DesignMatrix`, refactored into shared
+  `mmap_ls_mcp_path_inner` / `mmap_logistic_mcp_path_inner` helpers
+  so f64 and f32 surfaces share their tower-of-wrappers logic
+  (Augmented + Standardized) byte-for-byte. 6 cargo tests on
+  `MmapMatrixF32` (mirroring the f64 suite, with an f32-rounded
+  dense reference for the equivalence test); 5 pytest tests
+  including dense-vs-mmap equivalence on the f32-rounded matrix and
+  an end-to-end "f32 vs f64 within truncation" check that asserts
+  identical support recovery.
+
+- **True mixed precision**: parameterize the solver core over
+  `T: Float` and refine the active set in f64 after a bulk f32 path.
+  Different problem from f32-on-disk; needs touching every algorithm
+  in `solver/`.
 - **`ChunkedMatrix`**: row-block streaming for out-of-core LS / GLM
   fits where columns are accessed via partial `Xᵀr` reductions per
   chunk. This is what makes `n` in the hundreds of millions tractable.
-- **Mixed precision**: f32 mmap for the bulk of the path; refine the
-  active set in f64.
 - **GPU backend** (stretch): `cubla`s / `wgpu` matvecs behind the same
   trait. Only worth it once dense `n × p` matvec is the bottleneck;
   measure first.

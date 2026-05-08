@@ -2122,6 +2122,134 @@ def test_mmap_logistic_mcp_path_matches_dense(tmp_path):
     np.testing.assert_allclose(dense.intercepts_, via_mmap.intercepts_, atol=1e-6)
 
 
+def _write_fortran_f32(x: np.ndarray, path) -> None:
+    """f32 version of `_write_fortran_f64`. Same C-vs-F-order gotcha
+    applies — `tofile()` would write in C order, so we explicitly
+    cast and `tobytes(order='F')`."""
+    buf = np.ascontiguousarray(x, dtype=np.float32).tobytes(order="F")
+    with open(str(path), "wb") as f:
+        f.write(buf)
+
+
+def test_mmap_f32_design_constructor_validates_file_size(tmp_path):
+    x = np.zeros((3, 2), dtype=np.float64)
+    p = tmp_path / "x32.bin"
+    _write_fortran_f32(x, p)
+    # 6 f32s = 24 bytes; we claim shape (3, 3) ⇒ 36 bytes.
+    with pytest.raises(ValueError, match="bytes"):
+        skein.MmapDesignF32(str(p), n_rows=3, n_cols=3)
+
+
+def test_mmap_f32_mcp_path_matches_f32_rounded_dense(tmp_path):
+    """f32 mmap path matches the dense path on the same X **after
+    rounding to f32 and back** — comparing against the unrounded f64
+    dense would fail by ~1e-7 (the f32 truncation), so we force the
+    in-RAM reference into the same precision."""
+    rng = np.random.default_rng(31)
+    n, p = 60, 8
+    x = rng.standard_normal((n, p))
+    x_rounded = x.astype(np.float32).astype(np.float64)
+    true_beta = np.zeros(p)
+    true_beta[:3] = [1.5, -2.0, 0.8]
+    y = x_rounded @ true_beta + 0.1 * rng.standard_normal(n)
+
+    file = tmp_path / "x32.bin"
+    _write_fortran_f32(x, file)
+    mmap_design = skein.MmapDesignF32(str(file), n, p)
+
+    lambdas = np.array([0.5, 0.2, 0.08, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        gamma=1e6, lambdas=lambdas, tol=1e-12, max_iter=10000,
+        screening="off", fit_intercept=True,
+    )
+    dense = skein.MCPPathRegressor(**common).fit(x_rounded, y)
+    via_mmap = skein.MCPPathRegressor(**common).fit(mmap_design, y)
+    np.testing.assert_allclose(dense.coefs_, via_mmap.coefs_, atol=1e-5)
+    np.testing.assert_allclose(dense.intercepts_, via_mmap.intercepts_, atol=1e-5)
+    assert via_mmap.n_features_in_ == p
+
+
+def test_mmap_f32_mcp_path_matches_f64_within_truncation(tmp_path):
+    """End-to-end: a model fit on f32 mmap matches one fit on the
+    original f64 dense matrix to ~1e-4 — i.e. the f32 truncation
+    matters for low-magnitude coefs but the recovered support and
+    sign pattern agree. Useful as a 'does halving the disk footprint
+    cost real accuracy?' sanity check."""
+    rng = np.random.default_rng(33)
+    n, p = 100, 8
+    x = rng.standard_normal((n, p))
+    true_beta = np.zeros(p)
+    true_beta[:3] = [1.5, -2.0, 0.8]
+    y = x @ true_beta + 0.1 * rng.standard_normal(n)
+
+    file = tmp_path / "x32.bin"
+    _write_fortran_f32(x, file)
+    mmap_design = skein.MmapDesignF32(str(file), n, p)
+
+    lambdas = np.array([0.3, 0.1, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        gamma=1e6, lambdas=lambdas, tol=1e-12, max_iter=10000,
+        screening="off", fit_intercept=True,
+    )
+    f64 = skein.MCPPathRegressor(**common).fit(x, y)
+    f32 = skein.MCPPathRegressor(**common).fit(mmap_design, y)
+    # 1e-4 is generous; in practice coefs match to ~1e-6 here, but
+    # we leave headroom for ill-conditioned problems.
+    np.testing.assert_allclose(f32.coefs_, f64.coefs_, atol=1e-4)
+    # Support agreement (which features are nonzero) is exact:
+    f64_active = np.abs(f64.coefs_[-1]) > 1e-6
+    f32_active = np.abs(f32.coefs_[-1]) > 1e-6
+    np.testing.assert_array_equal(f32_active, f64_active)
+
+
+def test_mmap_f32_logistic_mcp_path_matches_f32_rounded_dense(tmp_path):
+    rng = np.random.default_rng(43)
+    n, p = 200, 8
+    x = rng.standard_normal((n, p))
+    x_rounded = x.astype(np.float32).astype(np.float64)
+    eta = x_rounded @ np.array([1.5, 0.0, -1.0, 0.0, 0.8, 0.0, 0.0, 0.0])
+    y = (rng.uniform(size=n) < 1.0 / (1.0 + np.exp(-eta))).astype(np.float64)
+
+    file = tmp_path / "x32.bin"
+    _write_fortran_f32(x, file)
+    mmap_design = skein.MmapDesignF32(str(file), n, p)
+
+    lambdas = np.array([0.3, 0.1, 0.05, 0.02, 0.01], dtype=np.float64)
+    common = dict(
+        gamma=1e6, lambdas=lambdas, tol=1e-12, max_iter=5000,
+        max_outer=30, outer_tol=1e-10, fit_intercept=True,
+    )
+    dense = skein.LogisticMCPPathRegressor(**common).fit(x_rounded, y)
+    via_mmap = skein.LogisticMCPPathRegressor(**common).fit(mmap_design, y)
+    np.testing.assert_allclose(dense.coefs_, via_mmap.coefs_, atol=1e-5)
+    np.testing.assert_allclose(dense.intercepts_, via_mmap.intercepts_, atol=1e-5)
+
+
+def test_mmap_f32_with_standardize(tmp_path):
+    """f32 + standardize=True smoke test — proves the
+    Standardized<MmapMatrixF32> stack converges (no equivalence
+    against dense, just a sanity check on the path output)."""
+    rng = np.random.default_rng(47)
+    n, p = 80, 6
+    x = rng.standard_normal((n, p))
+    x[:, 0] *= 30.0
+    true_beta = np.array([0.05, 0.0, -1.5, 0.0, 0.8, 0.0])
+    y = x @ true_beta + 0.1 * rng.standard_normal(n)
+
+    file = tmp_path / "x32.bin"
+    _write_fortran_f32(x, file)
+    mmap_design = skein.MmapDesignF32(str(file), n, p)
+
+    model = skein.MCPPathRegressor(
+        gamma=1e6, n_lambdas=10, lambda_min_ratio=1e-3,
+        tol=1e-10, max_iter=10000, fit_intercept=True, standardize=True,
+    ).fit(mmap_design, y)
+    last = model.coefs_[-1]
+    assert np.isfinite(last).all()
+    assert np.sign(last[2]) == np.sign(true_beta[2])
+    assert np.sign(last[4]) == np.sign(true_beta[4])
+
+
 def test_logistic_mcp_path_standardize_recovers_signal_with_inflated_scale():
     """End-to-end signal recovery on a logistic problem where one
     feature has a 50× inflated scale. Without standardize the inflated

@@ -105,7 +105,7 @@ from skein.cv import (
     SparseGroupMCPPathCV,
 )
 from skein.ic import select_by_ic
-from skein.mmap import MmapDesignF64
+from skein.mmap import MmapDesignF32, MmapDesignF64
 from skein.penalties import Penalty, GroupPenalty
 from skein.datafits import Datafit
 
@@ -210,6 +210,7 @@ __all__ = [
     "CoxSparseGroupMCPPathCV",
     "select_by_ic",
     "MmapDesignF64",
+    "MmapDesignF32",
     "Penalty",
     "GroupPenalty",
     "Datafit",

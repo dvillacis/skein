@@ -7,12 +7,14 @@
 mod augmented;
 mod dense;
 mod mmap;
+mod mmap_f32;
 mod sparse_csc;
 mod standardized;
 
 pub use augmented::Augmented;
 pub use dense::DenseMatrix;
 pub use mmap::MmapMatrix;
+pub use mmap_f32::MmapMatrixF32;
 pub use sparse_csc::SparseCSC;
 pub use standardized::Standardized;
 
