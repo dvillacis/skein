@@ -50,6 +50,13 @@ manifest-path = "crates/skein-py/Cargo.toml"
 module-name = "skein_glm._core"
 python-source = "python"
 features = ["pyo3/extension-module"]
+# Maturin auto-emits `License-File: LICENSE` into PKG-INFO but
+# doesn't include LICENSE in the sdist tarball by default. PyPI
+# 2.4 strict-validates that every License-File entry physically
+# exists in the distribution and rejects mismatches. Explicit
+# include patches both wheel and sdist to actually contain the
+# file.
+include = ["LICENSE"]
 
 [tool.ruff]
 line-length = 100
