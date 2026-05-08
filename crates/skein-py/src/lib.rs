@@ -346,8 +346,19 @@ fn solve_elastic_net_ls_path<'py>(
         )));
     }
     build_path_outputs(
-        py, x, y, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, fit_intercept, standardize_x,
+        py,
+        x,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        fit_intercept,
+        standardize_x,
         move |lam, w| Box::new(ElasticNet::with_weights(lam, alpha, w)),
     )
 }
@@ -2991,9 +3002,23 @@ fn solve_elastic_net_ls_path_sparse<'py>(
         )));
     }
     build_path_outputs_sparse_ls(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, fit_intercept, standardize_x,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        fit_intercept,
+        standardize_x,
         move |lam, w| Box::new(ElasticNet::with_weights(lam, alpha, w)),
     )
 }

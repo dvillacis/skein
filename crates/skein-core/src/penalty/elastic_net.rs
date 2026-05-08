@@ -231,12 +231,9 @@ mod tests {
         let datafit_a = LeastSquares::new(y.clone());
         let datafit_b = LeastSquares::new(y);
 
-        let make_mcp = |lam: f64| -> Box<dyn crate::Penalty> {
-            Box::new(Mcp::new(lam, 1e8, p))
-        };
-        let make_en = |lam: f64| -> Box<dyn crate::Penalty> {
-            Box::new(ElasticNet::new(lam, 1.0, p))
-        };
+        let make_mcp = |lam: f64| -> Box<dyn crate::Penalty> { Box::new(Mcp::new(lam, 1e8, p)) };
+        let make_en =
+            |lam: f64| -> Box<dyn crate::Penalty> { Box::new(ElasticNet::new(lam, 1.0, p)) };
 
         let (betas_mcp, _) = solve_path(&design, &datafit_a, make_mcp, &cfg);
         let (betas_en, _) = solve_path(&design, &datafit_b, make_en, &cfg);
@@ -244,11 +241,7 @@ mod tests {
         assert_eq!(betas_mcp.shape(), betas_en.shape());
         for k in 0..betas_mcp.nrows() {
             for j in 0..p {
-                assert_abs_diff_eq!(
-                    betas_mcp[[k, j]],
-                    betas_en[[k, j]],
-                    epsilon = 1e-6
-                );
+                assert_abs_diff_eq!(betas_mcp[[k, j]], betas_en[[k, j]], epsilon = 1e-6);
             }
         }
     }

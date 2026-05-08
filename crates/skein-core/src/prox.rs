@@ -218,8 +218,8 @@ mod tests {
         let p_w1 = elastic_net_prox(z, step, lam, alpha, 1.0);
         // With w=2, threshold doubles to 0.24; ridge factor goes from
         // 1.18 to 1.36. Hand-compute:
-        let l1_thr = step * alpha * lam * 2.0;       // 0.24
-        let ridge = 1.0 + step * (1.0 - alpha) * lam * 2.0;  // 1.36
+        let l1_thr = step * alpha * lam * 2.0; // 0.24
+        let ridge = 1.0 + step * (1.0 - alpha) * lam * 2.0; // 1.36
         let expected = (z - l1_thr) / ridge;
         assert_abs_diff_eq!(
             elastic_net_prox(z, step, lam, alpha, 2.0),
