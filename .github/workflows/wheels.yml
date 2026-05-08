@@ -1,11 +1,28 @@
 name: Wheels
 
 # Builds wheels via cibuildwheel for Linux x86_64/aarch64, macOS
-# arm64+x86_64, and Windows x86_64. Triggered on tag push (v*) and
-# manual dispatch. Wheels land as workflow artifacts.
+# arm64+x86_64, and Windows x86_64; uploads them as workflow
+# artifacts; and (on tag push) publishes to PyPI via Trusted
+# Publishers (no API token / no long-lived secret).
 #
-# To publish to PyPI on tag, set the `PYPI_API_TOKEN` repository
-# secret and uncomment the publish job below.
+# One-time PyPI setup before the first publish works:
+#
+#   1. Create the project page at https://pypi.org/account/login
+#      (or use the "pending" trusted-publisher flow below to
+#      reserve the name `skein` on first publish).
+#   2. Go to https://pypi.org/manage/account/publishing/ →
+#      "Add a new pending publisher" → fill in:
+#        PyPI project name: skein
+#        Owner:             dvillacis
+#        Repository name:   skein
+#        Workflow filename: wheels.yml
+#        Environment name:  pypi   (optional but recommended)
+#   3. On the GitHub side, create the `pypi` environment in
+#      Settings → Environments. Add reviewers / branch protection
+#      rules if you want a manual-approval gate before publishes.
+#
+# After that, every `git tag v* && git push origin v*` triggers
+# wheel builds, sdist build, and (gated by `if:`) the publish job.
 
 on:
   push:
@@ -78,20 +95,26 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
 
-  # Uncomment to publish on tag once `PYPI_API_TOKEN` is set as a
-  # repository secret.
-  #
-  # publish:
-  #   name: publish to PyPI
-  #   needs: [build_wheels, build_sdist]
-  #   runs-on: ubuntu-latest
-  #   if: startsWith(github.ref, 'refs/tags/v')
-  #   environment: pypi
-  #   permissions:
-  #     id-token: write
-  #   steps:
-  #     - uses: actions/download-artifact@v4
-  #       with:
-  #         path: dist
-  #         merge-multiple: true
-  #     - uses: pypa/gh-action-pypi-publish@release/v1
+  publish:
+    name: publish to PyPI
+    needs: [build_wheels, build_sdist]
+    runs-on: ubuntu-latest
+    # Only publish on tag pushes — workflow_dispatch runs from main
+    # build wheels but stop short of publishing, so you can dry-run
+    # the wheel build without releasing anything.
+    if: startsWith(github.ref, 'refs/tags/v')
+    environment: pypi
+    permissions:
+      # Required for OIDC / Trusted Publishers. No PyPI token needed.
+      id-token: write
+    steps:
+      - name: Download wheel + sdist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        # No `password:` field — pypa/gh-action-pypi-publish auto-
+        # detects the OIDC token from `id-token: write` and uses it
+        # against the configured Trusted Publisher on PyPI.
+        uses: pypa/gh-action-pypi-publish@release/v1
