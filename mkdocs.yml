@@ -110,6 +110,7 @@ nav:
       - Custom penalties: extending/penalty.md
       - Custom datafits: extending/datafit.md
       - Custom backends: extending/backend.md
+      - Stable Rust API contract: extending/rust-api.md
   - Examples:
       - Genomics (sparse-group MCP): examples/genomics.md
       - NLP (sparse logistic): examples/nlp.md

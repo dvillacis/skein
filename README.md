@@ -38,10 +38,17 @@ place; design-matrix backends (sparse, mmap, chunked) are next. See
   penalty) combination; type stubs; warm-started λ-paths; standardization
   with original-scale `coef_` / `intercept_` recovery (dense backend).
 
-**Coming next:** docs site (mkdocs with a "porting from glmnet/ncvreg"
-cheat sheet) and comparison benchmarks vs. glmnet/ncvreg/grpreg/skglm.
-CI and wheel builds are in place; the library is now `pip install`-able
-once published.
+**M8 (Distribution & DX) is done:** CI + cibuildwheel + Read the Docs +
+25-page mkdocs site (concepts + R-porting + extending + examples + API
+ref) + R numerical regression suite vs glmnet/ncvreg/grpreg + stable
+Rust API contract. The library is `pip install`-able once published,
+documented end-to-end, and pinned against R reference fits so we don't
+silently drift.
+
+**Coming next:** algorithmic features — M5.x adaptive weights and
+stability selection are the next high-value milestones; both leverage
+the existing per-feature/per-group weight axes that are already wired
+through every solver.
 
 ## Layout
 
