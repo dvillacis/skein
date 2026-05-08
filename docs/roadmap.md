@@ -21,7 +21,7 @@ load-bearing piece; everything after stacks on top of it.
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7 |
 | M7 — Multi-task | ⏳ | multi-response GLMs |
-| M8 — Distribution & DX | ⏳ partial | M8.1 CI + M8.2 wheels + M8.3a docs scaffold (mkdocs-material + landing/install/quickstart + concept pages, --strict-build CI gate) done; M8.3b porting/extending/examples + M8.3c API ref + GitHub Pages deploy + comparison benches + numerical regression tests + stable Rust API contract pending |
+| M8 — Distribution & DX | ⏳ partial | M8.1 CI + M8.2 wheels + M8.3a docs scaffold + M8.3b porting/extending/examples (3 R-package guides, 3 extending walkthroughs, 3 worked examples) done; M8.3c API ref + GitHub Pages deploy + comparison benches + numerical regression tests + stable Rust API contract pending |
 
 Test count at this snapshot: **199 cargo + 138 pytest, all green.**
 

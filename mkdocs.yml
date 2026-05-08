@@ -78,4 +78,16 @@ nav:
       - Datafits: concepts/datafits.md
       - Weights: concepts/weights.md
       - Backends: concepts/backends.md
+  - Porting from R:
+      - From glmnet: porting/glmnet.md
+      - From ncvreg: porting/ncvreg.md
+      - From grpreg: porting/grpreg.md
+  - Extending:
+      - Custom penalties: extending/penalty.md
+      - Custom datafits: extending/datafit.md
+      - Custom backends: extending/backend.md
+  - Examples:
+      - Genomics (sparse-group MCP): examples/genomics.md
+      - NLP (sparse logistic): examples/nlp.md
+      - Survival (Cox sparse-group MCP): examples/survival.md
   - Roadmap: roadmap.md
