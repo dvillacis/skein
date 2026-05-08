@@ -40,22 +40,22 @@ jobs:
         include:
           - os: ubuntu-latest
             cibw_archs: x86_64
-          - os: ubuntu-latest
-            cibw_archs: aarch64
-          - os: macos-13
-            cibw_archs: x86_64
           - os: macos-14
             cibw_archs: arm64
           - os: windows-latest
             cibw_archs: AMD64
+          # Linux aarch64 (emulated under QEMU) and macOS Intel
+          # (macos-13) are dropped from the v0.1.x release matrix
+          # because they take 40+ min each on cold caches and gate the
+          # publish job. Users on those platforms `pip install` builds
+          # from sdist on first install. Add back when:
+          #  - there's user demand for prebuilt aarch64 wheels, OR
+          #  - cibuildwheel container caching for QEMU is mature, OR
+          #  - we can run on a self-hosted aarch64 runner.
+          # Apple Silicon (macos-14 arm64) is the macOS canon now;
+          # Intel users on x86_64 macOS install from sdist.
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up QEMU (Linux aarch64 only)
-        if: matrix.os == 'ubuntu-latest' && matrix.cibw_archs == 'aarch64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - uses: pypa/cibuildwheel@v2.21
         env:
