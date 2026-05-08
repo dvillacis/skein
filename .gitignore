@@ -21,6 +21,9 @@ htmlcov/
 # Maturin
 /wheels/
 
+# mkdocs build output
+/site/
+
 # Virtual envs
 .venv/
 .env
