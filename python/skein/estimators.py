@@ -301,12 +301,12 @@ class MCPPathRegressor(_PathRegressorBase):
                 raise ValueError(
                     f"y must be 1D with length {x.n_rows}, got shape {y.shape}"
                 )
-            entry = (
+            chunked_entry = (
                 _core.solve_mcp_ls_path_chunked_f32
                 if x.dtype == "f32"
                 else _core.solve_mcp_ls_path_chunked
             )
-            coefs, intercepts, lambdas_used, info = entry(
+            coefs, intercepts, lambdas_used, info = chunked_entry(
                 x.chunks, x.n_cols, y,
                 gamma=self.gamma,
                 lambdas=lams,
@@ -326,12 +326,12 @@ class MCPPathRegressor(_PathRegressorBase):
                 raise ValueError(
                     f"y must be 1D with length {x.n_rows}, got shape {y.shape}"
                 )
-            entry = (
+            mmap_entry = (
                 _core.solve_mcp_ls_path_mmap_f32
                 if x.dtype == "f32"
                 else _core.solve_mcp_ls_path_mmap
             )
-            coefs, intercepts, lambdas_used, info = entry(
+            coefs, intercepts, lambdas_used, info = mmap_entry(
                 x.path, x.n_rows, x.n_cols, y,
                 gamma=self.gamma,
                 lambdas=lams,
@@ -1421,12 +1421,12 @@ class LogisticMCPPathRegressor(_LogisticPathRegressorBase):
                 if self.lambdas is not None
                 else None
             )
-            entry = (
+            chunked_entry = (
                 _core.solve_logistic_mcp_path_chunked_f32
                 if x.dtype == "f32"
                 else _core.solve_logistic_mcp_path_chunked
             )
-            coefs, intercepts, lambdas_used, info = entry(
+            coefs, intercepts, lambdas_used, info = chunked_entry(
                 x.chunks, x.n_cols, y_arr,
                 gamma=self.gamma, lambdas=lams,
                 n_lambdas=self.n_lambdas, lambda_min_ratio=self.lambda_min_ratio,
@@ -1459,12 +1459,12 @@ class LogisticMCPPathRegressor(_LogisticPathRegressorBase):
                 if self.lambdas is not None
                 else None
             )
-            entry = (
+            mmap_entry = (
                 _core.solve_logistic_mcp_path_mmap_f32
                 if x.dtype == "f32"
                 else _core.solve_logistic_mcp_path_mmap
             )
-            coefs, intercepts, lambdas_used, info = entry(
+            coefs, intercepts, lambdas_used, info = mmap_entry(
                 x.path, x.n_rows, x.n_cols, y_arr,
                 gamma=self.gamma, lambdas=lams,
                 n_lambdas=self.n_lambdas, lambda_min_ratio=self.lambda_min_ratio,

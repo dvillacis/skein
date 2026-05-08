@@ -4,18 +4,18 @@
 //! impls used by the solver. Everything is `Sync` so the solver can dispatch
 //! group-wise work across Rayon threads.
 
+pub mod datafit;
 pub mod design;
 pub mod groups;
-pub mod prox;
 pub mod penalty;
-pub mod datafit;
+pub mod prox;
 pub mod solver;
 pub mod standardize;
 
+pub use datafit::Datafit;
 pub use design::{DenseMatrix, DesignMatrix, SparseCSC, Standardized};
 pub use groups::Groups;
 pub use penalty::{GroupPenalty, Penalty};
-pub use datafit::Datafit;
 pub use standardize::{
     destandardize, destandardize_path, rescale_weights_for_standardize, standardize,
     StandardizationStats, StandardizeConfig,

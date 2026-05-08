@@ -442,7 +442,7 @@ mod tests {
             lambda_min_ratio: 1.0,
             lambdas: Some(vec![lam_max]),
             cd: CdConfig::default(),
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (betas_std, _) = solve_path(
             &design,
@@ -495,7 +495,7 @@ mod tests {
                 tol: 1e-14,
                 acceleration: Some(5),
             },
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (betas_std, _) = solve_path(
             &design,

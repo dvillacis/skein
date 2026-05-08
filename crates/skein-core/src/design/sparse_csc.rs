@@ -51,11 +51,7 @@ impl SparseCSC {
         );
         assert!(!indptr.is_empty(), "indptr must have length ≥ 1");
         let n_features = indptr.len() - 1;
-        assert_eq!(
-            indptr[0], 0,
-            "indptr[0] must be 0 (got {})",
-            indptr[0]
-        );
+        assert_eq!(indptr[0], 0, "indptr[0] must be 0 (got {})", indptr[0]);
         assert_eq!(
             indptr[n_features], nnz,
             "indptr[{}] must equal nnz={} (got {})",
@@ -72,7 +68,9 @@ impl SparseCSC {
             assert!(
                 indices[k] < n_samples,
                 "row index {} at nnz={} exceeds n_samples={}",
-                indices[k], k, n_samples
+                indices[k],
+                k,
+                n_samples
             );
         }
 
@@ -270,11 +268,7 @@ mod tests {
         let (sparse, dense_arr) = known_sparse();
         let dense = DenseMatrix::new(dense_arr);
         for j in 0..3 {
-            assert_abs_diff_eq!(
-                sparse.col_sq_norm(j),
-                dense.col_sq_norm(j),
-                epsilon = 1e-12
-            );
+            assert_abs_diff_eq!(sparse.col_sq_norm(j), dense.col_sq_norm(j), epsilon = 1e-12);
         }
     }
 
@@ -288,11 +282,7 @@ mod tests {
         assert_eq!(block_sparse.shape(), &[4, 2]);
         for i in 0..4 {
             for k in 0..2 {
-                assert_abs_diff_eq!(
-                    block_sparse[[i, k]],
-                    block_dense[[i, k]],
-                    epsilon = 1e-12
-                );
+                assert_abs_diff_eq!(block_sparse[[i, k]], block_dense[[i, k]], epsilon = 1e-12);
             }
         }
     }
@@ -326,12 +316,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "indptr[0] must be 0")]
     fn sparse_csc_panics_on_bad_indptr_first() {
-        let _ = SparseCSC::new(
-            3,
-            array![1.0],
-            array![0_usize],
-            array![1_usize, 1],
-        );
+        let _ = SparseCSC::new(3, array![1.0], array![0_usize], array![1_usize, 1]);
     }
 
     #[test]

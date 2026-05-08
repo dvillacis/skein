@@ -128,10 +128,10 @@ mod tests {
     /// every trait method on `Standardized<base>` matches the dense
     /// reference of `X · diag(1/s)`.
     fn build_problem() -> (
-        DenseMatrix,            // raw dense
-        SparseCSC,              // raw sparse (same X)
-        DenseMatrix,            // pre-scaled dense reference
-        Array1<f64>,            // x_scale
+        DenseMatrix, // raw dense
+        SparseCSC,   // raw sparse (same X)
+        DenseMatrix, // pre-scaled dense reference
+        Array1<f64>, // x_scale
     ) {
         // Same hand-built sparse pattern as the SparseCSC tests.
         let x_dense = array![
@@ -153,7 +153,12 @@ mod tests {
         let indptr = array![0_usize, 2, 4, 6];
         let sparse = SparseCSC::new(4, data, indices, indptr);
 
-        (DenseMatrix::new(x_dense), sparse, DenseMatrix::new(x_scaled_ref), scales)
+        (
+            DenseMatrix::new(x_dense),
+            sparse,
+            DenseMatrix::new(x_scaled_ref),
+            scales,
+        )
     }
 
     #[test]
@@ -307,7 +312,11 @@ mod tests {
         // Dense X with ~50% sparsity.
         let x = Array2::<f64>::from_shape_fn((n, p), |_| {
             let v = sample();
-            if v.abs() < 0.5 { 0.0 } else { v }
+            if v.abs() < 0.5 {
+                0.0
+            } else {
+                v
+            }
         });
         let y = Array1::<f64>::from_shape_fn(n, |_| 0.3 * sample());
         let scales = array![1.5, 2.0, 0.8, 3.0, 1.2];
@@ -362,11 +371,7 @@ mod tests {
         assert_eq!(betas_ref.shape(), betas_lazy.shape());
         for k in 0..betas_ref.nrows() {
             for j in 0..p {
-                assert_abs_diff_eq!(
-                    betas_ref[[k, j]],
-                    betas_lazy[[k, j]],
-                    epsilon = 1e-7
-                );
+                assert_abs_diff_eq!(betas_ref[[k, j]], betas_lazy[[k, j]], epsilon = 1e-7);
             }
         }
     }

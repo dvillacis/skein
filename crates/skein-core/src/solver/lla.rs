@@ -66,7 +66,11 @@ where
 
     for outer in 0..max_outer {
         let weights = update_weights(beta.view(), groups);
-        debug_assert_eq!(weights.len(), n_groups, "surrogate weights length must equal n_groups");
+        debug_assert_eq!(
+            weights.len(),
+            n_groups,
+            "surrogate weights length must equal n_groups"
+        );
         let inner_pen = GroupLasso::with_weights(lambda, weights);
 
         let beta_old = beta.clone();
@@ -158,11 +162,7 @@ pub fn surrogate_sparse_group_mcp(
 
     for g in 0..n_groups {
         let cols = groups.group(g);
-        let block_norm: f64 = cols
-            .iter()
-            .map(|&j| beta[j] * beta[j])
-            .sum::<f64>()
-            .sqrt();
+        let block_norm: f64 = cols.iter().map(|&j| beta[j] * beta[j]).sum::<f64>().sqrt();
         group_w[g] = match group_denom {
             Some(d) => (base_group[g] - block_norm / d).max(0.0),
             None => 0.0,
@@ -254,11 +254,7 @@ pub fn surrogate_sparse_group_scad(
 
     for g in 0..n_groups {
         let cols = groups.group(g);
-        let block_norm: f64 = cols
-            .iter()
-            .map(|&j| beta[j] * beta[j])
-            .sum::<f64>()
-            .sqrt();
+        let block_norm: f64 = cols.iter().map(|&j| beta[j] * beta[j]).sum::<f64>().sqrt();
         // L2 surrogate
         if alpha < 1.0 {
             let lam_eff = lambda * (1.0 - alpha) * base_group[g];
@@ -299,11 +295,7 @@ pub fn surrogate_weights_group_mcp(
     debug_assert_eq!(base_weights.len(), n_groups);
     let denom = lambda * gamma;
     Array1::from_iter((0..n_groups).map(|g| {
-        let norm_sq: f64 = groups
-            .group(g)
-            .iter()
-            .map(|&j| beta[j] * beta[j])
-            .sum();
+        let norm_sq: f64 = groups.group(g).iter().map(|&j| beta[j] * beta[j]).sum();
         let norm = norm_sq.sqrt();
         (base_weights[g] - norm / denom).max(0.0)
     }))

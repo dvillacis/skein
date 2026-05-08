@@ -31,11 +31,10 @@ place; design-matrix backends (sparse, mmap, chunked) are next. See
   penalty) combination; type stubs; warm-started λ-paths; standardization
   with original-scale `coef_` / `intercept_` recovery (dense backend).
 
-**Coming next:** true mixed-precision (parameterize the solver core
-over `T: Float`; bulk path in f32, active-set refinement in f64).
-The data-side scale story is now in place — dense, sparse CSC,
-memory-mapped f64/f32, and row-block-chunked f64/f32 — so the
-remaining wins live inside the solver itself.
+**Coming next:** docs site (mkdocs with a "porting from glmnet/ncvreg"
+cheat sheet) and comparison benchmarks vs. glmnet/ncvreg/grpreg/skglm.
+CI and wheel builds are in place; the library is now `pip install`-able
+once published.
 
 ## Layout
 

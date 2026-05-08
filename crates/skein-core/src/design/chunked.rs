@@ -178,10 +178,7 @@ mod tests {
         ];
         let chunk_a = x.slice(ndarray::s![..2, ..]).to_owned();
         let chunk_b = x.slice(ndarray::s![2.., ..]).to_owned();
-        let chunked = Chunked::new(vec![
-            DenseMatrix::new(chunk_a),
-            DenseMatrix::new(chunk_b),
-        ]);
+        let chunked = Chunked::new(vec![DenseMatrix::new(chunk_a), DenseMatrix::new(chunk_b)]);
         (DenseMatrix::new(x), chunked)
     }
 
@@ -225,11 +222,7 @@ mod tests {
                 flat.col_dot(j, v.view()),
                 epsilon = 1e-12
             );
-            assert_abs_diff_eq!(
-                chunked.col_sq_norm(j),
-                flat.col_sq_norm(j),
-                epsilon = 1e-12
-            );
+            assert_abs_diff_eq!(chunked.col_sq_norm(j), flat.col_sq_norm(j), epsilon = 1e-12);
         }
     }
 
@@ -250,13 +243,7 @@ mod tests {
     #[test]
     fn chunked_handles_uneven_chunk_sizes() {
         // 5 rows split as 2 + 1 + 2.
-        let x = array![
-            [1.0, 2.0],
-            [3.0, 4.0],
-            [5.0, 6.0],
-            [7.0, 8.0],
-            [9.0, 10.0],
-        ];
+        let x = array![[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0], [9.0, 10.0],];
         let chunks = vec![
             DenseMatrix::new(x.slice(ndarray::s![..2, ..]).to_owned()),
             DenseMatrix::new(x.slice(ndarray::s![2..3, ..]).to_owned()),

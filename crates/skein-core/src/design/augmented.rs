@@ -164,11 +164,7 @@ mod tests {
                 ref_aug.col_dot(j, v.view()),
                 epsilon = 1e-12
             );
-            assert_abs_diff_eq!(
-                aug.col_sq_norm(j),
-                ref_aug.col_sq_norm(j),
-                epsilon = 1e-12
-            );
+            assert_abs_diff_eq!(aug.col_sq_norm(j), ref_aug.col_sq_norm(j), epsilon = 1e-12);
         }
     }
 

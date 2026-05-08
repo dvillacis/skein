@@ -1976,7 +1976,6 @@ def test_logistic_group_lasso_path_dense_sparse_equivalence_with_standardize():
 
 def test_poisson_mcp_path_dense_sparse_equivalence_with_standardize():
     x_dense, x_sparse, rng = _glm_standardize_problem(seed=17, scale_inflation=10.0)
-    n = x_dense.shape[0]
     # Smaller true β to keep μ = exp(η) bounded under inflated columns.
     eta = x_dense @ np.array([0.02, 0.0, -0.4, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.0])
     eta = np.clip(eta, -3.0, 3.0)

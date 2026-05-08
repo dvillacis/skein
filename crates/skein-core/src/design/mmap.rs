@@ -44,11 +44,7 @@ impl MmapMatrix {
     /// matches `n_samples * n_features * 8` bytes and that the
     /// underlying mapping is `f64`-aligned (page-aligned mappings on
     /// every platform we target satisfy this for free).
-    pub fn open(
-        path: impl AsRef<Path>,
-        n_samples: usize,
-        n_features: usize,
-    ) -> io::Result<Self> {
+    pub fn open(path: impl AsRef<Path>, n_samples: usize, n_features: usize) -> io::Result<Self> {
         let file = File::open(path)?;
         // Safety: mmap is unsafe because external mutation of the file
         // (e.g. another process truncating it) breaks Rust's borrow
@@ -270,11 +266,7 @@ mod tests {
                 dense.col_dot(j, v.view()),
                 epsilon = 1e-12
             );
-            assert_abs_diff_eq!(
-                mmap.col_sq_norm(j),
-                dense.col_sq_norm(j),
-                epsilon = 1e-12
-            );
+            assert_abs_diff_eq!(mmap.col_sq_norm(j), dense.col_sq_norm(j), epsilon = 1e-12);
         }
     }
 
@@ -332,7 +324,11 @@ mod tests {
         };
         let x = Array2::<f64>::from_shape_fn((n, p), |_| {
             let v = sample();
-            if v.abs() < 0.5 { 0.0 } else { v }
+            if v.abs() < 0.5 {
+                0.0
+            } else {
+                v
+            }
         });
         let y = Array1::<f64>::from_shape_fn(n, |_| 0.3 * sample());
         let (f, dense) = write_fortran_f64(&x);
@@ -357,11 +353,7 @@ mod tests {
         assert_eq!(betas_dense.shape(), betas_mmap.shape());
         for k in 0..betas_dense.nrows() {
             for j in 0..p {
-                assert_abs_diff_eq!(
-                    betas_dense[[k, j]],
-                    betas_mmap[[k, j]],
-                    epsilon = 1e-7
-                );
+                assert_abs_diff_eq!(betas_dense[[k, j]], betas_mmap[[k, j]], epsilon = 1e-7);
             }
         }
     }

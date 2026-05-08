@@ -649,6 +649,7 @@ def solve_sparse_group_lasso_ls_path_sparse(
     acceleration: int | None = ...,
     parallel: bool = ...,
     fit_intercept: bool = ...,
+    standardize_x: bool = ...,
 ) -> tuple[
     NDArray[np.float64],
     NDArray[np.float64],
@@ -704,6 +705,7 @@ def solve_scad_ls_path_sparse(
     screening: str = ...,
     acceleration: int | None = ...,
     fit_intercept: bool = ...,
+    standardize_x: bool = ...,
 ) -> tuple[
     NDArray[np.float64],
     NDArray[np.float64],

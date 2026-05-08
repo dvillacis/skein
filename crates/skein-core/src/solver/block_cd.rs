@@ -143,7 +143,11 @@ pub(crate) fn block_cd_solve_subset_parallel_with_cache(
     let n = design.n_samples();
     let p = design.n_features();
     debug_assert_eq!(beta_init.len(), p, "beta_init length must equal n_features");
-    debug_assert_eq!(group_lip.len(), groups.n_groups(), "group_lip length must equal n_groups");
+    debug_assert_eq!(
+        group_lip.len(),
+        groups.n_groups(),
+        "group_lip length must equal n_groups"
+    );
 
     let mut beta = beta_init;
     let mut r = datafit.init_residual(design, beta.view());
@@ -162,10 +166,8 @@ pub(crate) fn block_cd_solve_subset_parallel_with_cache(
 
     // Project the cached per-all-groups Lipschitz onto the subset for the
     // hot path's iteration order.
-    let group_lip_subset: Vec<(usize, f64)> = group_subset
-        .iter()
-        .map(|&g| (g, group_lip[g]))
-        .collect();
+    let group_lip_subset: Vec<(usize, f64)> =
+        group_subset.iter().map(|&g| (g, group_lip[g])).collect();
     let group_lip = group_lip_subset; // shadow for the rest of the body
 
     let mut report = CdReport {
@@ -275,7 +277,11 @@ pub(crate) fn block_cd_solve_subset_with_cache(
     let n = design.n_samples();
     let p = design.n_features();
     debug_assert_eq!(beta_init.len(), p, "beta_init length must equal n_features");
-    debug_assert_eq!(group_lip.len(), groups.n_groups(), "group_lip length must equal n_groups");
+    debug_assert_eq!(
+        group_lip.len(),
+        groups.n_groups(),
+        "group_lip length must equal n_groups"
+    );
 
     let mut beta = beta_init;
     let mut r = datafit.init_residual(design, beta.view());
@@ -293,10 +299,8 @@ pub(crate) fn block_cd_solve_subset_with_cache(
     }
 
     // Project the cached per-all-groups Lipschitz onto the subset.
-    let group_lip_subset: Vec<(usize, f64)> = group_subset
-        .iter()
-        .map(|&g| (g, group_lip[g]))
-        .collect();
+    let group_lip_subset: Vec<(usize, f64)> =
+        group_subset.iter().map(|&g| (g, group_lip[g])).collect();
     let group_lip = group_lip_subset; // shadow for the rest of the body
 
     let mut report = CdReport {
@@ -425,7 +429,11 @@ pub(crate) fn block_gap_safe_screen(
     lambda: f64,
     group_lip: &[f64],
 ) -> Vec<usize> {
-    debug_assert_eq!(group_lip.len(), groups.n_groups(), "group_lip length must equal n_groups");
+    debug_assert_eq!(
+        group_lip.len(),
+        groups.n_groups(),
+        "group_lip length must equal n_groups"
+    );
     let n = design.n_samples() as f64;
     let n_groups = groups.n_groups();
 
@@ -449,7 +457,11 @@ pub(crate) fn block_gap_safe_screen(
             }
         }
     }
-    let scale = if max_ratio > 1.0 { 1.0 / max_ratio } else { 1.0 };
+    let scale = if max_ratio > 1.0 {
+        1.0 / max_ratio
+    } else {
+        1.0
+    };
 
     // Primal: (1/2n)‖r‖² + λ Σ w_g ‖β_g‖₂.
     let r_sq: f64 = residual.iter().map(|x| x * x).sum();
@@ -460,11 +472,7 @@ pub(crate) fn block_gap_safe_screen(
             continue;
         }
         let cols = groups.group(gi);
-        let norm: f64 = cols
-            .iter()
-            .map(|&j| beta[j] * beta[j])
-            .sum::<f64>()
-            .sqrt();
+        let norm: f64 = cols.iter().map(|&j| beta[j] * beta[j]).sum::<f64>().sqrt();
         pen_value += w * norm;
     }
     let primal_obj = r_sq / (2.0 * n) + lambda * pen_value;
@@ -626,7 +634,12 @@ mod tests {
     fn block_cd_singleton_groups_match_scalar_cd_solve_on_lasso() {
         // When every group is a singleton, group lasso reduces to lasso and
         // block-CD must produce the same β as scalar cd_solve.
-        let x = array![[1.0, 0.5, 0.3], [0.5, 1.0, 0.2], [0.2, 0.8, 1.0], [0.1, 0.4, 0.9]];
+        let x = array![
+            [1.0, 0.5, 0.3],
+            [0.5, 1.0, 0.2],
+            [0.2, 0.8, 1.0],
+            [0.1, 0.4, 0.9]
+        ];
         let y = array![1.0, 0.5, 0.3, 0.2];
         let p = 3;
         let design = DenseMatrix::new(x);
@@ -1009,11 +1022,7 @@ mod tests {
         let design = DenseMatrix::new(x);
         let cols: Vec<usize> = (0..4).collect();
         let lip_op = group_lipschitz(&design, &cols);
-        let lip_frob: f64 = cols
-            .iter()
-            .map(|&j| design.col_sq_norm(j))
-            .sum::<f64>()
-            / n;
+        let lip_frob: f64 = cols.iter().map(|&j| design.col_sq_norm(j)).sum::<f64>() / n;
         assert!(
             lip_op <= lip_frob + 1e-12,
             "operator≤Frobenius: op={}, frob={}",

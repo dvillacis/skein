@@ -238,11 +238,7 @@ impl CoxPH {
 }
 
 impl GlmDatafit for CoxPH {
-    fn surrogate_at(
-        &self,
-        design: &dyn DesignMatrix,
-        beta: ArrayView1<'_, f64>,
-    ) -> LeastSquares {
+    fn surrogate_at(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> LeastSquares {
         CoxPH::surrogate_at(self, design, beta)
     }
 

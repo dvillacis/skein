@@ -201,25 +201,11 @@ where
             passes += 1;
             let (new_beta, report) = if config.parallel {
                 block_cd_solve_subset_parallel_with_cache(
-                    warm,
-                    &ws,
-                    &group_lip,
-                    design,
-                    datafit,
-                    &*pen,
-                    groups,
-                    &config.cd,
+                    warm, &ws, &group_lip, design, datafit, &*pen, groups, &config.cd,
                 )
             } else {
                 block_cd_solve_subset_with_cache(
-                    warm,
-                    &ws,
-                    &group_lip,
-                    design,
-                    datafit,
-                    &*pen,
-                    groups,
-                    &config.cd,
+                    warm, &ws, &group_lip, design, datafit, &*pen, groups, &config.cd,
                 )
             };
             warm = new_beta;
@@ -569,12 +555,7 @@ mod tests {
         // Use cd_solve per λ (cold start) for an apples-to-apples check.
         for k in 0..report.lambdas.len() {
             let lam = report.lambdas[k];
-            let (cold, _) = cd_solve(
-                &design,
-                &datafit,
-                &Mcp::new(lam, 1e10, p),
-                &cd_cfg,
-            );
+            let (cold, _) = cd_solve(&design, &datafit, &Mcp::new(lam, 1e10, p), &cd_cfg);
             for j in 0..p {
                 assert_abs_diff_eq!(b_block[[k, j]], cold[j], epsilon = 1e-5);
             }

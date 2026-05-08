@@ -18,7 +18,11 @@ impl Mcp {
     }
 
     pub fn with_weights(lambda: f64, gamma: f64, weights: Array1<f64>) -> Self {
-        Self { lambda, gamma, weights }
+        Self {
+            lambda,
+            gamma,
+            weights,
+        }
     }
 }
 

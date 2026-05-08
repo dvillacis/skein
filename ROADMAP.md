@@ -21,7 +21,7 @@ load-bearing piece; everything after stacks on top of it.
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7 |
 | M7 — Multi-task | ⏳ | multi-response GLMs |
-| M8 — Distribution & DX | ⏳ | wheels, CI, docs, comparison benches |
+| M8 — Distribution & DX | ⏳ partial | M8.1 CI (PR gate: cargo fmt/clippy/test + ruff + mypy + pytest, Linux/macOS × Python 3.10/3.11/3.12) + M8.2 wheels (cibuildwheel: Linux x86_64/aarch64 + macOS x86_64/arm64 + Windows AMD64) done; docs site + comparison benches + numerical regression tests + stable Rust API contract pending |
 
 Test count at this snapshot: **199 cargo + 138 pytest, all green.**
 
@@ -700,23 +700,37 @@ through the existing trait surface.
 
 Ship-grade polish. Without this, none of the above gets adopted.
 
-- **Wheels**: `cibuildwheel` for Linux x86_64 / aarch64, macOS
-  arm64+x86_64, Windows x86_64. ABI3 (already configured).
-- **CI**: GitHub Actions running `cargo test`, `cargo clippy
-  -- -D warnings`, `pytest`, `ruff`, `mypy`, plus a benchmark-regression
-  job that fails PRs that slow the LS+MCP path by >5%.
-- **Benchmarks**: criterion suites in `benches/`, asv suite in
-  `benches/python/`, a published comparison page vs. `glmnet`,
-  `ncvreg`, `grpreg`, `skglm`, `celer`.
-- **Docs**: mkdocs site with a "porting from glmnet/ncvreg" cheat
-  sheet, an "extending skein" guide that walks through implementing a
-  custom `Penalty`, and worked examples for genomics, NLP, survival.
-- **Numerical regression tests**: pin coefficient values from
-  reference R fits so we never silently drift from `ncvreg`/`grpreg`
-  numerics on canonical datasets.
-- **Stable Rust API contract**: tag `skein-core` 0.x but document
-  what's `pub` and intentional vs. `pub` and incidental. Downstream
-  per-paper crates depend on this.
+- ✅ **M8.1 CI** (`.github/workflows/ci.yml`): on every PR and push to
+  master/main, runs `cargo fmt --check`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, `cargo test -p skein-core`, then
+  `ruff check`, `maturin develop --release`, `mypy python/`, and
+  `pytest`. Matrix over `{ubuntu-latest, macos-latest} × {Python
+  3.10, 3.11, 3.12}`. Concurrency-cancellation on stale runs.
+  Pyproject configured to ignore the `E702` semicolon-pair pattern
+  used in the GLM dispatch helper, and to skip sklearn/scipy missing
+  stubs in mypy.
+- ✅ **M8.2 Wheels** (`.github/workflows/wheels.yml`): triggered on
+  tag push (`v*`) or manual dispatch. `cibuildwheel` builds ABI3
+  wheels (one wheel per platform covers cp310+) for Linux
+  x86_64/aarch64 (with QEMU for the latter), macOS x86_64+arm64,
+  and Windows AMD64. Each wheel is smoke-tested via `pytest
+  {project}/tests` post-build. Sdist built separately. PyPI publish
+  job is scaffolded but commented out — uncommenting + setting the
+  `PYPI_API_TOKEN` secret enables release-on-tag.
+- **Benchmarks** (pending): criterion suites in `benches/`, asv suite
+  in `benches/python/`, a published comparison page vs. `glmnet`,
+  `ncvreg`, `grpreg`, `skglm`, `celer`. Plus a benchmark-regression
+  CI job that fails PRs slowing the LS+MCP path by >5%.
+- **Docs** (pending): mkdocs site with a "porting from
+  glmnet/ncvreg" cheat sheet, an "extending skein" guide that walks
+  through implementing a custom `Penalty`, and worked examples for
+  genomics, NLP, survival.
+- **Numerical regression tests** (pending): pin coefficient values
+  from reference R fits so we never silently drift from
+  `ncvreg`/`grpreg` numerics on canonical datasets.
+- **Stable Rust API contract** (pending): tag `skein-core` 0.x but
+  document what's `pub` and intentional vs. `pub` and incidental.
+  Downstream per-paper crates depend on this.
 
 ---
 

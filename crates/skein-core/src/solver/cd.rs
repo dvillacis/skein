@@ -155,8 +155,7 @@ pub fn cd_solve_subset(
             if history.len() == period + 1 {
                 if let Some(beta_acc) = anderson_extrapolate(&history) {
                     let r_acc = datafit.init_residual(design, beta_acc.view());
-                    let obj_acc =
-                        datafit.value(r_acc.view()) + penalty.value(beta_acc.view());
+                    let obj_acc = datafit.value(r_acc.view()) + penalty.value(beta_acc.view());
                     if obj_acc < obj {
                         beta = beta_acc;
                         r = r_acc;
@@ -199,9 +198,7 @@ fn anderson_extrapolate(iterates: &[Array1<f64>]) -> Option<Array1<f64>> {
     // Adding `reg · I` keeps the system solvable while biasing the result
     // negligibly when the problem is well-conditioned. The acceptance check
     // (obj decrease) guards against any harm from a biased extrapolation.
-    let max_diag = (0..n_diff)
-        .map(|i| m[[i, i]])
-        .fold(0.0_f64, f64::max);
+    let max_diag = (0..n_diff).map(|i| m[[i, i]]).fold(0.0_f64, f64::max);
     if max_diag < 1e-30 {
         return None;
     }
@@ -314,12 +311,7 @@ mod tests {
     #[test]
     fn cd_finds_signal_under_small_penalty() {
         // β* ≈ (1, 0): column 0 is correlated with y, column 1 is noise.
-        let x = array![
-            [1.0, 0.0],
-            [1.0, 0.0],
-            [1.0, 0.0],
-            [1.0, 0.0]
-        ];
+        let x = array![[1.0, 0.0], [1.0, 0.0], [1.0, 0.0], [1.0, 0.0]];
         let y = array![1.0, 1.0, 1.0, 1.0];
         let design = DenseMatrix::new(x);
         let datafit = LeastSquares::new(y);
@@ -366,8 +358,8 @@ mod tests {
         let cfg = CdConfig {
             max_iter: 1000,
             tol: 1e-12,
-                acceleration: Some(5),
-            };
+            acceleration: Some(5),
+        };
         let (beta_full, _) = cd_solve(&design, &datafit, &penalty, &cfg);
         let (beta_subset, _) = cd_solve_subset(
             ndarray::Array1::<f64>::zeros(2),
@@ -411,7 +403,12 @@ mod tests {
         // condition. We allow a 10× factor because the criterion is checked
         // pre-update on the last sweep; the post-stop β can still be up to
         // ~tol away in any one coord on the next-would-be sweep.
-        let x = array![[1.0, 0.5, 0.3], [0.5, 1.0, 0.2], [0.2, 0.8, 0.7], [0.1, 0.4, 0.9]];
+        let x = array![
+            [1.0, 0.5, 0.3],
+            [0.5, 1.0, 0.2],
+            [0.2, 0.8, 0.7],
+            [0.1, 0.4, 0.9]
+        ];
         let y = array![1.0, 0.5, 0.3, 0.2];
         let design = DenseMatrix::new(x.clone());
         let datafit = LeastSquares::new(y.clone());
@@ -420,8 +417,8 @@ mod tests {
         let cfg = CdConfig {
             max_iter: 10_000,
             tol,
-                acceleration: Some(5),
-            };
+            acceleration: Some(5),
+        };
         let (beta, report) = cd_solve(&design, &datafit, &penalty, &cfg);
         assert!(report.converged, "CD should have converged within max_iter");
 

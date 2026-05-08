@@ -87,7 +87,6 @@ pub enum Screening {
     GapSafe,
 }
 
-
 #[derive(Debug, Clone)]
 pub struct PathConfig {
     /// Number of λ values to sweep when `lambdas` is `None`.
@@ -200,14 +199,7 @@ where
                 } else {
                     prev_residual.as_ref().unwrap().view()
                 };
-                gap_safe_screen(
-                    design,
-                    datafit,
-                    res_view,
-                    warm.view(),
-                    weights.view(),
-                    lam,
-                )
+                gap_safe_screen(design, datafit, res_view, warm.view(), weights.view(), lam)
             }
         };
 
@@ -216,8 +208,7 @@ where
 
         let (final_residual, last_report): (Array1<f64>, CdReport) = loop {
             passes += 1;
-            let (new_beta, report) =
-                cd_solve_subset(warm, &ws, design, datafit, &*pen, &config.cd);
+            let (new_beta, report) = cd_solve_subset(warm, &ws, design, datafit, &*pen, &config.cd);
             warm = new_beta;
             let r = datafit.init_residual(design, warm.view());
 
@@ -225,15 +216,8 @@ where
             if matches!(config.screening, Screening::Off) {
                 break (r, report);
             }
-            let violators = find_kkt_violators(
-                design,
-                datafit,
-                r.view(),
-                weights.view(),
-                &ws,
-                lam,
-                kkt_tol,
-            );
+            let violators =
+                find_kkt_violators(design, datafit, r.view(), weights.view(), &ws, lam, kkt_tol);
             if violators.is_empty() {
                 break (r, report);
             }
@@ -343,7 +327,11 @@ fn gap_safe_screen(
             max_ratio = ratio;
         }
     }
-    let scale = if max_ratio > 1.0 { 1.0 / max_ratio } else { 1.0 };
+    let scale = if max_ratio > 1.0 {
+        1.0 / max_ratio
+    } else {
+        1.0
+    };
 
     // Primal: (1/2n)‖r‖² + λ Σ w_j |β_j|. Unpenalized features (w_j ≤ 0)
     // don't contribute to the L1 term.
@@ -538,7 +526,7 @@ mod tests {
             lambda_min_ratio: 1.0,
             lambdas: Some(vec![lam_max]),
             cd: CdConfig::default(),
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (betas, _) = solve_path(
             &design,
@@ -564,7 +552,7 @@ mod tests {
             lambda_min_ratio: 1.0,
             lambdas: Some(vec![1.5 * lam_max]),
             cd: CdConfig::default(),
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (betas, _) = solve_path(
             &design,
@@ -613,7 +601,7 @@ mod tests {
                 tol: 1e-12,
                 acceleration: Some(5),
             },
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (betas, _) = solve_path(
             &design,
@@ -644,7 +632,7 @@ mod tests {
             lambda_min_ratio: 1e-2,
             lambdas: None,
             cd: CdConfig::default(),
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (betas, report) = solve_path(
             &design,
@@ -672,7 +660,7 @@ mod tests {
             lambda_min_ratio: 1e-3,
             lambdas: None,
             cd: CdConfig::default(),
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (_, report) = solve_path(
             &design,
@@ -698,7 +686,7 @@ mod tests {
             lambda_min_ratio: 0.0,
             lambdas: Some(custom.clone()),
             cd: CdConfig::default(),
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (betas, report) = solve_path(
             &design,
@@ -777,7 +765,7 @@ mod tests {
                 tol: 1e-10,
                 acceleration: Some(5),
             },
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (betas, _) = solve_path(
             &design,
@@ -785,9 +773,8 @@ mod tests {
             |lam| Box::new(Mcp::new(lam, 1e6, p)),
             &cfg,
         );
-        let active = |k: usize| -> Vec<usize> {
-            (0..p).filter(|&j| betas[[k, j]].abs() > 1e-6).collect()
-        };
+        let active =
+            |k: usize| -> Vec<usize> { (0..p).filter(|&j| betas[[k, j]].abs() > 1e-6).collect() };
         for k in 1..betas.nrows() {
             let prev = active(k - 1);
             let cur = active(k);
@@ -821,7 +808,7 @@ mod tests {
                 tol: 1e-12,
                 acceleration: Some(5),
             },
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (betas, report) = solve_path(
             &design,
@@ -868,7 +855,7 @@ mod tests {
             lambda_min_ratio: 1e-3,
             lambdas: None,
             cd: CdConfig::default(),
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (betas, _) = solve_path(
             &design,
@@ -896,7 +883,7 @@ mod tests {
             lambda_min_ratio: 1.0,
             lambdas: Some(vec![1.5 * lam_max]),
             cd: CdConfig::default(),
-        screening: Screening::Strong,
+            screening: Screening::Strong,
         };
         let (betas, _) = solve_path(
             &design,
@@ -946,8 +933,8 @@ mod tests {
         let cd_cfg = CdConfig {
             max_iter: 5000,
             tol: 1e-12,
-                acceleration: Some(5),
-            };
+            acceleration: Some(5),
+        };
         let mk_cfg = |s: Screening| PathConfig {
             n_lambdas: 10,
             lambda_min_ratio: 1e-2,
@@ -1167,7 +1154,11 @@ mod tests {
         let x = Array2::<f64>::from_shape_fn((n, p), |_| {
             // Uniform [0,1] via (sample + 1) / 2; zero out below density.
             let u = (sample() + 1.0) * 0.5;
-            if u < density { sample() } else { 0.0 }
+            if u < density {
+                sample()
+            } else {
+                0.0
+            }
         });
         let true_beta = array![1.0, 0.0, -2.0, 0.0, 0.5, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0];
         let noise = Array1::<f64>::from_shape_fn(n, |_| 0.05 * sample());

@@ -16,6 +16,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use ndarray::{Array2, ArrayView1};
 use skein_core::{
     datafit::{BinomialLogit, CoxPH, GlmDatafit, LeastSquares, PoissonLog},
     design::{
@@ -34,7 +35,6 @@ use skein_core::{
     },
     Penalty,
 };
-use ndarray::{Array2, ArrayView1};
 
 type PathOutput<'py> = (
     Bound<'py, PyArray2<f64>>,
@@ -192,9 +192,7 @@ where
 
     let design = DenseMatrix::new(xs);
     let datafit = LeastSquares::new(ys);
-    let make_pen = move |lam: f64| -> Box<dyn Penalty> {
-        make_penalty(lam, weights_std.clone())
-    };
+    let make_pen = move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, weights_std.clone()) };
     let (betas_std, report) = solve_path(&design, &datafit, make_pen, &path_cfg);
     let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
 
@@ -424,9 +422,8 @@ where
 
     let design = DenseMatrix::new(xs);
     let datafit = LeastSquares::new(ys);
-    let make_pen = move |lam: f64| -> Box<dyn GroupPenalty> {
-        make_inner(lam, weights_orig.clone())
-    };
+    let make_pen =
+        move |lam: f64| -> Box<dyn GroupPenalty> { make_inner(lam, weights_orig.clone()) };
     let (betas_std, report) = solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg);
     let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
 
@@ -575,8 +572,21 @@ fn solve_group_lasso_ls_path<'py>(
     standardize_x: bool,
 ) -> PyResult<PathOutput<'py>> {
     build_block_path_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, parallel, fit_intercept, standardize_x,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
         move |lam, w| Box::new(GroupLasso::with_weights(lam, w)),
     )
 }
@@ -608,8 +618,21 @@ fn solve_sparse_group_lasso_ls_path<'py>(
     standardize_x: bool,
 ) -> PyResult<PathOutput<'py>> {
     build_block_path_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, parallel, fit_intercept, standardize_x,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
         move |lam, w| Box::new(SparseGroupLasso::with_weights(lam, alpha, w)),
     )
 }
@@ -657,9 +680,24 @@ fn solve_group_mcp_ls_path<'py>(
         Box::new(GroupLasso::with_weights(lam, w))
     };
     build_block_path_lla_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, parallel, fit_intercept, standardize_x,
-        max_outer, outer_tol, make_inner,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        make_inner,
     )
 }
 
@@ -737,9 +775,24 @@ fn solve_sparse_group_mcp_ls_path<'py>(
         Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
     };
     build_block_path_lla_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, parallel, fit_intercept, standardize_x,
-        max_outer, outer_tol, make_inner,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        make_inner,
     )
 }
 
@@ -922,15 +975,27 @@ where
             // Intercept column (last) stays at 1.0.
             let std_design = Standardized::new(design, x_scale_eff);
             prox_newton_solve_path(
-                &std_design, &*glm, make_pen,
-                n_lambdas, lambda_min_ratio, lambdas_vec,
-                &cd_cfg, max_outer, outer_tol,
+                &std_design,
+                &*glm,
+                make_pen,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
             )
         }
         None => prox_newton_solve_path(
-            &design, &*glm, make_pen,
-            n_lambdas, lambda_min_ratio, lambdas_vec,
-            &cd_cfg, max_outer, outer_tol,
+            &design,
+            &*glm,
+            make_pen,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
         ),
     };
 
@@ -984,8 +1049,20 @@ fn solve_logistic_mcp_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_path_outputs(
-        py, x, y, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
@@ -1018,8 +1095,20 @@ fn solve_logistic_scad_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_path_outputs(
-        py, x, y, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
@@ -1047,7 +1136,11 @@ fn build_logistic_group_weights(
     n_groups_user: usize,
     fit_intercept: bool,
 ) -> ndarray::Array1<f64> {
-    let n_eff = if fit_intercept { n_groups_user + 1 } else { n_groups_user };
+    let n_eff = if fit_intercept {
+        n_groups_user + 1
+    } else {
+        n_groups_user
+    };
     let mut w = ndarray::Array1::<f64>::ones(n_eff);
     if let Some(uw) = user_weights {
         for g in 0..n_groups_user {
@@ -1172,9 +1265,10 @@ where
     let glm = make_glm(y_arr);
 
     let group_w_for_closure = group_w_eff.clone();
-    let make_inner_wrapped = move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        make_inner(beta, g, lam, &group_w_for_closure)
-    };
+    let make_inner_wrapped =
+        move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+            make_inner(beta, g, lam, &group_w_for_closure)
+        };
 
     let cd_cfg = CdConfig {
         max_iter,
@@ -1191,15 +1285,31 @@ where
             }
             let std_design = Standardized::new(design, x_scale_eff);
             prox_newton_block_solve_path(
-                &std_design, &*glm, group_w_eff, make_inner_wrapped, &groups,
-                n_lambdas, lambda_min_ratio, lambdas_vec,
-                &cd_cfg, max_outer, outer_tol,
+                &std_design,
+                &*glm,
+                group_w_eff,
+                make_inner_wrapped,
+                &groups,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
             )
         }
         None => prox_newton_block_solve_path(
-            &design, &*glm, group_w_eff, make_inner_wrapped, &groups,
-            n_lambdas, lambda_min_ratio, lambdas_vec,
-            &cd_cfg, max_outer, outer_tol,
+            &design,
+            &*glm,
+            group_w_eff,
+            make_inner_wrapped,
+            &groups,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
         ),
     };
 
@@ -1252,14 +1362,25 @@ fn solve_logistic_group_lasso_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         // Plain group lasso: ignore β, build weighted GroupLasso.
-        |_beta, _groups, lam, group_w| {
-            Box::new(GroupLasso::with_weights(lam, group_w.clone()))
-        },
+        |_beta, _groups, lam, group_w| Box::new(GroupLasso::with_weights(lam, group_w.clone())),
     )
 }
 
@@ -1290,8 +1411,21 @@ fn solve_logistic_group_mcp_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         // Group MCP: LLA surrogate weights then weighted GroupLasso.
@@ -1329,8 +1463,21 @@ fn solve_logistic_sparse_group_lasso_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |_beta, _groups, lam, group_w| {
@@ -1386,14 +1533,32 @@ fn solve_logistic_sparse_group_mcp_path<'py>(
     let coord_w_eff = build_logistic_coord_weights(&user_coord, p_user, fit_intercept);
 
     build_glm_block_path_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_mcp(
-                beta, g, lam, gamma, alpha,
-                group_w.view(), coord_w_eff.view(),
+                beta,
+                g,
+                lam,
+                gamma,
+                alpha,
+                group_w.view(),
+                coord_w_eff.view(),
             );
             Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
         },
@@ -1430,8 +1595,20 @@ fn solve_poisson_mcp_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_path_outputs(
-        py, x, y, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
@@ -1464,8 +1641,20 @@ fn solve_poisson_scad_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_path_outputs(
-        py, x, y, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
@@ -1498,13 +1687,24 @@ fn solve_poisson_group_lasso_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
-        |_beta, _groups, lam, group_w| {
-            Box::new(GroupLasso::with_weights(lam, group_w.clone()))
-        },
+        |_beta, _groups, lam, group_w| Box::new(GroupLasso::with_weights(lam, group_w.clone())),
     )
 }
 
@@ -1535,8 +1735,21 @@ fn solve_poisson_group_mcp_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
         move |beta, g, lam, group_w| {
@@ -1573,8 +1786,21 @@ fn solve_poisson_sparse_group_lasso_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
         move |_beta, _groups, lam, group_w| {
@@ -1630,14 +1856,32 @@ fn solve_poisson_sparse_group_mcp_path<'py>(
     let coord_w_eff = build_logistic_coord_weights(&user_coord, p_user, fit_intercept);
 
     build_glm_block_path_outputs(
-        py, x, y, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_mcp(
-                beta, g, lam, gamma, alpha,
-                group_w.view(), coord_w_eff.view(),
+                beta,
+                g,
+                lam,
+                gamma,
+                alpha,
+                group_w.view(),
+                coord_w_eff.view(),
             );
             Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
         },
@@ -1658,15 +1902,11 @@ fn validate_cox_outcomes(
     for i in 0..time.len() {
         let t = time[i];
         if !t.is_finite() || t < 0.0 {
-            return Err(PyValueError::new_err(
-                "Cox PH requires time ≥ 0 (finite)",
-            ));
+            return Err(PyValueError::new_err("Cox PH requires time ≥ 0 (finite)"));
         }
         let d = event[i];
         if d != 0.0 && d != 1.0 {
-            return Err(PyValueError::new_err(
-                "Cox PH requires event ∈ {0, 1}",
-            ));
+            return Err(PyValueError::new_err("Cox PH requires event ∈ {0, 1}"));
         }
         if d > 0.5 {
             n_events += 1;
@@ -1771,15 +2011,27 @@ where
         Some(scales) => {
             let std_design = Standardized::new(design, scales.clone());
             prox_newton_solve_path(
-                &std_design, &glm, make_pen,
-                n_lambdas, lambda_min_ratio, lambdas_vec,
-                &cd_cfg, max_outer, outer_tol,
+                &std_design,
+                &glm,
+                make_pen,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
             )
         }
         None => prox_newton_solve_path(
-            &design, &glm, make_pen,
-            n_lambdas, lambda_min_ratio, lambdas_vec,
-            &cd_cfg, max_outer, outer_tol,
+            &design,
+            &glm,
+            make_pen,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
         ),
     };
 
@@ -1887,9 +2139,10 @@ where
     let glm = CoxPH::new(time_arr, event_arr);
 
     let group_w_for_closure = group_w.clone();
-    let make_inner_wrapped = move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        make_inner(beta, g, lam, &group_w_for_closure)
-    };
+    let make_inner_wrapped =
+        move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+            make_inner(beta, g, lam, &group_w_for_closure)
+        };
 
     let cd_cfg = CdConfig {
         max_iter,
@@ -1902,15 +2155,31 @@ where
         Some(scales) => {
             let std_design = Standardized::new(design, scales.clone());
             prox_newton_block_solve_path(
-                &std_design, &glm, group_w, make_inner_wrapped, &groups,
-                n_lambdas, lambda_min_ratio, lambdas_vec,
-                &cd_cfg, max_outer, outer_tol,
+                &std_design,
+                &glm,
+                group_w,
+                make_inner_wrapped,
+                &groups,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
             )
         }
         None => prox_newton_block_solve_path(
-            &design, &glm, group_w, make_inner_wrapped, &groups,
-            n_lambdas, lambda_min_ratio, lambdas_vec,
-            &cd_cfg, max_outer, outer_tol,
+            &design,
+            &glm,
+            group_w,
+            make_inner_wrapped,
+            &groups,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
         ),
     };
 
@@ -1965,8 +2234,20 @@ fn solve_cox_mcp_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_cox_path_outputs(
-        py, x, time, event, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        time,
+        event,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
     )
 }
@@ -1997,8 +2278,20 @@ fn solve_cox_scad_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_cox_path_outputs(
-        py, x, time, event, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        time,
+        event,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
     )
 }
@@ -2029,11 +2322,22 @@ fn solve_cox_group_lasso_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_cox_block_path_outputs(
-        py, x, time, event, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
-        |_beta, _groups, lam, group_w| {
-            Box::new(GroupLasso::with_weights(lam, group_w.clone()))
-        },
+        py,
+        x,
+        time,
+        event,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        |_beta, _groups, lam, group_w| Box::new(GroupLasso::with_weights(lam, group_w.clone())),
     )
 }
 
@@ -2064,8 +2368,21 @@ fn solve_cox_group_mcp_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_cox_block_path_outputs(
-        py, x, time, event, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        time,
+        event,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
         move |beta, g, lam, group_w| {
             let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
             Box::new(GroupLasso::with_weights(lam, w))
@@ -2100,8 +2417,21 @@ fn solve_cox_sparse_group_lasso_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_cox_block_path_outputs(
-        py, x, time, event, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        time,
+        event,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
         move |_beta, _groups, lam, group_w| {
             Box::new(SparseGroupLasso::with_weights(lam, alpha, group_w.clone()))
         },
@@ -2154,12 +2484,30 @@ fn solve_cox_sparse_group_mcp_path<'py>(
     };
 
     build_cox_block_path_outputs(
-        py, x, time, event, groups, weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
+        py,
+        x,
+        time,
+        event,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_mcp(
-                beta, g, lam, gamma, alpha,
-                group_w.view(), coord_w.view(),
+                beta,
+                g,
+                lam,
+                gamma,
+                alpha,
+                group_w.view(),
+                coord_w.view(),
             );
             Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
         },
@@ -2294,10 +2642,10 @@ fn compute_csc_glmnet_scales(csc: &SparseCSC) -> ndarray::Array1<f64> {
 /// glmnet-style per-column std for a dense `Array2<f64>`:
 /// `s_j = sqrt((‖X[:,j]‖² − n · x̄_j²) / n)`. Constant columns clamp to
 /// `1.0` so `Standardized<...>` doesn't divide by zero. Mirrors
-/// `compute_csc_glmnet_scales` for the dense backend so the GLM dense
-/// + standardize path uses the same scale-only Standardized<DenseMatrix>
-/// recipe as the sparse path — keeps dense and sparse identical at
-/// convergence.
+/// `compute_csc_glmnet_scales` for the dense backend so dense GLMs
+/// with `standardize=True` use the same scale-only
+/// `Standardized<DenseMatrix>` recipe as the sparse path — keeping
+/// dense and sparse identical at convergence.
 fn compute_dense_glmnet_scales(x: &ndarray::Array2<f64>) -> ndarray::Array1<f64> {
     let n = x.nrows();
     let p = x.ncols();
@@ -2495,9 +2843,23 @@ fn solve_mcp_ls_path_sparse<'py>(
     standardize_x: bool,
 ) -> PyResult<PathOutput<'py>> {
     build_path_outputs_sparse_ls(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y,
-        weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, fit_intercept, standardize_x,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        fit_intercept,
+        standardize_x,
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
     )
 }
@@ -2531,9 +2893,23 @@ fn solve_scad_ls_path_sparse<'py>(
     standardize_x: bool,
 ) -> PyResult<PathOutput<'py>> {
     build_path_outputs_sparse_ls(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y,
-        weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, fit_intercept, standardize_x,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        fit_intercept,
+        standardize_x,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
     )
 }
@@ -2548,7 +2924,11 @@ fn build_sparse_group_weights(
     n_groups_user: usize,
     fit_intercept: bool,
 ) -> ndarray::Array1<f64> {
-    let n_eff = if fit_intercept { n_groups_user + 1 } else { n_groups_user };
+    let n_eff = if fit_intercept {
+        n_groups_user + 1
+    } else {
+        n_groups_user
+    };
     let mut w = ndarray::Array1::<f64>::ones(n_eff);
     if let Some(uw) = user_weights {
         for g in 0..n_groups_user {
@@ -2681,9 +3061,8 @@ where
     };
 
     let datafit = LeastSquares::new(y_arr);
-    let make_pen = move |lam: f64| -> Box<dyn GroupPenalty> {
-        make_inner(lam, group_w_eff.clone())
-    };
+    let make_pen =
+        move |lam: f64| -> Box<dyn GroupPenalty> { make_inner(lam, group_w_eff.clone()) };
 
     let (betas_aug, report) = match scales_user.as_ref() {
         Some(scales) => {
@@ -2902,9 +3281,24 @@ fn solve_group_lasso_ls_path_sparse<'py>(
     standardize_x: bool,
 ) -> PyResult<PathOutput<'py>> {
     build_block_path_outputs_sparse_ls(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups,
-        weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, parallel, fit_intercept,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
         standardize_x,
         move |lam, w| Box::new(GroupLasso::with_weights(lam, w)),
     )
@@ -2941,9 +3335,24 @@ fn solve_sparse_group_lasso_ls_path_sparse<'py>(
     standardize_x: bool,
 ) -> PyResult<PathOutput<'py>> {
     build_block_path_outputs_sparse_ls(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups,
-        weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, parallel, fit_intercept,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
         standardize_x,
         move |lam, w| Box::new(SparseGroupLasso::with_weights(lam, alpha, w)),
     )
@@ -2991,11 +3400,8 @@ fn solve_group_mcp_ls_path_sparse<'py>(
         Some(w) => w.as_array().to_owned(),
         None => Array1::ones(n_groups_user),
     };
-    let group_w_eff_for_lla = build_sparse_group_weights(
-        &Some(base_weights_for_lla),
-        n_groups_user,
-        fit_intercept,
-    );
+    let group_w_eff_for_lla =
+        build_sparse_group_weights(&Some(base_weights_for_lla), n_groups_user, fit_intercept);
 
     let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
         let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w_eff_for_lla.view());
@@ -3003,10 +3409,28 @@ fn solve_group_mcp_ls_path_sparse<'py>(
     };
 
     build_block_path_lla_outputs_sparse_ls(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups,
-        weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, parallel, fit_intercept,
-        standardize_x, max_outer, outer_tol, make_inner,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        make_inner,
     )
 }
 
@@ -3075,17 +3499,40 @@ fn solve_sparse_group_mcp_ls_path_sparse<'py>(
 
     let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
         let (gw, cw) = surrogate_sparse_group_mcp(
-            beta, g, lam, gamma, alpha,
-            group_w_eff.view(), coord_w_eff.view(),
+            beta,
+            g,
+            lam,
+            gamma,
+            alpha,
+            group_w_eff.view(),
+            coord_w_eff.view(),
         );
         Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
     };
 
     build_block_path_lla_outputs_sparse_ls(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups,
-        weights, lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, screening, parallel, fit_intercept,
-        standardize_x, max_outer, outer_tol, make_inner,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        make_inner,
     )
 }
 
@@ -3155,7 +3602,11 @@ where
         None
     };
 
-    let csc_eff = if fit_intercept { append_intercept_to_csc(csc) } else { csc };
+    let csc_eff = if fit_intercept {
+        append_intercept_to_csc(csc)
+    } else {
+        csc
+    };
     let mut pen_weights = build_sparse_penalty_weights(&user_weights, n_cols, fit_intercept);
     if let Some(scales) = &scales_user {
         for j in 0..n_cols {
@@ -3166,7 +3617,11 @@ where
     let glm = make_glm(y_arr);
     let make_pen = move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, pen_weights.clone()) };
 
-    let cd_cfg = CdConfig { max_iter, tol, acceleration };
+    let cd_cfg = CdConfig {
+        max_iter,
+        tol,
+        acceleration,
+    };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
     let (betas_aug, report) = match scales_user.as_ref() {
@@ -3177,15 +3632,27 @@ where
             }
             let std_design = Standardized::new(csc_eff, x_scale_eff);
             prox_newton_solve_path(
-                &std_design, &*glm, make_pen,
-                n_lambdas, lambda_min_ratio, lambdas_vec,
-                &cd_cfg, max_outer, outer_tol,
+                &std_design,
+                &*glm,
+                make_pen,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
             )
         }
         None => prox_newton_solve_path(
-            &csc_eff, &*glm, make_pen,
-            n_lambdas, lambda_min_ratio, lambdas_vec,
-            &cd_cfg, max_outer, outer_tol,
+            &csc_eff,
+            &*glm,
+            make_pen,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
         ),
     };
 
@@ -3285,7 +3752,11 @@ where
         None
     };
 
-    let csc_eff = if fit_intercept { append_intercept_to_csc(csc) } else { csc };
+    let csc_eff = if fit_intercept {
+        append_intercept_to_csc(csc)
+    } else {
+        csc
+    };
     let labels_eff = if fit_intercept {
         append_intercept_group(&labels_user, n_groups_user)
     } else {
@@ -3298,11 +3769,16 @@ where
 
     let glm = make_glm(y_arr);
     let group_w_for_closure = group_w_eff.clone();
-    let make_inner_wrapped = move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        make_inner(beta, g, lam, &group_w_for_closure)
-    };
+    let make_inner_wrapped =
+        move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+            make_inner(beta, g, lam, &group_w_for_closure)
+        };
 
-    let cd_cfg = CdConfig { max_iter, tol, acceleration };
+    let cd_cfg = CdConfig {
+        max_iter,
+        tol,
+        acceleration,
+    };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
     let (betas_aug, report) = match scales_user.as_ref() {
@@ -3313,15 +3789,31 @@ where
             }
             let std_design = Standardized::new(csc_eff, x_scale_eff);
             prox_newton_block_solve_path(
-                &std_design, &*glm, group_w_eff, make_inner_wrapped, &groups,
-                n_lambdas, lambda_min_ratio, lambdas_vec,
-                &cd_cfg, max_outer, outer_tol,
+                &std_design,
+                &*glm,
+                group_w_eff,
+                make_inner_wrapped,
+                &groups,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
             )
         }
         None => prox_newton_block_solve_path(
-            &csc_eff, &*glm, group_w_eff, make_inner_wrapped, &groups,
-            n_lambdas, lambda_min_ratio, lambdas_vec,
-            &cd_cfg, max_outer, outer_tol,
+            &csc_eff,
+            &*glm,
+            group_w_eff,
+            make_inner_wrapped,
+            &groups,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
         ),
     };
 
@@ -3424,22 +3916,38 @@ where
     let glm = CoxPH::new(time_arr, event_arr);
     let make_pen = move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, pen_weights.clone()) };
 
-    let cd_cfg = CdConfig { max_iter, tol, acceleration };
+    let cd_cfg = CdConfig {
+        max_iter,
+        tol,
+        acceleration,
+    };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
     let (mut betas, report) = match scales_user.as_ref() {
         Some(scales) => {
             let std_design = Standardized::new(csc, scales.clone());
             prox_newton_solve_path(
-                &std_design, &glm, make_pen,
-                n_lambdas, lambda_min_ratio, lambdas_vec,
-                &cd_cfg, max_outer, outer_tol,
+                &std_design,
+                &glm,
+                make_pen,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
             )
         }
         None => prox_newton_solve_path(
-            &csc, &glm, make_pen,
-            n_lambdas, lambda_min_ratio, lambdas_vec,
-            &cd_cfg, max_outer, outer_tol,
+            &csc,
+            &glm,
+            make_pen,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
         ),
     };
 
@@ -3549,26 +4057,47 @@ where
     let glm = CoxPH::new(time_arr, event_arr);
 
     let group_w_for_closure = group_w.clone();
-    let make_inner_wrapped = move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        make_inner(beta, g, lam, &group_w_for_closure)
-    };
+    let make_inner_wrapped =
+        move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+            make_inner(beta, g, lam, &group_w_for_closure)
+        };
 
-    let cd_cfg = CdConfig { max_iter, tol, acceleration };
+    let cd_cfg = CdConfig {
+        max_iter,
+        tol,
+        acceleration,
+    };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
     let (mut betas, report) = match scales_user.as_ref() {
         Some(scales) => {
             let std_design = Standardized::new(csc, scales.clone());
             prox_newton_block_solve_path(
-                &std_design, &glm, group_w, make_inner_wrapped, &groups,
-                n_lambdas, lambda_min_ratio, lambdas_vec,
-                &cd_cfg, max_outer, outer_tol,
+                &std_design,
+                &glm,
+                group_w,
+                make_inner_wrapped,
+                &groups,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
             )
         }
         None => prox_newton_block_solve_path(
-            &csc, &glm, group_w, make_inner_wrapped, &groups,
-            n_lambdas, lambda_min_ratio, lambdas_vec,
-            &cd_cfg, max_outer, outer_tol,
+            &csc,
+            &glm,
+            group_w,
+            make_inner_wrapped,
+            &groups,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
         ),
     };
 
@@ -3629,9 +4158,24 @@ fn solve_logistic_mcp_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
@@ -3668,9 +4212,24 @@ fn solve_logistic_scad_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
@@ -3707,9 +4266,25 @@ fn solve_logistic_group_lasso_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         |_beta, _g, lam, group_w| Box::new(GroupLasso::with_weights(lam, group_w.clone())),
@@ -3747,9 +4322,25 @@ fn solve_logistic_group_mcp_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |beta, g, lam, group_w| {
@@ -3790,9 +4381,25 @@ fn solve_logistic_sparse_group_lasso_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |_beta, _g, lam, group_w| {
@@ -3852,15 +4459,36 @@ fn solve_logistic_sparse_group_mcp_path_sparse<'py>(
     let coord_w_eff = build_sparse_coord_weights(&user_coord, n_cols, fit_intercept);
 
     build_glm_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_mcp(
-                beta, g, lam, gamma, alpha,
-                group_w.view(), coord_w_eff.view(),
+                beta,
+                g,
+                lam,
+                gamma,
+                alpha,
+                group_w.view(),
+                coord_w_eff.view(),
             );
             Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
         },
@@ -3899,9 +4527,24 @@ fn solve_poisson_mcp_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
@@ -3938,9 +4581,24 @@ fn solve_poisson_scad_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
@@ -3977,9 +4635,25 @@ fn solve_poisson_group_lasso_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
         |_beta, _g, lam, group_w| Box::new(GroupLasso::with_weights(lam, group_w.clone())),
@@ -4017,9 +4691,25 @@ fn solve_poisson_group_mcp_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
         move |beta, g, lam, group_w| {
@@ -4060,9 +4750,25 @@ fn solve_poisson_sparse_group_lasso_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_glm_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
         move |_beta, _g, lam, group_w| {
@@ -4122,15 +4828,36 @@ fn solve_poisson_sparse_group_mcp_path_sparse<'py>(
     let coord_w_eff = build_sparse_coord_weights(&user_coord, n_cols, fit_intercept);
 
     build_glm_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, y, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
         validate_y_nonneg,
         |y_arr| Box::new(PoissonLog::new(y_arr)),
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_mcp(
-                beta, g, lam, gamma, alpha,
-                group_w.view(), coord_w_eff.view(),
+                beta,
+                g,
+                lam,
+                gamma,
+                alpha,
+                group_w.view(),
+                coord_w_eff.view(),
             );
             Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
         },
@@ -4169,9 +4896,24 @@ fn solve_cox_mcp_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_cox_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, time, event, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        time,
+        event,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
     )
 }
@@ -4206,9 +4948,24 @@ fn solve_cox_scad_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_cox_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, time, event, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        time,
+        event,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
     )
 }
@@ -4243,9 +5000,25 @@ fn solve_cox_group_lasso_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_cox_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, time, event, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        time,
+        event,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
         |_beta, _g, lam, group_w| Box::new(GroupLasso::with_weights(lam, group_w.clone())),
     )
 }
@@ -4281,9 +5054,25 @@ fn solve_cox_group_mcp_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_cox_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, time, event, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        time,
+        event,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
         move |beta, g, lam, group_w| {
             let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
             Box::new(GroupLasso::with_weights(lam, w))
@@ -4322,9 +5111,25 @@ fn solve_cox_sparse_group_lasso_path_sparse<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     build_cox_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, time, event, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        time,
+        event,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
         move |_beta, _g, lam, group_w| {
             Box::new(SparseGroupLasso::with_weights(lam, alpha, group_w.clone()))
         },
@@ -4381,13 +5186,34 @@ fn solve_cox_sparse_group_mcp_path_sparse<'py>(
     };
 
     build_cox_block_path_outputs_sparse(
-        py, n_rows, n_cols, x_data, x_indices, x_indptr, time, event, groups, weights,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration, standardize_x, max_outer, outer_tol,
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        time,
+        event,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_mcp(
-                beta, g, lam, gamma, alpha,
-                group_w.view(), coord_w.view(),
+                beta,
+                g,
+                lam,
+                gamma,
+                alpha,
+                group_w.view(),
+                coord_w.view(),
             );
             Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
         },
@@ -4467,7 +5293,8 @@ where
         None
     };
 
-    let mut pen_weights = ndarray::Array1::<f64>::ones(if fit_intercept { n_cols + 1 } else { n_cols });
+    let mut pen_weights =
+        ndarray::Array1::<f64>::ones(if fit_intercept { n_cols + 1 } else { n_cols });
     if let Some(uw) = &user_weights {
         for j in 0..n_cols {
             pen_weights[j] = uw[j];
@@ -4486,7 +5313,11 @@ where
         n_lambdas,
         lambda_min_ratio,
         lambdas: lambdas.map(|a| a.as_array().to_vec()),
-        cd: CdConfig { max_iter, tol, acceleration },
+        cd: CdConfig {
+            max_iter,
+            tol,
+            acceleration,
+        },
         screening: parse_screening(screening)?,
     };
     let datafit = LeastSquares::new(y_arr);
@@ -4603,10 +5434,22 @@ fn solve_mcp_ls_path_mmap<'py>(
     let mmap = MmapMatrix::open(path, n_rows, n_cols)
         .map_err(|e| PyValueError::new_err(format!("MmapMatrix::open failed: {}", e)))?;
     mmap_ls_mcp_path_inner(
-        py, mmap, n_rows, n_cols, y_arr, user_weights, gamma,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, screening, acceleration,
-        fit_intercept, standardize_x,
+        py,
+        mmap,
+        n_rows,
+        n_cols,
+        y_arr,
+        user_weights,
+        gamma,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        screening,
+        acceleration,
+        fit_intercept,
+        standardize_x,
     )
 }
 
@@ -4640,10 +5483,22 @@ fn solve_mcp_ls_path_mmap_f32<'py>(
     let mmap = MmapMatrixF32::open(path, n_rows, n_cols)
         .map_err(|e| PyValueError::new_err(format!("MmapMatrixF32::open failed: {}", e)))?;
     mmap_ls_mcp_path_inner(
-        py, mmap, n_rows, n_cols, y_arr, user_weights, gamma,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, screening, acceleration,
-        fit_intercept, standardize_x,
+        py,
+        mmap,
+        n_rows,
+        n_cols,
+        y_arr,
+        user_weights,
+        gamma,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        screening,
+        acceleration,
+        fit_intercept,
+        standardize_x,
     )
 }
 
@@ -4681,7 +5536,8 @@ where
         None
     };
 
-    let mut pen_weights = ndarray::Array1::<f64>::ones(if fit_intercept { n_cols + 1 } else { n_cols });
+    let mut pen_weights =
+        ndarray::Array1::<f64>::ones(if fit_intercept { n_cols + 1 } else { n_cols });
     if let Some(uw) = &user_weights {
         for j in 0..n_cols {
             pen_weights[j] = uw[j];
@@ -4697,7 +5553,11 @@ where
     }
 
     let glm = BinomialLogit::new(y_arr);
-    let cd_cfg = CdConfig { max_iter, tol, acceleration };
+    let cd_cfg = CdConfig {
+        max_iter,
+        tol,
+        acceleration,
+    };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
     let make_pen = move |lam: f64| -> Box<dyn Penalty> {
         Box::new(Mcp::with_weights(lam, gamma, pen_weights.clone()))
@@ -4706,24 +5566,42 @@ where
     let p_eff = if fit_intercept { n_cols + 1 } else { n_cols };
     let (betas_aug, report) = match (fit_intercept, scales_user.as_ref()) {
         (false, None) => prox_newton_solve_path(
-            &design, &glm, make_pen,
-            n_lambdas, lambda_min_ratio, lambdas_vec,
-            &cd_cfg, max_outer, outer_tol,
+            &design,
+            &glm,
+            make_pen,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
         ),
         (false, Some(scales)) => {
             let std_design = Standardized::new(design, scales.clone());
             prox_newton_solve_path(
-                &std_design, &glm, make_pen,
-                n_lambdas, lambda_min_ratio, lambdas_vec,
-                &cd_cfg, max_outer, outer_tol,
+                &std_design,
+                &glm,
+                make_pen,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
             )
         }
         (true, None) => {
             let aug = Augmented::new(design);
             prox_newton_solve_path(
-                &aug, &glm, make_pen,
-                n_lambdas, lambda_min_ratio, lambdas_vec,
-                &cd_cfg, max_outer, outer_tol,
+                &aug,
+                &glm,
+                make_pen,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
             )
         }
         (true, Some(scales)) => {
@@ -4734,9 +5612,15 @@ where
             }
             let std_design = Standardized::new(aug, x_scale_eff);
             prox_newton_solve_path(
-                &std_design, &glm, make_pen,
-                n_lambdas, lambda_min_ratio, lambdas_vec,
-                &cd_cfg, max_outer, outer_tol,
+                &std_design,
+                &glm,
+                make_pen,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
             )
         }
     };
@@ -4796,10 +5680,23 @@ fn solve_logistic_mcp_path_mmap<'py>(
     let mmap = MmapMatrix::open(path, n_rows, n_cols)
         .map_err(|e| PyValueError::new_err(format!("MmapMatrix::open failed: {}", e)))?;
     mmap_logistic_mcp_path_inner(
-        py, mmap, n_rows, n_cols, y_arr, user_weights, gamma,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration,
-        fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        mmap,
+        n_rows,
+        n_cols,
+        y_arr,
+        user_weights,
+        gamma,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
     )
 }
 
@@ -4835,10 +5732,23 @@ fn solve_logistic_mcp_path_mmap_f32<'py>(
     let mmap = MmapMatrixF32::open(path, n_rows, n_cols)
         .map_err(|e| PyValueError::new_err(format!("MmapMatrixF32::open failed: {}", e)))?;
     mmap_logistic_mcp_path_inner(
-        py, mmap, n_rows, n_cols, y_arr, user_weights, gamma,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration,
-        fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        mmap,
+        n_rows,
+        n_cols,
+        y_arr,
+        user_weights,
+        gamma,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
     )
 }
 
@@ -4857,19 +5767,16 @@ fn solve_logistic_mcp_path_mmap_f32<'py>(
 // single mmap. v1: LS-MCP and logistic-MCP × {f64, f32}.
 
 /// Open a list of `(path, n_rows)` pairs as `Chunked<MmapMatrix>` (f64).
-fn open_chunked_f64(
-    chunks: Vec<(String, usize)>,
-    n_cols: usize,
-) -> PyResult<Chunked<MmapMatrix>> {
+fn open_chunked_f64(chunks: Vec<(String, usize)>, n_cols: usize) -> PyResult<Chunked<MmapMatrix>> {
     if chunks.is_empty() {
-        return Err(PyValueError::new_err(
-            "chunks list must not be empty",
-        ));
+        return Err(PyValueError::new_err("chunks list must not be empty"));
     }
     let mut opened = Vec::with_capacity(chunks.len());
     for (i, (path, n_rows)) in chunks.into_iter().enumerate() {
         let mmap = MmapMatrix::open(&path, n_rows, n_cols).map_err(|e| {
-            PyValueError::new_err(format!("MmapMatrix::open failed for chunk {i} ({path}): {e}"))
+            PyValueError::new_err(format!(
+                "MmapMatrix::open failed for chunk {i} ({path}): {e}"
+            ))
         })?;
         opened.push(mmap);
     }
@@ -4882,9 +5789,7 @@ fn open_chunked_f32(
     n_cols: usize,
 ) -> PyResult<Chunked<MmapMatrixF32>> {
     if chunks.is_empty() {
-        return Err(PyValueError::new_err(
-            "chunks list must not be empty",
-        ));
+        return Err(PyValueError::new_err("chunks list must not be empty"));
     }
     let mut opened = Vec::with_capacity(chunks.len());
     for (i, (path, n_rows)) in chunks.into_iter().enumerate() {
@@ -4927,10 +5832,22 @@ fn solve_mcp_ls_path_chunked<'py>(
     let n_rows = design.n_samples();
     let (y_arr, user_weights) = mmap_validate_inputs(n_rows, n_cols, y, weights)?;
     mmap_ls_mcp_path_inner(
-        py, design, n_rows, n_cols, y_arr, user_weights, gamma,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, screening, acceleration,
-        fit_intercept, standardize_x,
+        py,
+        design,
+        n_rows,
+        n_cols,
+        y_arr,
+        user_weights,
+        gamma,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        screening,
+        acceleration,
+        fit_intercept,
+        standardize_x,
     )
 }
 
@@ -4963,10 +5880,22 @@ fn solve_mcp_ls_path_chunked_f32<'py>(
     let n_rows = design.n_samples();
     let (y_arr, user_weights) = mmap_validate_inputs(n_rows, n_cols, y, weights)?;
     mmap_ls_mcp_path_inner(
-        py, design, n_rows, n_cols, y_arr, user_weights, gamma,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, screening, acceleration,
-        fit_intercept, standardize_x,
+        py,
+        design,
+        n_rows,
+        n_cols,
+        y_arr,
+        user_weights,
+        gamma,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        screening,
+        acceleration,
+        fit_intercept,
+        standardize_x,
     )
 }
 
@@ -5001,10 +5930,23 @@ fn solve_logistic_mcp_path_chunked<'py>(
     let (y_arr, user_weights) = mmap_validate_inputs(n_rows, n_cols, y, weights)?;
     validate_y_binary(y_arr.view())?;
     mmap_logistic_mcp_path_inner(
-        py, design, n_rows, n_cols, y_arr, user_weights, gamma,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration,
-        fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        design,
+        n_rows,
+        n_cols,
+        y_arr,
+        user_weights,
+        gamma,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
     )
 }
 
@@ -5039,10 +5981,23 @@ fn solve_logistic_mcp_path_chunked_f32<'py>(
     let (y_arr, user_weights) = mmap_validate_inputs(n_rows, n_cols, y, weights)?;
     validate_y_binary(y_arr.view())?;
     mmap_logistic_mcp_path_inner(
-        py, design, n_rows, n_cols, y_arr, user_weights, gamma,
-        lambdas, n_lambdas, lambda_min_ratio,
-        max_iter, tol, acceleration,
-        fit_intercept, standardize_x, max_outer, outer_tol,
+        py,
+        design,
+        n_rows,
+        n_cols,
+        y_arr,
+        user_weights,
+        gamma,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
     )
 }
 
@@ -5078,25 +6033,43 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_scad_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_lasso_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_mcp_ls_path_sparse, m)?)?;
-    m.add_function(wrap_pyfunction!(solve_sparse_group_lasso_ls_path_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        solve_sparse_group_lasso_ls_path_sparse,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(solve_sparse_group_mcp_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_mcp_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_scad_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_group_lasso_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_group_mcp_path_sparse, m)?)?;
-    m.add_function(wrap_pyfunction!(solve_logistic_sparse_group_lasso_path_sparse, m)?)?;
-    m.add_function(wrap_pyfunction!(solve_logistic_sparse_group_mcp_path_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        solve_logistic_sparse_group_lasso_path_sparse,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        solve_logistic_sparse_group_mcp_path_sparse,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_mcp_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_scad_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_group_lasso_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_group_mcp_path_sparse, m)?)?;
-    m.add_function(wrap_pyfunction!(solve_poisson_sparse_group_lasso_path_sparse, m)?)?;
-    m.add_function(wrap_pyfunction!(solve_poisson_sparse_group_mcp_path_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        solve_poisson_sparse_group_lasso_path_sparse,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        solve_poisson_sparse_group_mcp_path_sparse,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(solve_cox_mcp_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_cox_scad_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_cox_group_lasso_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_cox_group_mcp_path_sparse, m)?)?;
-    m.add_function(wrap_pyfunction!(solve_cox_sparse_group_lasso_path_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        solve_cox_sparse_group_lasso_path_sparse,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(solve_cox_sparse_group_mcp_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_mcp_ls_path_mmap, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_mcp_path_mmap, m)?)?;

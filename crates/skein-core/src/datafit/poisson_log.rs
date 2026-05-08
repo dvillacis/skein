@@ -104,11 +104,7 @@ impl PoissonLog {
             let eta_c = eta[i].clamp(-ETA_CLAMP, ETA_CLAMP);
             let mu = eta_c.exp();
             let term = mu - self.y[i] * eta_c;
-            let w = self
-                .sample_weights
-                .as_ref()
-                .map(|w| w[i])
-                .unwrap_or(1.0);
+            let w = self.sample_weights.as_ref().map(|w| w[i]).unwrap_or(1.0);
             total += w * term;
         }
         total / n_f
@@ -132,11 +128,7 @@ impl PoissonLog {
             let eta_c = eta[i].clamp(-ETA_CLAMP, ETA_CLAMP);
             let mu = eta_c.exp();
             let w_raw = mu.max(W_FLOOR);
-            let scale = self
-                .sample_weights
-                .as_ref()
-                .map(|sw| sw[i])
-                .unwrap_or(1.0);
+            let scale = self.sample_weights.as_ref().map(|sw| sw[i]).unwrap_or(1.0);
             w[i] = scale * w_raw;
             z[i] = eta_c + (self.y[i] - mu) / w_raw;
         }
@@ -145,11 +137,7 @@ impl PoissonLog {
 }
 
 impl GlmDatafit for PoissonLog {
-    fn surrogate_at(
-        &self,
-        design: &dyn DesignMatrix,
-        beta: ArrayView1<'_, f64>,
-    ) -> LeastSquares {
+    fn surrogate_at(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> LeastSquares {
         PoissonLog::surrogate_at(self, design, beta)
     }
 

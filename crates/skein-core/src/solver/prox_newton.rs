@@ -69,8 +69,7 @@ pub fn prox_newton_solve(
         outer_iters = outer + 1;
         let surrogate = glm.surrogate_at(design, warm.view());
         let beta_old = warm.clone();
-        let (new_beta, inner_report) =
-            cd_solve_warm(warm, design, &surrogate, penalty, cd_config);
+        let (new_beta, inner_report) = cd_solve_warm(warm, design, &surrogate, penalty, cd_config);
         warm = new_beta;
         inner_iters.push(inner_report.iter);
 
@@ -139,15 +138,8 @@ where
 
     for (k, &lam) in lambdas.iter().enumerate() {
         let pen = make_penalty(lam);
-        let (new_beta, report) = prox_newton_solve(
-            design,
-            glm,
-            &*pen,
-            warm,
-            cd_config,
-            max_outer,
-            outer_tol,
-        );
+        let (new_beta, report) =
+            prox_newton_solve(design, glm, &*pen, warm, cd_config, max_outer, outer_tol);
         warm = new_beta;
         betas.row_mut(k).assign(&warm);
         outer_iters_out.push(report.outer_iters);
@@ -607,14 +599,28 @@ mod tests {
         };
         let make_pen = |lam: f64| -> Box<dyn Penalty> { Box::new(Mcp::new(lam, 3.0, p)) };
 
-        let (betas_ref, report_ref) =
-            prox_newton_solve_path(&dense_ref, &glm_a, make_pen, 12, 1e-2, None, &cd_cfg, 20, 1e-8);
-        let (betas_std, report_std) =
-            prox_newton_solve_path(&std_design, &glm_b, make_pen, 12, 1e-2, None, &cd_cfg, 20, 1e-8);
+        let (betas_ref, report_ref) = prox_newton_solve_path(
+            &dense_ref, &glm_a, make_pen, 12, 1e-2, None, &cd_cfg, 20, 1e-8,
+        );
+        let (betas_std, report_std) = prox_newton_solve_path(
+            &std_design,
+            &glm_b,
+            make_pen,
+            12,
+            1e-2,
+            None,
+            &cd_cfg,
+            20,
+            1e-8,
+        );
 
         assert_eq!(report_ref.lambdas.len(), report_std.lambdas.len());
         for k in 0..report_ref.lambdas.len() {
-            assert_abs_diff_eq!(report_ref.lambdas[k], report_std.lambdas[k], epsilon = 1e-12);
+            assert_abs_diff_eq!(
+                report_ref.lambdas[k],
+                report_std.lambdas[k],
+                epsilon = 1e-12
+            );
         }
         assert_eq!(betas_ref.shape(), betas_std.shape());
         for k in 0..betas_ref.nrows() {
@@ -648,10 +654,20 @@ mod tests {
         };
         let make_pen = |lam: f64| -> Box<dyn Penalty> { Box::new(Mcp::new(lam, 3.0, p)) };
 
-        let (betas_ref, _) =
-            prox_newton_solve_path(&dense_ref, &glm_a, make_pen, 10, 1e-2, None, &cd_cfg, 30, 1e-8);
-        let (betas_std, _) =
-            prox_newton_solve_path(&std_design, &glm_b, make_pen, 10, 1e-2, None, &cd_cfg, 30, 1e-8);
+        let (betas_ref, _) = prox_newton_solve_path(
+            &dense_ref, &glm_a, make_pen, 10, 1e-2, None, &cd_cfg, 30, 1e-8,
+        );
+        let (betas_std, _) = prox_newton_solve_path(
+            &std_design,
+            &glm_b,
+            make_pen,
+            10,
+            1e-2,
+            None,
+            &cd_cfg,
+            30,
+            1e-8,
+        );
 
         assert_eq!(betas_ref.shape(), betas_std.shape());
         for k in 0..betas_ref.nrows() {
@@ -684,10 +700,20 @@ mod tests {
         };
         let make_pen = |lam: f64| -> Box<dyn Penalty> { Box::new(Mcp::new(lam, 3.0, p)) };
 
-        let (betas_ref, _) =
-            prox_newton_solve_path(&dense_ref, &glm_a, make_pen, 10, 1e-2, None, &cd_cfg, 30, 1e-8);
-        let (betas_std, _) =
-            prox_newton_solve_path(&std_design, &glm_b, make_pen, 10, 1e-2, None, &cd_cfg, 30, 1e-8);
+        let (betas_ref, _) = prox_newton_solve_path(
+            &dense_ref, &glm_a, make_pen, 10, 1e-2, None, &cd_cfg, 30, 1e-8,
+        );
+        let (betas_std, _) = prox_newton_solve_path(
+            &std_design,
+            &glm_b,
+            make_pen,
+            10,
+            1e-2,
+            None,
+            &cd_cfg,
+            30,
+            1e-8,
+        );
 
         assert_eq!(betas_ref.shape(), betas_std.shape());
         for k in 0..betas_ref.nrows() {

@@ -20,12 +20,17 @@ use skein_core::{
     groups::Groups,
     penalty::GroupLasso,
     solver::{
-        block_cd_solve_subset, block_cd_solve_subset_parallel, solve_block_path,
-        BlockPathConfig, CdConfig, Screening,
+        block_cd_solve_subset, block_cd_solve_subset_parallel, solve_block_path, BlockPathConfig,
+        CdConfig, Screening,
     },
 };
 
-fn deterministic_problem(seed: u64, n: usize, p: usize, group_size: usize) -> (DenseMatrix, Array1<f64>, Groups) {
+fn deterministic_problem(
+    seed: u64,
+    n: usize,
+    p: usize,
+    group_size: usize,
+) -> (DenseMatrix, Array1<f64>, Groups) {
     let mut state = seed.max(1);
     let mut sample = || {
         state ^= state << 13;
@@ -62,28 +67,20 @@ fn bench_serial_vs_parallel(c: &mut Criterion) {
         };
         let subset: Vec<usize> = (0..n_groups).collect();
 
-        group.bench_with_input(
-            BenchmarkId::new("serial", n_groups),
-            &n_groups,
-            |b, _| {
-                b.iter(|| {
-                    let init = Array1::<f64>::zeros(p);
-                    block_cd_solve_subset(init, &subset, &design, &datafit, &pen, &groups, &cfg)
-                });
-            },
-        );
-        group.bench_with_input(
-            BenchmarkId::new("parallel", n_groups),
-            &n_groups,
-            |b, _| {
-                b.iter(|| {
-                    let init = Array1::<f64>::zeros(p);
-                    block_cd_solve_subset_parallel(
-                        init, &subset, &design, &datafit, &pen, &groups, &cfg,
-                    )
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("serial", n_groups), &n_groups, |b, _| {
+            b.iter(|| {
+                let init = Array1::<f64>::zeros(p);
+                block_cd_solve_subset(init, &subset, &design, &datafit, &pen, &groups, &cfg)
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("parallel", n_groups), &n_groups, |b, _| {
+            b.iter(|| {
+                let init = Array1::<f64>::zeros(p);
+                block_cd_solve_subset_parallel(
+                    init, &subset, &design, &datafit, &pen, &groups, &cfg,
+                )
+            });
+        });
     }
     group.finish();
 }

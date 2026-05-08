@@ -81,11 +81,7 @@ impl BinomialLogit {
             };
             // CE term: softplus(η) − y·η = -y log p − (1-y) log(1-p).
             let term = sp - self.y[i] * eta[i];
-            let w = self
-                .sample_weights
-                .as_ref()
-                .map(|w| w[i])
-                .unwrap_or(1.0);
+            let w = self.sample_weights.as_ref().map(|w| w[i]).unwrap_or(1.0);
             total += w * term;
         }
         total / n_f
@@ -108,11 +104,7 @@ impl BinomialLogit {
         for i in 0..n {
             let p = sigmoid(eta[i]);
             let w_raw = (p * (1.0 - p)).max(W_FLOOR);
-            let scale = self
-                .sample_weights
-                .as_ref()
-                .map(|sw| sw[i])
-                .unwrap_or(1.0);
+            let scale = self.sample_weights.as_ref().map(|sw| sw[i]).unwrap_or(1.0);
             w[i] = scale * w_raw;
             z[i] = eta[i] + (self.y[i] - p) / w_raw;
         }
@@ -121,11 +113,7 @@ impl BinomialLogit {
 }
 
 impl GlmDatafit for BinomialLogit {
-    fn surrogate_at(
-        &self,
-        design: &dyn DesignMatrix,
-        beta: ArrayView1<'_, f64>,
-    ) -> LeastSquares {
+    fn surrogate_at(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> LeastSquares {
         BinomialLogit::surrogate_at(self, design, beta)
     }
 

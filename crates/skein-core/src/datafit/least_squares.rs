@@ -57,7 +57,12 @@ impl Datafit for LeastSquares {
         r
     }
 
-    fn coord_grad(&self, design: &dyn DesignMatrix, j: usize, residual: ArrayView1<'_, f64>) -> f64 {
+    fn coord_grad(
+        &self,
+        design: &dyn DesignMatrix,
+        j: usize,
+        residual: ArrayView1<'_, f64>,
+    ) -> f64 {
         let n = design.n_samples() as f64;
         match &self.sample_weights {
             None => design.col_dot(j, residual) / n,
@@ -65,9 +70,8 @@ impl Datafit for LeastSquares {
                 // (1/n) Σ w_i x_ij r_i — express as a column dot with a
                 // weighted residual so we still ride the design's
                 // `col_dot` fast path.
-                let weighted: Array1<f64> = (0..residual.len())
-                    .map(|i| w[i] * residual[i])
-                    .collect();
+                let weighted: Array1<f64> =
+                    (0..residual.len()).map(|i| w[i] * residual[i]).collect();
                 design.col_dot(j, weighted.view()) / n
             }
         }
@@ -78,9 +82,8 @@ impl Datafit for LeastSquares {
         match &self.sample_weights {
             None => &design.rmatvec(residual) / n,
             Some(w) => {
-                let weighted: Array1<f64> = (0..residual.len())
-                    .map(|i| w[i] * residual[i])
-                    .collect();
+                let weighted: Array1<f64> =
+                    (0..residual.len()).map(|i| w[i] * residual[i]).collect();
                 &design.rmatvec(weighted.view()) / n
             }
         }

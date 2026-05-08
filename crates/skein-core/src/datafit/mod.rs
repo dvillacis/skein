@@ -36,11 +36,7 @@ pub trait GlmDatafit: Sync + Send {
     /// and per-sample weights `w` such that minimizing
     /// `(1/2n) Σ w_i (Xβ − z_i)²` is the second-order Taylor expansion
     /// of the GLM negative log-likelihood at the current `β`.
-    fn surrogate_at(
-        &self,
-        design: &dyn DesignMatrix,
-        beta: ArrayView1<'_, f64>,
-    ) -> LeastSquares;
+    fn surrogate_at(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> LeastSquares;
 
     /// Original GLM loss at `β` (negative log-likelihood, divided by `n`,
     /// in the canonical form for the link function — see each
@@ -67,7 +63,8 @@ pub trait Datafit: Sync + Send {
     ///
     /// Required (no default) so every implementor must think about the
     /// formula — silent default-LS gradients are a foot-gun for GLMs.
-    fn coord_grad(&self, design: &dyn DesignMatrix, j: usize, residual: ArrayView1<'_, f64>) -> f64;
+    fn coord_grad(&self, design: &dyn DesignMatrix, j: usize, residual: ArrayView1<'_, f64>)
+        -> f64;
 
     /// Full gradient `∂L/∂β` (length = n_features). Default impl loops
     /// over `coord_grad`; LS-shaped datafits should override with a

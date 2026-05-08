@@ -30,9 +30,7 @@ use crate::datafit::GlmDatafit;
 use crate::design::DesignMatrix;
 use crate::groups::Groups;
 use crate::penalty::GroupPenalty;
-use crate::solver::block_cd::{
-    block_cd_solve_subset_with_cache, group_lipschitz_cache,
-};
+use crate::solver::block_cd::{block_cd_solve_subset_with_cache, group_lipschitz_cache};
 use crate::solver::block_path::block_lambda_max;
 use crate::solver::cd::CdConfig;
 use crate::solver::path::lambda_grid;
@@ -87,8 +85,7 @@ where
             // λ_max from the GLM surrogate at β = 0.
             let beta_zero = Array1::<f64>::zeros(p);
             let surrogate0 = glm.surrogate_at(design, beta_zero.view());
-            let lam_max =
-                block_lambda_max(design, &surrogate0, base_weights.view(), groups);
+            let lam_max = block_lambda_max(design, &surrogate0, base_weights.view(), groups);
             lambda_grid(lam_max, n_lambdas, lambda_min_ratio)
         }
     };
@@ -278,13 +275,11 @@ mod tests {
 
         // LLA surrogate weights for group MCP.
         let base_for_closure = base.clone();
-        let make_inner = move |beta: ArrayView1<'_, f64>,
-                               g: &Groups,
-                               lam: f64|
-              -> Box<dyn GroupPenalty> {
-            let w = surrogate_weights_group_mcp(beta, g, lam, gamma, base_for_closure.view());
-            Box::new(GroupLasso::with_weights(lam, w)) as Box<dyn GroupPenalty>
-        };
+        let make_inner =
+            move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+                let w = surrogate_weights_group_mcp(beta, g, lam, gamma, base_for_closure.view());
+                Box::new(GroupLasso::with_weights(lam, w)) as Box<dyn GroupPenalty>
+            };
 
         let (betas, report) = prox_newton_block_solve_path(
             &design,
@@ -394,13 +389,11 @@ mod tests {
         let gamma = 3.0;
 
         let base_for_closure = base.clone();
-        let make_inner = move |beta: ArrayView1<'_, f64>,
-                               g: &Groups,
-                               lam: f64|
-              -> Box<dyn GroupPenalty> {
-            let w = surrogate_weights_group_mcp(beta, g, lam, gamma, base_for_closure.view());
-            Box::new(GroupLasso::with_weights(lam, w)) as Box<dyn GroupPenalty>
-        };
+        let make_inner =
+            move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+                let w = surrogate_weights_group_mcp(beta, g, lam, gamma, base_for_closure.view());
+                Box::new(GroupLasso::with_weights(lam, w)) as Box<dyn GroupPenalty>
+            };
 
         let (betas, report) = prox_newton_block_solve_path(
             &design,
@@ -437,13 +430,11 @@ mod tests {
         let lam_max = block_lambda_max(&design, &surr0, base.view(), &groups);
 
         let base_for_closure = base.clone();
-        let make_inner = move |_beta: ArrayView1<'_, f64>,
-                               _g: &Groups,
-                               lam: f64|
-              -> Box<dyn GroupPenalty> {
-            Box::new(GroupLasso::with_weights(lam, base_for_closure.clone()))
-                as Box<dyn GroupPenalty>
-        };
+        let make_inner =
+            move |_beta: ArrayView1<'_, f64>, _g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+                Box::new(GroupLasso::with_weights(lam, base_for_closure.clone()))
+                    as Box<dyn GroupPenalty>
+            };
 
         let (betas, _) = prox_newton_block_solve_path(
             &design,
@@ -469,7 +460,9 @@ mod tests {
 
     /// Sparse-truth Cox PH problem with 8 features in 4 groups of 2;
     /// exponential baseline hazard, exponential censoring.
-    fn cox_group_problem(seed: u64) -> (DenseMatrix, Array1<f64>, Array1<f64>, Array1<f64>, Groups) {
+    fn cox_group_problem(
+        seed: u64,
+    ) -> (DenseMatrix, Array1<f64>, Array1<f64>, Array1<f64>, Groups) {
         let n = 300;
         let p = 8;
         let mut state = seed.max(1);
@@ -553,13 +546,11 @@ mod tests {
         let gamma = 3.0;
 
         let base_for_closure = base.clone();
-        let make_inner = move |beta: ArrayView1<'_, f64>,
-                               g: &Groups,
-                               lam: f64|
-              -> Box<dyn GroupPenalty> {
-            let w = surrogate_weights_group_mcp(beta, g, lam, gamma, base_for_closure.view());
-            Box::new(GroupLasso::with_weights(lam, w)) as Box<dyn GroupPenalty>
-        };
+        let make_inner =
+            move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+                let w = surrogate_weights_group_mcp(beta, g, lam, gamma, base_for_closure.view());
+                Box::new(GroupLasso::with_weights(lam, w)) as Box<dyn GroupPenalty>
+            };
 
         let (betas, report) = prox_newton_block_solve_path(
             &design,
@@ -596,13 +587,11 @@ mod tests {
         let lam_max = block_lambda_max(&design, &surr0, base.view(), &groups);
 
         let base_for_closure = base.clone();
-        let make_inner = move |_beta: ArrayView1<'_, f64>,
-                               _g: &Groups,
-                               lam: f64|
-              -> Box<dyn GroupPenalty> {
-            Box::new(GroupLasso::with_weights(lam, base_for_closure.clone()))
-                as Box<dyn GroupPenalty>
-        };
+        let make_inner =
+            move |_beta: ArrayView1<'_, f64>, _g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+                Box::new(GroupLasso::with_weights(lam, base_for_closure.clone()))
+                    as Box<dyn GroupPenalty>
+            };
 
         let (betas, _) = prox_newton_block_solve_path(
             &design,
@@ -639,13 +628,11 @@ mod tests {
         let lam_max = block_lambda_max(&design, &surr0, base.view(), &groups);
 
         let base_for_closure = base.clone();
-        let make_inner = move |_beta: ArrayView1<'_, f64>,
-                               _g: &Groups,
-                               lam: f64|
-              -> Box<dyn GroupPenalty> {
-            Box::new(GroupLasso::with_weights(lam, base_for_closure.clone()))
-                as Box<dyn GroupPenalty>
-        };
+        let make_inner =
+            move |_beta: ArrayView1<'_, f64>, _g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+                Box::new(GroupLasso::with_weights(lam, base_for_closure.clone()))
+                    as Box<dyn GroupPenalty>
+            };
 
         let (betas, _) = prox_newton_block_solve_path(
             &design,
@@ -695,13 +682,11 @@ mod tests {
         let base = Array1::<f64>::ones(groups.n_groups());
 
         let base_for_closure = base.clone();
-        let make_inner = move |_beta: ArrayView1<'_, f64>,
-                               _g: &Groups,
-                               lam: f64|
-              -> Box<dyn GroupPenalty> {
-            Box::new(GroupLasso::with_weights(lam, base_for_closure.clone()))
-                as Box<dyn GroupPenalty>
-        };
+        let make_inner =
+            move |_beta: ArrayView1<'_, f64>, _g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+                Box::new(GroupLasso::with_weights(lam, base_for_closure.clone()))
+                    as Box<dyn GroupPenalty>
+            };
 
         let cd_cfg = CdConfig {
             max_iter: 5000,
@@ -710,12 +695,30 @@ mod tests {
         };
 
         let (betas_ref, _) = prox_newton_block_solve_path(
-            &dense_ref, &glm_a, base.clone(), &make_inner, &groups,
-            10, 1e-2, None, &cd_cfg, 20, 1e-8,
+            &dense_ref,
+            &glm_a,
+            base.clone(),
+            &make_inner,
+            &groups,
+            10,
+            1e-2,
+            None,
+            &cd_cfg,
+            20,
+            1e-8,
         );
         let (betas_std, _) = prox_newton_block_solve_path(
-            &std_design, &glm_b, base.clone(), &make_inner, &groups,
-            10, 1e-2, None, &cd_cfg, 20, 1e-8,
+            &std_design,
+            &glm_b,
+            base.clone(),
+            &make_inner,
+            &groups,
+            10,
+            1e-2,
+            None,
+            &cd_cfg,
+            20,
+            1e-8,
         );
 
         assert_eq!(betas_ref.shape(), betas_std.shape());

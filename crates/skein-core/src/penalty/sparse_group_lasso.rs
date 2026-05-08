@@ -192,8 +192,7 @@ mod tests {
         let pen = SparseGroupLasso::new(0.1, 0.5, 2);
         let v = pen.value(beta.view(), &groups);
         let expected =
-            0.1 * (0.5 * 2.0 + 0.5 * (2.0_f64).sqrt())
-                + 0.1 * (0.5 * 1.0 + 0.5 * (0.5_f64).sqrt());
+            0.1 * (0.5 * 2.0 + 0.5 * (2.0_f64).sqrt()) + 0.1 * (0.5 * 1.0 + 0.5 * (0.5_f64).sqrt());
         assert_abs_diff_eq!(v, expected, epsilon = 1e-12);
     }
 
