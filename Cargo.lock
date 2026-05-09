@@ -773,7 +773,7 @@ dependencies = [
 
 [[package]]
 name = "skein-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "approx",
  "criterion",
@@ -787,7 +787,7 @@ dependencies = [
 
 [[package]]
 name = "skein-py"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ndarray",
  "numpy",
