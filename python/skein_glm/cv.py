@@ -136,6 +136,13 @@ class _PathCVMixin:
         n_samples = x.shape[0]
         idx = np.arange(n_samples)
 
+        # Per-sample offset (Poisson rate models). If the CV estimator
+        # carries one, slice it along train_idx for each fold so the
+        # underlying path estimator sees the correct n-vector.
+        offset_arr = getattr(self, "offset", None)
+        if offset_arr is not None:
+            offset_arr = np.ascontiguousarray(offset_arr, dtype=np.float64)
+
         n_folds = splitter.get_n_splits(idx)
         scores = np.empty((n_folds, len(lambdas)), dtype=np.float64)
         for fold, (train_idx, test_idx) in enumerate(splitter.split(idx)):
@@ -144,7 +151,10 @@ class _PathCVMixin:
             y_tr = y[train_idx]
             y_te = y[test_idx]
 
-            fold_model = self._make_base_path(lambdas=lambdas).fit(x_tr, y_tr)
+            fold_overrides: dict[str, Any] = {"lambdas": lambdas}
+            if offset_arr is not None:
+                fold_overrides["offset"] = offset_arr[train_idx]
+            fold_model = self._make_base_path(**fold_overrides).fit(x_tr, y_tr)
             preds = self._predict_for_score(fold_model, x_te)  # (n_te, n_lambdas)
             for k in range(len(lambdas)):
                 scores[fold, k] = self._score(y_te, preds[:, k])
@@ -1362,6 +1372,7 @@ class PoissonMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -1376,6 +1387,7 @@ class PoissonMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -1387,7 +1399,7 @@ class PoissonMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
     def _make_base_path(self, **overrides) -> PoissonMCPPathRegressor:
         kw: dict[str, Any] = dict(
             gamma=self.gamma, lambdas=self.lambdas, n_lambdas=self.n_lambdas,
-            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights,
+            lambda_min_ratio=self.lambda_min_ratio, offset=self.offset, weights=self.weights,
             max_iter=self.max_iter, tol=self.tol, fit_intercept=self.fit_intercept,
             acceleration=self.acceleration, max_outer=self.max_outer,
             outer_tol=self.outer_tol,
@@ -1408,6 +1420,7 @@ class PoissonSCADPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -1422,6 +1435,7 @@ class PoissonSCADPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -1433,7 +1447,7 @@ class PoissonSCADPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
     def _make_base_path(self, **overrides) -> PoissonSCADPathRegressor:
         kw: dict[str, Any] = dict(
             a=self.a, lambdas=self.lambdas, n_lambdas=self.n_lambdas,
-            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights,
+            lambda_min_ratio=self.lambda_min_ratio, offset=self.offset, weights=self.weights,
             max_iter=self.max_iter, tol=self.tol, fit_intercept=self.fit_intercept,
             acceleration=self.acceleration, max_outer=self.max_outer,
             outer_tol=self.outer_tol,
@@ -1454,6 +1468,7 @@ class PoissonGroupLassoPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -1468,6 +1483,7 @@ class PoissonGroupLassoPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -1479,7 +1495,7 @@ class PoissonGroupLassoPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin
     def _make_base_path(self, **overrides) -> PoissonGroupLassoPathRegressor:
         kw: dict[str, Any] = dict(
             groups=self.groups, lambdas=self.lambdas, n_lambdas=self.n_lambdas,
-            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights,
+            lambda_min_ratio=self.lambda_min_ratio, offset=self.offset, weights=self.weights,
             max_iter=self.max_iter, tol=self.tol, fit_intercept=self.fit_intercept,
             acceleration=self.acceleration, max_outer=self.max_outer,
             outer_tol=self.outer_tol,
@@ -1501,6 +1517,7 @@ class PoissonGroupMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -1516,6 +1533,7 @@ class PoissonGroupMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -1528,7 +1546,7 @@ class PoissonGroupMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         kw: dict[str, Any] = dict(
             groups=self.groups, gamma=self.gamma, lambdas=self.lambdas,
             n_lambdas=self.n_lambdas, lambda_min_ratio=self.lambda_min_ratio,
-            weights=self.weights, max_iter=self.max_iter, tol=self.tol,
+            offset=self.offset, weights=self.weights, max_iter=self.max_iter, tol=self.tol,
             fit_intercept=self.fit_intercept, acceleration=self.acceleration,
             max_outer=self.max_outer, outer_tol=self.outer_tol,
         )
@@ -1549,6 +1567,7 @@ class PoissonSparseGroupLassoPathCV(_PoissonPathCVMixin, BaseEstimator, Regresso
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -1564,6 +1583,7 @@ class PoissonSparseGroupLassoPathCV(_PoissonPathCVMixin, BaseEstimator, Regresso
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -1576,7 +1596,7 @@ class PoissonSparseGroupLassoPathCV(_PoissonPathCVMixin, BaseEstimator, Regresso
         kw: dict[str, Any] = dict(
             groups=self.groups, alpha=self.alpha, lambdas=self.lambdas,
             n_lambdas=self.n_lambdas, lambda_min_ratio=self.lambda_min_ratio,
-            weights=self.weights, max_iter=self.max_iter, tol=self.tol,
+            offset=self.offset, weights=self.weights, max_iter=self.max_iter, tol=self.tol,
             fit_intercept=self.fit_intercept, acceleration=self.acceleration,
             max_outer=self.max_outer, outer_tol=self.outer_tol,
         )
@@ -1598,6 +1618,7 @@ class PoissonSparseGroupMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorM
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -1615,6 +1636,7 @@ class PoissonSparseGroupMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorM
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter
@@ -1628,7 +1650,7 @@ class PoissonSparseGroupMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorM
         kw: dict[str, Any] = dict(
             groups=self.groups, gamma=self.gamma, alpha=self.alpha,
             lambdas=self.lambdas, n_lambdas=self.n_lambdas,
-            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights,
+            lambda_min_ratio=self.lambda_min_ratio, offset=self.offset, weights=self.weights,
             coord_weights=self.coord_weights,
             max_iter=self.max_iter, tol=self.tol,
             fit_intercept=self.fit_intercept, acceleration=self.acceleration,
@@ -1652,6 +1674,7 @@ class PoissonSparseGroupSCADPathCV(_PoissonPathCVMixin, BaseEstimator, Regressor
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -1669,6 +1692,7 @@ class PoissonSparseGroupSCADPathCV(_PoissonPathCVMixin, BaseEstimator, Regressor
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter
@@ -1682,7 +1706,7 @@ class PoissonSparseGroupSCADPathCV(_PoissonPathCVMixin, BaseEstimator, Regressor
         kw: dict[str, Any] = dict(
             groups=self.groups, a=self.a, alpha=self.alpha,
             lambdas=self.lambdas, n_lambdas=self.n_lambdas,
-            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights,
+            lambda_min_ratio=self.lambda_min_ratio, offset=self.offset, weights=self.weights,
             coord_weights=self.coord_weights,
             max_iter=self.max_iter, tol=self.tol,
             fit_intercept=self.fit_intercept, acceleration=self.acceleration,

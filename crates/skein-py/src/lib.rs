@@ -1978,6 +1978,43 @@ fn validate_y_nonneg(y: ndarray::ArrayView1<'_, f64>) -> PyResult<()> {
     Ok(())
 }
 
+/// Build a `make_glm` closure for Poisson regression that wires an
+/// optional `offset` (length-`n_samples` array, typically log-exposure)
+/// into the underlying `PoissonLog::with_offset` constructor. Returns
+/// `Err` on length mismatch or non-finite offset entries.
+fn poisson_glm_factory(
+    offset: Option<PyReadonlyArray1<f64>>,
+    n_samples: usize,
+) -> PyResult<impl FnOnce(Array1<f64>) -> Box<dyn GlmDatafit>> {
+    let offset_arr: Option<Array1<f64>> = match offset {
+        Some(o) => {
+            let arr = o.as_array().to_owned();
+            if arr.len() != n_samples {
+                return Err(PyValueError::new_err(format!(
+                    "offset length {} does not match n_samples {}",
+                    arr.len(),
+                    n_samples
+                )));
+            }
+            for &v in arr.iter() {
+                if !v.is_finite() {
+                    return Err(PyValueError::new_err(
+                        "Poisson offset must be finite",
+                    ));
+                }
+            }
+            Some(arr)
+        }
+        None => None,
+    };
+    Ok(move |y_arr: Array1<f64>| -> Box<dyn GlmDatafit> {
+        match offset_arr {
+            Some(o) => Box::new(PoissonLog::with_offset(y_arr, o)),
+            None => Box::new(PoissonLog::new(y_arr)),
+        }
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_glm_path_outputs<'py, F, V, G>(
     py: Python<'py>,
@@ -2756,7 +2793,7 @@ fn solve_logistic_sparse_group_scad_path<'py>(
 
 #[pyfunction]
 #[pyo3(signature = (
-    x, y, *, gamma=3.0,
+    x, y, *, gamma=3.0, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -2767,6 +2804,7 @@ fn solve_poisson_mcp_path<'py>(
     x: PyReadonlyArray2<f64>,
     y: PyReadonlyArray1<f64>,
     gamma: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -2779,6 +2817,8 @@ fn solve_poisson_mcp_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let n = x.as_array().nrows();
+    let make_glm = poisson_glm_factory(offset, n)?;
     build_glm_path_outputs(
         py,
         x,
@@ -2795,14 +2835,14 @@ fn solve_poisson_mcp_path<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
     )
 }
 
 #[pyfunction]
 #[pyo3(signature = (
-    x, y, *, a=3.7,
+    x, y, *, a=3.7, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -2813,6 +2853,7 @@ fn solve_poisson_scad_path<'py>(
     x: PyReadonlyArray2<f64>,
     y: PyReadonlyArray1<f64>,
     a: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -2825,6 +2866,8 @@ fn solve_poisson_scad_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let n = x.as_array().nrows();
+    let make_glm = poisson_glm_factory(offset, n)?;
     build_glm_path_outputs(
         py,
         x,
@@ -2841,14 +2884,14 @@ fn solve_poisson_scad_path<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
     )
 }
 
 #[pyfunction]
 #[pyo3(signature = (
-    x, y, groups, *,
+    x, y, groups, *, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -2859,6 +2902,7 @@ fn solve_poisson_group_lasso_path<'py>(
     x: PyReadonlyArray2<f64>,
     y: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -2871,6 +2915,8 @@ fn solve_poisson_group_lasso_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let n = x.as_array().nrows();
+    let make_glm = poisson_glm_factory(offset, n)?;
     build_glm_block_path_outputs(
         py,
         x,
@@ -2888,14 +2934,14 @@ fn solve_poisson_group_lasso_path<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         |_beta, _groups, lam, group_w| Box::new(GroupLasso::with_weights(lam, group_w.clone())),
     )
 }
 
 #[pyfunction]
 #[pyo3(signature = (
-    x, y, groups, *, gamma=3.0,
+    x, y, groups, *, gamma=3.0, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -2907,6 +2953,7 @@ fn solve_poisson_group_mcp_path<'py>(
     y: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
     gamma: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -2919,6 +2966,8 @@ fn solve_poisson_group_mcp_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let n = x.as_array().nrows();
+    let make_glm = poisson_glm_factory(offset, n)?;
     build_glm_block_path_outputs(
         py,
         x,
@@ -2936,7 +2985,7 @@ fn solve_poisson_group_mcp_path<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |beta, g, lam, group_w| {
             let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
             Box::new(GroupLasso::with_weights(lam, w))
@@ -2946,7 +2995,7 @@ fn solve_poisson_group_mcp_path<'py>(
 
 #[pyfunction]
 #[pyo3(signature = (
-    x, y, groups, *, alpha=0.5,
+    x, y, groups, *, alpha=0.5, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -2958,6 +3007,7 @@ fn solve_poisson_sparse_group_lasso_path<'py>(
     y: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
     alpha: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -2970,6 +3020,8 @@ fn solve_poisson_sparse_group_lasso_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let n = x.as_array().nrows();
+    let make_glm = poisson_glm_factory(offset, n)?;
     build_glm_block_path_outputs(
         py,
         x,
@@ -2987,7 +3039,7 @@ fn solve_poisson_sparse_group_lasso_path<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |_beta, _groups, lam, group_w| {
             Box::new(SparseGroupLasso::with_weights(lam, alpha, group_w.clone()))
         },
@@ -2996,7 +3048,7 @@ fn solve_poisson_sparse_group_lasso_path<'py>(
 
 #[pyfunction]
 #[pyo3(signature = (
-    x, y, groups, *, gamma=3.0, alpha=0.5,
+    x, y, groups, *, gamma=3.0, alpha=0.5, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
     weights=None, coord_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
@@ -3010,6 +3062,7 @@ fn solve_poisson_sparse_group_mcp_path<'py>(
     groups: PyReadonlyArray1<i64>,
     gamma: f64,
     alpha: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -3023,6 +3076,8 @@ fn solve_poisson_sparse_group_mcp_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let n = x.as_array().nrows();
+    let make_glm = poisson_glm_factory(offset, n)?;
     let p_user = x.as_array().ncols();
     let user_coord = match &coord_weights {
         Some(w) => {
@@ -3057,7 +3112,7 @@ fn solve_poisson_sparse_group_mcp_path<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_mcp(
                 beta,
@@ -3075,7 +3130,7 @@ fn solve_poisson_sparse_group_mcp_path<'py>(
 
 #[pyfunction]
 #[pyo3(signature = (
-    x, y, groups, *, a=3.7, alpha=0.5,
+    x, y, groups, *, a=3.7, alpha=0.5, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
     weights=None, coord_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
@@ -3089,6 +3144,7 @@ fn solve_poisson_sparse_group_scad_path<'py>(
     groups: PyReadonlyArray1<i64>,
     a: f64,
     alpha: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -3107,6 +3163,8 @@ fn solve_poisson_sparse_group_scad_path<'py>(
             "SCAD shape parameter `a` must be > 2; got {a}"
         )));
     }
+    let n = x.as_array().nrows();
+    let make_glm = poisson_glm_factory(offset, n)?;
     let p_user = x.as_array().ncols();
     let user_coord = match &coord_weights {
         Some(w) => {
@@ -3141,7 +3199,7 @@ fn solve_poisson_sparse_group_scad_path<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_scad(
                 beta,
@@ -7723,7 +7781,7 @@ fn solve_logistic_sparse_group_scad_path_sparse<'py>(
 
 #[pyfunction]
 #[pyo3(signature = (
-    x_data, x_indices, x_indptr, n_rows, n_cols, y, *, gamma=3.0,
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, *, gamma=3.0, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -7738,6 +7796,7 @@ fn solve_poisson_mcp_path_sparse<'py>(
     n_cols: usize,
     y: PyReadonlyArray1<f64>,
     gamma: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -7750,6 +7809,7 @@ fn solve_poisson_mcp_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let make_glm = poisson_glm_factory(offset, n_rows)?;
     build_glm_path_outputs_sparse(
         py,
         n_rows,
@@ -7770,14 +7830,14 @@ fn solve_poisson_mcp_path_sparse<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
     )
 }
 
 #[pyfunction]
 #[pyo3(signature = (
-    x_data, x_indices, x_indptr, n_rows, n_cols, y, *, a=3.7,
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, *, a=3.7, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -7792,6 +7852,7 @@ fn solve_poisson_scad_path_sparse<'py>(
     n_cols: usize,
     y: PyReadonlyArray1<f64>,
     a: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -7804,6 +7865,7 @@ fn solve_poisson_scad_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let make_glm = poisson_glm_factory(offset, n_rows)?;
     build_glm_path_outputs_sparse(
         py,
         n_rows,
@@ -7824,14 +7886,14 @@ fn solve_poisson_scad_path_sparse<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
     )
 }
 
 #[pyfunction]
 #[pyo3(signature = (
-    x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *,
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -7846,6 +7908,7 @@ fn solve_poisson_group_lasso_path_sparse<'py>(
     n_cols: usize,
     y: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -7858,6 +7921,7 @@ fn solve_poisson_group_lasso_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let make_glm = poisson_glm_factory(offset, n_rows)?;
     build_glm_block_path_outputs_sparse(
         py,
         n_rows,
@@ -7879,14 +7943,14 @@ fn solve_poisson_group_lasso_path_sparse<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         |_beta, _g, lam, group_w| Box::new(GroupLasso::with_weights(lam, group_w.clone())),
     )
 }
 
 #[pyfunction]
 #[pyo3(signature = (
-    x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *, gamma=3.0,
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *, gamma=3.0, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -7902,6 +7966,7 @@ fn solve_poisson_group_mcp_path_sparse<'py>(
     y: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
     gamma: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -7914,6 +7979,7 @@ fn solve_poisson_group_mcp_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let make_glm = poisson_glm_factory(offset, n_rows)?;
     build_glm_block_path_outputs_sparse(
         py,
         n_rows,
@@ -7935,7 +8001,7 @@ fn solve_poisson_group_mcp_path_sparse<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |beta, g, lam, group_w| {
             let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
             Box::new(GroupLasso::with_weights(lam, w))
@@ -7945,7 +8011,7 @@ fn solve_poisson_group_mcp_path_sparse<'py>(
 
 #[pyfunction]
 #[pyo3(signature = (
-    x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *, alpha=0.5,
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *, alpha=0.5, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -7961,6 +8027,7 @@ fn solve_poisson_sparse_group_lasso_path_sparse<'py>(
     y: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
     alpha: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -7973,6 +8040,7 @@ fn solve_poisson_sparse_group_lasso_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let make_glm = poisson_glm_factory(offset, n_rows)?;
     build_glm_block_path_outputs_sparse(
         py,
         n_rows,
@@ -7994,7 +8062,7 @@ fn solve_poisson_sparse_group_lasso_path_sparse<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |_beta, _g, lam, group_w| {
             Box::new(SparseGroupLasso::with_weights(lam, alpha, group_w.clone()))
         },
@@ -8004,7 +8072,7 @@ fn solve_poisson_sparse_group_lasso_path_sparse<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *,
-    gamma=3.0, alpha=0.5,
+    gamma=3.0, alpha=0.5, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
     weights=None, coord_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
@@ -8022,6 +8090,7 @@ fn solve_poisson_sparse_group_mcp_path_sparse<'py>(
     groups: PyReadonlyArray1<i64>,
     gamma: f64,
     alpha: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -8035,6 +8104,7 @@ fn solve_poisson_sparse_group_mcp_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let make_glm = poisson_glm_factory(offset, n_rows)?;
     let user_coord = match &coord_weights {
         Some(w) => {
             let arr = w.as_array().to_owned();
@@ -8072,7 +8142,7 @@ fn solve_poisson_sparse_group_mcp_path_sparse<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_mcp(
                 beta,
@@ -8091,7 +8161,7 @@ fn solve_poisson_sparse_group_mcp_path_sparse<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *,
-    a=3.7, alpha=0.5,
+    a=3.7, alpha=0.5, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
     weights=None, coord_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
@@ -8109,6 +8179,7 @@ fn solve_poisson_sparse_group_scad_path_sparse<'py>(
     groups: PyReadonlyArray1<i64>,
     a: f64,
     alpha: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -8127,6 +8198,7 @@ fn solve_poisson_sparse_group_scad_path_sparse<'py>(
             "SCAD shape parameter `a` must be > 2; got {a}"
         )));
     }
+    let make_glm = poisson_glm_factory(offset, n_rows)?;
     let user_coord = match &coord_weights {
         Some(w) => {
             let arr = w.as_array().to_owned();
@@ -8164,7 +8236,7 @@ fn solve_poisson_sparse_group_scad_path_sparse<'py>(
         max_outer,
         outer_tol,
         validate_y_nonneg,
-        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        make_glm,
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_scad(
                 beta,

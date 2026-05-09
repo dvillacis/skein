@@ -37,7 +37,7 @@ When someone asks "why not just `skglm`, `glmnet`, or `ncvreg`?":
 | Multi-task   | Multi-response least squares      | Multi-task lasso / MCP / SCAD / elastic net (row-grouped, dense + sparse, ±standardize) | 8 sklearn classes |
 | Binomial     | Logistic (with prox-Newton)       | MCP, SCAD, group lasso, group MCP, sparse-group lasso, sparse-group MCP, **sparse-group SCAD** | 14 sklearn classes   |
 | Multinomial  | Softmax (K classes, prox-Newton + Böhning bound) | Row-grouped lasso / MCP / SCAD / elastic net (dense + sparse, ±standardize) | 12 sklearn classes |
-| Poisson      | Log-link                          | Same as binomial                                   | 14 sklearn classes   |
+| Poisson      | Log-link, **offset support**      | Same as binomial                                   | 14 sklearn classes   |
 | Cox PH       | Breslow ties                      | Same as binomial                                   | 14 sklearn classes   |
 
 108 estimators total (incl. 28 adaptive variants spanning LS, group,
@@ -88,7 +88,7 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Status
 
-v0.2 is a complete, tested implementation: **257 cargo + 243 pytest
+v0.2 is a complete, tested implementation: **261 cargo + 253 pytest
 tests, all green** at last snapshot. Sparse + dense + mmap + chunked
 + multi-task backends all interoperate; every datafit × penalty
 combination is wired end-to-end with sklearn-style `fit` / `predict` /

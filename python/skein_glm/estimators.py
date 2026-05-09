@@ -1146,6 +1146,13 @@ def _glm_dispatch_inputs(
         common["n_lambdas"] = estimator.n_lambdas
         common["lambda_min_ratio"] = estimator.lambda_min_ratio
 
+    # Poisson estimators support an `offset` argument (log-exposure for
+    # rate models). Logistic / Cox don't define `offset` so this is a
+    # no-op for them via getattr's default.
+    offset = getattr(estimator, "offset", None)
+    if offset is not None:
+        common["offset"] = np.ascontiguousarray(offset, dtype=np.float64)
+
     if _is_sparse(x):
         y_arr = np.ascontiguousarray(y, dtype=np.float64)
         data, indices, indptr, n_rows, n_cols = _as_csc_arrays(x)
@@ -3150,6 +3157,7 @@ class PoissonMCPRegressor(_PoissonRegressorBase):
         lambda_: float = 0.1,
         gamma: float = 3.0,
         *,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -3161,6 +3169,7 @@ class PoissonMCPRegressor(_PoissonRegressorBase):
     ) -> None:
         self.lambda_ = lambda_
         self.gamma = gamma
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -3201,6 +3210,7 @@ class PoissonMCPPathRegressor(_PoissonPathRegressorBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -3214,6 +3224,7 @@ class PoissonMCPPathRegressor(_PoissonPathRegressorBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -3253,6 +3264,7 @@ class PoissonSCADRegressor(_PoissonRegressorBase):
         lambda_: float = 0.1,
         a: float = 3.7,
         *,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -3264,6 +3276,7 @@ class PoissonSCADRegressor(_PoissonRegressorBase):
     ) -> None:
         self.lambda_ = lambda_
         self.a = a
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -3304,6 +3317,7 @@ class PoissonSCADPathRegressor(_PoissonPathRegressorBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -3317,6 +3331,7 @@ class PoissonSCADPathRegressor(_PoissonPathRegressorBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -3368,6 +3383,7 @@ class PoissonGroupLassoRegressor(_PoissonGroupSingleLambdaBase):
         groups: NDArray[np.int64],
         lambda_: float = 0.1,
         *,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -3379,6 +3395,7 @@ class PoissonGroupLassoRegressor(_PoissonGroupSingleLambdaBase):
     ) -> None:
         self.groups = groups
         self.lambda_ = lambda_
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -3418,6 +3435,7 @@ class PoissonGroupLassoPathRegressor(_PoissonGroupPathBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -3431,6 +3449,7 @@ class PoissonGroupLassoPathRegressor(_PoissonGroupPathBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -3470,6 +3489,7 @@ class PoissonGroupMCPRegressor(_PoissonGroupSingleLambdaBase):
         lambda_: float = 0.1,
         gamma: float = 3.0,
         *,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -3482,6 +3502,7 @@ class PoissonGroupMCPRegressor(_PoissonGroupSingleLambdaBase):
         self.groups = groups
         self.lambda_ = lambda_
         self.gamma = gamma
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -3523,6 +3544,7 @@ class PoissonGroupMCPPathRegressor(_PoissonGroupPathBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -3537,6 +3559,7 @@ class PoissonGroupMCPPathRegressor(_PoissonGroupPathBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -3577,6 +3600,7 @@ class PoissonSparseGroupLassoRegressor(_PoissonGroupSingleLambdaBase):
         lambda_: float = 0.1,
         alpha: float = 0.5,
         *,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -3589,6 +3613,7 @@ class PoissonSparseGroupLassoRegressor(_PoissonGroupSingleLambdaBase):
         self.groups = groups
         self.lambda_ = lambda_
         self.alpha = alpha
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -3630,6 +3655,7 @@ class PoissonSparseGroupLassoPathRegressor(_PoissonGroupPathBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -3644,6 +3670,7 @@ class PoissonSparseGroupLassoPathRegressor(_PoissonGroupPathBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -3685,6 +3712,7 @@ class PoissonSparseGroupMCPRegressor(_PoissonGroupSingleLambdaBase):
         gamma: float = 3.0,
         alpha: float = 0.5,
         *,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -3699,6 +3727,7 @@ class PoissonSparseGroupMCPRegressor(_PoissonGroupSingleLambdaBase):
         self.lambda_ = lambda_
         self.gamma = gamma
         self.alpha = alpha
+        self.offset = offset
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter
@@ -3748,6 +3777,7 @@ class PoissonSparseGroupMCPPathRegressor(_PoissonGroupPathBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -3764,6 +3794,7 @@ class PoissonSparseGroupMCPPathRegressor(_PoissonGroupPathBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter
@@ -3813,6 +3844,7 @@ class PoissonSparseGroupSCADRegressor(_PoissonGroupSingleLambdaBase):
         a: float = 3.7,
         alpha: float = 0.5,
         *,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -3827,6 +3859,7 @@ class PoissonSparseGroupSCADRegressor(_PoissonGroupSingleLambdaBase):
         self.lambda_ = lambda_
         self.a = a
         self.alpha = alpha
+        self.offset = offset
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter
@@ -3876,6 +3909,7 @@ class PoissonSparseGroupSCADPathRegressor(_PoissonGroupPathBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -3892,6 +3926,7 @@ class PoissonSparseGroupSCADPathRegressor(_PoissonGroupPathBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter

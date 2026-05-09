@@ -5,11 +5,18 @@
 //! [`LeastSquares`] datafit:
 //!
 //! ```text
-//!     η = X β
-//!     μ_i = exp(η_i)                  [conditional mean = rate]
+//!     η_full = X β + offset           [offset = log-exposure if present]
+//!     μ_i = exp(η_full_i)             [conditional mean = rate]
 //!     w_i = μ_i                       [Hessian diagonal]
-//!     z_i = η_i + (y_i − μ_i) / w_i   [working response]
+//!     z_i = (η_full_i − offset_i) + (y_i − μ_i) / w_i
 //! ```
+//!
+//! With an offset, `μ_i = exp(X[i,:] β + offset_i)` so the linear
+//! predictor `X β` is offset by a known per-sample term — common for
+//! rate models where `offset_i = log(exposure_i)` (e.g., person-years
+//! in epidemiology, observation-time in click-through-rate models).
+//! The surrogate's working response subtracts the offset so β fits the
+//! `Xβ` part directly; predictions need to add the offset back.
 //!
 //! Minimizing `(1/2n) Σ w_i (Xβ − z_i)²` solves the second-order Taylor
 //! expansion of the Poisson negative log-likelihood at the current β;
@@ -52,20 +59,43 @@ const W_FLOOR: f64 = 1e-6;
 /// solvers then handle the regularized inner solve unchanged.
 pub struct PoissonLog {
     y: Array1<f64>,
+    offset: Option<Array1<f64>>,
     sample_weights: Option<Array1<f64>>,
+}
+
+fn validate_y_nonneg(y: ArrayView1<'_, f64>) {
+    for &v in y.iter() {
+        assert!(
+            v >= 0.0 && v.is_finite(),
+            "PoissonLog requires y ≥ 0 (got {})",
+            v
+        );
+    }
 }
 
 impl PoissonLog {
     pub fn new(y: Array1<f64>) -> Self {
-        for &v in y.iter() {
-            assert!(
-                v >= 0.0 && v.is_finite(),
-                "PoissonLog requires y ≥ 0 (got {})",
-                v
-            );
-        }
+        validate_y_nonneg(y.view());
         Self {
             y,
+            offset: None,
+            sample_weights: None,
+        }
+    }
+
+    pub fn with_offset(y: Array1<f64>, offset: Array1<f64>) -> Self {
+        assert_eq!(
+            y.len(),
+            offset.len(),
+            "offset length must equal y length"
+        );
+        for &v in offset.iter() {
+            assert!(v.is_finite(), "PoissonLog offset must be finite (got {})", v);
+        }
+        validate_y_nonneg(y.view());
+        Self {
+            y,
+            offset: Some(offset),
             sample_weights: None,
         }
     }
@@ -76,15 +106,28 @@ impl PoissonLog {
             w.len(),
             "sample_weights length must equal y length"
         );
-        for &v in y.iter() {
-            assert!(
-                v >= 0.0 && v.is_finite(),
-                "PoissonLog requires y ≥ 0 (got {})",
-                v
-            );
-        }
+        validate_y_nonneg(y.view());
         Self {
             y,
+            offset: None,
+            sample_weights: Some(w),
+        }
+    }
+
+    pub fn with_sample_weights_and_offset(
+        y: Array1<f64>,
+        w: Array1<f64>,
+        offset: Array1<f64>,
+    ) -> Self {
+        assert_eq!(y.len(), w.len(), "sample_weights length must equal y length");
+        assert_eq!(y.len(), offset.len(), "offset length must equal y length");
+        for &v in offset.iter() {
+            assert!(v.is_finite(), "PoissonLog offset must be finite (got {})", v);
+        }
+        validate_y_nonneg(y.view());
+        Self {
+            y,
+            offset: Some(offset),
             sample_weights: Some(w),
         }
     }
@@ -93,15 +136,25 @@ impl PoissonLog {
         self.y.view()
     }
 
-    /// Poisson NLL `(1/n) Σ_i (μ_i − y_i · η_i)` evaluated at `β`. Per-
-    /// sample weights (if set) multiply each term.
+    pub fn offset(&self) -> Option<ArrayView1<'_, f64>> {
+        self.offset.as_ref().map(|o| o.view())
+    }
+
+    /// Poisson NLL `(1/n) Σ_i (μ_i − y_i · η_full_i)` evaluated at `β`,
+    /// where `η_full_i = X[i,:] β + offset_i`. Per-sample weights (if
+    /// set) multiply each term.
     pub fn loss(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> f64 {
         let n = design.n_samples();
         let n_f = n as f64;
-        let eta = design.matvec(beta);
+        let mut eta_full = design.matvec(beta);
+        if let Some(o) = &self.offset {
+            for i in 0..n {
+                eta_full[i] += o[i];
+            }
+        }
         let mut total = 0.0_f64;
         for i in 0..n {
-            let eta_c = eta[i].clamp(-ETA_CLAMP, ETA_CLAMP);
+            let eta_c = eta_full[i].clamp(-ETA_CLAMP, ETA_CLAMP);
             let mu = eta_c.exp();
             let term = mu - self.y[i] * eta_c;
             let w = self.sample_weights.as_ref().map(|w| w[i]).unwrap_or(1.0);
@@ -112,25 +165,33 @@ impl PoissonLog {
 
     /// Build the local quadratic surrogate at `β` as a `LeastSquares`
     /// datafit with per-sample weights `w_i = μ_i` (floored at `1e-6`)
-    /// and working response `z_i = η_i + (y_i − μ_i)/w_i`. Per-sample
-    /// multipliers from `with_sample_weights` (if set) compose by
-    /// multiplying into the surrogate weights.
+    /// and working response `z_i = (η_full_i − offset_i) + (y_i − μ_i)/w_i`.
+    /// The surrogate is in `Xβ`-space (offset subtracted out), so the
+    /// solver fits β unchanged. Per-sample multipliers from
+    /// `with_sample_weights` (if set) compose by multiplying into the
+    /// surrogate weights.
     pub fn surrogate_at(
         &self,
         design: &dyn DesignMatrix,
         beta: ArrayView1<'_, f64>,
     ) -> LeastSquares {
         let n = design.n_samples();
-        let eta = design.matvec(beta);
+        let mut eta_full = design.matvec(beta);
+        if let Some(o) = &self.offset {
+            for i in 0..n {
+                eta_full[i] += o[i];
+            }
+        }
         let mut z = Array1::<f64>::zeros(n);
         let mut w = Array1::<f64>::zeros(n);
         for i in 0..n {
-            let eta_c = eta[i].clamp(-ETA_CLAMP, ETA_CLAMP);
+            let eta_c = eta_full[i].clamp(-ETA_CLAMP, ETA_CLAMP);
             let mu = eta_c.exp();
             let w_raw = mu.max(W_FLOOR);
             let scale = self.sample_weights.as_ref().map(|sw| sw[i]).unwrap_or(1.0);
             w[i] = scale * w_raw;
-            z[i] = eta_c + (self.y[i] - mu) / w_raw;
+            let offset_i = self.offset.as_ref().map(|o| o[i]).unwrap_or(0.0);
+            z[i] = (eta_c - offset_i) + (self.y[i] - mu) / w_raw;
         }
         LeastSquares::with_sample_weights(z, w)
     }
@@ -225,5 +286,86 @@ mod tests {
     #[should_panic(expected = "y ≥ 0")]
     fn poisson_panics_on_negative_y() {
         let _ = PoissonLog::new(array![1.0, -1.0, 2.0]);
+    }
+
+    #[test]
+    fn poisson_with_offset_loss_at_zero_matches_offset_only_baseline() {
+        // β = 0 ⇒ η_full = offset. Per-sample term = exp(offset) − y·offset.
+        let x = array![[1.0, 0.5], [0.5, 1.0], [0.2, 0.8]];
+        let y = array![3.0, 0.0, 2.0];
+        let offset = array![0.5, -0.3, 1.0];
+        let design = DenseMatrix::new(x);
+        let glm = PoissonLog::with_offset(y.clone(), offset.clone());
+        let beta = Array1::<f64>::zeros(2);
+        let loss = glm.loss(&design, beta.view());
+        let expected: f64 = (0..3).map(|i| offset[i].exp() - y[i] * offset[i]).sum::<f64>() / 3.0;
+        assert_abs_diff_eq!(loss, expected, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn poisson_offset_zero_matches_no_offset() {
+        // Offset of all-zeros must be exactly equivalent to no offset.
+        let x = array![[1.0, 0.5], [0.5, 1.0], [0.2, 0.8], [0.1, 0.4]];
+        let y = array![3.0, 0.0, 1.0, 5.0];
+        let beta = array![0.3, -0.2];
+        let design = DenseMatrix::new(x);
+
+        let no_off = PoissonLog::new(y.clone());
+        let zero_off = PoissonLog::with_offset(y.clone(), Array1::<f64>::zeros(4));
+        assert_abs_diff_eq!(
+            no_off.loss(&design, beta.view()),
+            zero_off.loss(&design, beta.view()),
+            epsilon = 1e-12
+        );
+
+        let s_no = no_off.surrogate_at(&design, beta.view());
+        let s_zero = zero_off.surrogate_at(&design, beta.view());
+        let r_no = s_no.init_residual(&design, beta.view());
+        let r_zero = s_zero.init_residual(&design, beta.view());
+        for i in 0..4 {
+            assert_abs_diff_eq!(r_no[i], r_zero[i], epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn poisson_offset_constant_shift_matches_intercept_shift() {
+        // Adding a constant `c` to offset is mathematically equivalent
+        // to adding `c` to a unit-feature β (i.e., shifting an intercept
+        // by `c`). At identical η_full, the surrogate must match.
+        let x = array![[1.0, 0.5, 1.0], [0.5, 1.0, 1.0], [0.2, 0.8, 1.0]];
+        // Last column is the intercept-style 1s; baseline test fixes
+        // η_full identically across both formulations.
+        let y = array![3.0, 0.0, 2.0];
+        let design = DenseMatrix::new(x);
+
+        // (a) constant offset c, β at last entry = 0.
+        let c = 0.7_f64;
+        let glm_off = PoissonLog::with_offset(y.clone(), Array1::from(vec![c; 3]));
+        let beta_a = array![0.3, -0.2, 0.0];
+
+        // (b) no offset, β at last entry = c.
+        let glm_no = PoissonLog::new(y.clone());
+        let beta_b = array![0.3, -0.2, c];
+
+        assert_abs_diff_eq!(
+            glm_off.loss(&design, beta_a.view()),
+            glm_no.loss(&design, beta_b.view()),
+            epsilon = 1e-12
+        );
+    }
+
+    #[test]
+    fn poisson_with_offset_constructor_validates_lengths_and_finiteness() {
+        let y = array![1.0, 2.0];
+        let bad_len = array![0.5, -0.3, 0.1];
+        let nan_offset = array![0.5, f64::NAN];
+        let result = std::panic::catch_unwind(|| {
+            PoissonLog::with_offset(y.clone(), bad_len);
+        });
+        assert!(result.is_err(), "should panic on length mismatch");
+        let result = std::panic::catch_unwind(|| {
+            PoissonLog::with_offset(y, nan_offset);
+        });
+        assert!(result.is_err(), "should panic on non-finite offset");
     }
 }
