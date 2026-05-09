@@ -81,6 +81,9 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 - **[Installation](installation.md)** — pip + from source.
 - **[Quick start](quickstart.md)** — worked snippets covering paths,
   CV, IC selection, sparse, and memory-mapped inputs.
+- **[Tutorials](tutorials/index.md)** — nine guided walkthroughs in
+  three tiers (basics, structure, advanced). Read in order or skip
+  to the tier that matches what you already know.
 - **[Concepts](concepts/index.md)** — the conceptual model: penalties,
   datafits, weights, and design-matrix backends.
 - **[Roadmap](roadmap.md)** — what's in v0.1, what's coming next, and
@@ -106,6 +109,22 @@ See the [roadmap](roadmap.md) for the full picture.
 
 installation
 quickstart
+```
+
+```{toctree}
+:hidden:
+:caption: Tutorials
+
+tutorials/index
+tutorials/01_first_fit
+tutorials/02_picking_lambda
+tutorials/03_logistic_and_cox
+tutorials/04_group_penalties
+tutorials/05_sparse_and_standardize
+tutorials/06_counts_and_rates
+tutorials/07_stability_selection
+tutorials/08_adaptive_estimators
+tutorials/09_multinomial_and_multitask
 ```
 
 ```{toctree}
