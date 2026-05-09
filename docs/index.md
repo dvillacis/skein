@@ -88,7 +88,7 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Status
 
-v0.3 is a complete, tested implementation: **265 cargo + 268 pytest
+v0.3 is a complete, tested implementation: **265 cargo + 279 pytest
 tests, all green** at last snapshot. Sparse + dense + mmap + chunked
 + multi-task backends all interoperate; every datafit × penalty
 combination is wired end-to-end with sklearn-style `fit` / `predict` /
@@ -163,6 +163,7 @@ api/estimators-poisson
 api/estimators-cox
 api/cv
 api/ic
+api/stability
 api/design
 api/abcs
 ```

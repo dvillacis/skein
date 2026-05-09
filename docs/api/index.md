@@ -26,12 +26,13 @@ and a full-path `PathRegressor`. The Gaussian LS family also adds
 LS family adds 8 more (`MultiTaskLasso/MCP/SCAD/ElasticNet ×
 {single-λ, Path}`).
 
-## Cross-validation and IC selection
+## Cross-validation, IC selection, and stability selection
 
 | Module                       | Page                |
 |------------------------------|---------------------|
 | `*PathCV` cross-validation   | [CV](cv.md)         |
 | `select_by_ic` (AIC/BIC/EBIC) | [IC](ic.md)         |
+| `StabilitySelection` (MB bootstrap) | [Stability](stability.md) |
 
 ## Design-matrix helpers
 

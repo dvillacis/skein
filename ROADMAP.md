@@ -18,12 +18,12 @@ load-bearing piece; everything after stacks on top of it.
 | M2 — LLA + group block-CD + parallel | ✅ done | inner CD, working set, LLA outer, path, Rayon, op-norm Lipschitz, sparse-group, gap-safe, PyO3, criterion benches |
 | M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + **Poisson offsets** + M3.5 Cox PH (Breslow + **Efron** ties) + M3.6 multinomial (Rust + PyO3 + estimators) done; opportunistic GLMs (M3.7) pending |
 | M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
-| M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
+| M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) + **M5.x stability selection (MB bootstrap)** done; adaptive done in M6.x; debiased + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; **bridge `\|β\|^q` (LS, scalar LLA path) done**; **adaptive {Lasso, MCP, SCAD} (LS, two-stage pilot fit) done**; overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **265 cargo + 268 pytest, all green.**
+Test count at this snapshot: **265 cargo + 279 pytest, all green.**
 
 ---
 
@@ -713,9 +713,23 @@ criterion arithmetic.
 
 ### M5.x — Other model selection (pending)
 
-- **Stability selection** (Meinshausen–Bühlmann): bootstrap fits over
-  a λ-path, return per-feature selection probabilities. Embarrassingly
-  parallel; fits into the Rayon dispatch.
+- ✅ **Stability selection** (Meinshausen–Bühlmann 2010): new
+  `StabilitySelection` wrapper class in `python/skein_glm/stability.py`
+  composes any skein `*PathRegressor` (LS / GLM / group / multi-task /
+  multinomial / Cox) with a subsample-bootstrap loop. Records
+  selection probabilities per (feature, λ) over `n_bootstraps`
+  iterations; the stable set is features whose max-over-λ probability
+  exceeds `threshold`. Embarrassingly parallel via `joblib`
+  (`n_jobs=-1`); for a fixed `random_state` the bootstrap indices are
+  pre-generated so parallel and serial produce identical results.
+  Cox is auto-detected via `ties` attr (outcomes passed as
+  `y=(time, event)`); grouped variants aggregate at the group level;
+  multi-task / multinomial 3D `coefs_` collapse via
+  "any-class active". 11 pytest cover signal recovery, threshold
+  monotonicity, attribute shapes, transform, reproducibility, n_jobs
+  consistency, parameter validation, grouped/Cox/sparse dispatch.
+  Closes the M5.x headline differentiator (no clean equivalent in
+  glmnet / skglm / grpreg).
 - **Adaptive weights**: one-shot `AdaptiveLasso` / `AdaptiveMCP`
   estimators that fit a coarse model first, derive `w_j ∝ 1/|β̂_j|^η`,
   then refit. This is one of the headline reasons the per-feature

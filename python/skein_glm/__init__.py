@@ -161,6 +161,7 @@ from skein_glm.cv import (
     SparseGroupSCADPathCV,
 )
 from skein_glm.ic import select_by_ic
+from skein_glm.stability import StabilitySelection
 from skein_glm.adaptive import (
     AdaptiveCoxLassoPathCV,
     AdaptiveCoxLassoPathRegressor,
@@ -440,6 +441,7 @@ __all__ = [
     "MultinomialElasticNetPathClassifier",
     "MultinomialElasticNetPathCV",
     "select_by_ic",
+    "StabilitySelection",
     "MmapDesignF64",
     "MmapDesignF32",
     "ChunkedDesignF64",
