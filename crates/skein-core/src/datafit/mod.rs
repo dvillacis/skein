@@ -18,7 +18,7 @@ mod multinomial_logit;
 mod poisson_log;
 
 pub use binomial_logit::BinomialLogit;
-pub use cox_ph::CoxPH;
+pub use cox_ph::{CoxPH, TieHandling};
 pub use least_squares::LeastSquares;
 pub use multinomial_logit::MultinomialLogit;
 pub use poisson_log::PoissonLog;

@@ -1732,6 +1732,7 @@ class CoxMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -1745,6 +1746,7 @@ class CoxMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -1755,7 +1757,7 @@ class CoxMCPPathCV(_CoxPathCVMixin, BaseEstimator):
     def _make_base_path(self, **overrides) -> CoxMCPPathRegressor:
         kw: dict[str, Any] = dict(
             gamma=self.gamma, lambdas=self.lambdas, n_lambdas=self.n_lambdas,
-            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights,
+            lambda_min_ratio=self.lambda_min_ratio, ties=self.ties, weights=self.weights,
             max_iter=self.max_iter, tol=self.tol,
             acceleration=self.acceleration, max_outer=self.max_outer,
             outer_tol=self.outer_tol,
@@ -1776,6 +1778,7 @@ class CoxSCADPathCV(_CoxPathCVMixin, BaseEstimator):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -1789,6 +1792,7 @@ class CoxSCADPathCV(_CoxPathCVMixin, BaseEstimator):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -1799,7 +1803,7 @@ class CoxSCADPathCV(_CoxPathCVMixin, BaseEstimator):
     def _make_base_path(self, **overrides) -> CoxSCADPathRegressor:
         kw: dict[str, Any] = dict(
             a=self.a, lambdas=self.lambdas, n_lambdas=self.n_lambdas,
-            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights,
+            lambda_min_ratio=self.lambda_min_ratio, ties=self.ties, weights=self.weights,
             max_iter=self.max_iter, tol=self.tol,
             acceleration=self.acceleration, max_outer=self.max_outer,
             outer_tol=self.outer_tol,
@@ -1820,6 +1824,7 @@ class CoxGroupLassoPathCV(_CoxPathCVMixin, BaseEstimator):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -1833,6 +1838,7 @@ class CoxGroupLassoPathCV(_CoxPathCVMixin, BaseEstimator):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -1843,7 +1849,7 @@ class CoxGroupLassoPathCV(_CoxPathCVMixin, BaseEstimator):
     def _make_base_path(self, **overrides) -> CoxGroupLassoPathRegressor:
         kw: dict[str, Any] = dict(
             groups=self.groups, lambdas=self.lambdas, n_lambdas=self.n_lambdas,
-            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights,
+            lambda_min_ratio=self.lambda_min_ratio, ties=self.ties, weights=self.weights,
             max_iter=self.max_iter, tol=self.tol,
             acceleration=self.acceleration, max_outer=self.max_outer,
             outer_tol=self.outer_tol,
@@ -1865,6 +1871,7 @@ class CoxGroupMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -1879,6 +1886,7 @@ class CoxGroupMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -1890,7 +1898,7 @@ class CoxGroupMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         kw: dict[str, Any] = dict(
             groups=self.groups, gamma=self.gamma, lambdas=self.lambdas,
             n_lambdas=self.n_lambdas, lambda_min_ratio=self.lambda_min_ratio,
-            weights=self.weights, max_iter=self.max_iter, tol=self.tol,
+            ties=self.ties, weights=self.weights, max_iter=self.max_iter, tol=self.tol,
             acceleration=self.acceleration, max_outer=self.max_outer,
             outer_tol=self.outer_tol,
         )
@@ -1911,6 +1919,7 @@ class CoxSparseGroupLassoPathCV(_CoxPathCVMixin, BaseEstimator):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -1925,6 +1934,7 @@ class CoxSparseGroupLassoPathCV(_CoxPathCVMixin, BaseEstimator):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -1936,7 +1946,7 @@ class CoxSparseGroupLassoPathCV(_CoxPathCVMixin, BaseEstimator):
         kw: dict[str, Any] = dict(
             groups=self.groups, alpha=self.alpha, lambdas=self.lambdas,
             n_lambdas=self.n_lambdas, lambda_min_ratio=self.lambda_min_ratio,
-            weights=self.weights, max_iter=self.max_iter, tol=self.tol,
+            ties=self.ties, weights=self.weights, max_iter=self.max_iter, tol=self.tol,
             acceleration=self.acceleration, max_outer=self.max_outer,
             outer_tol=self.outer_tol,
         )
@@ -1958,6 +1968,7 @@ class CoxSparseGroupMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -1974,6 +1985,7 @@ class CoxSparseGroupMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter
@@ -1986,7 +1998,7 @@ class CoxSparseGroupMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         kw: dict[str, Any] = dict(
             groups=self.groups, gamma=self.gamma, alpha=self.alpha,
             lambdas=self.lambdas, n_lambdas=self.n_lambdas,
-            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights,
+            lambda_min_ratio=self.lambda_min_ratio, ties=self.ties, weights=self.weights,
             coord_weights=self.coord_weights,
             max_iter=self.max_iter, tol=self.tol,
             acceleration=self.acceleration, max_outer=self.max_outer,
@@ -2010,6 +2022,7 @@ class CoxSparseGroupSCADPathCV(_CoxPathCVMixin, BaseEstimator):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -2026,6 +2039,7 @@ class CoxSparseGroupSCADPathCV(_CoxPathCVMixin, BaseEstimator):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter
@@ -2038,7 +2052,7 @@ class CoxSparseGroupSCADPathCV(_CoxPathCVMixin, BaseEstimator):
         kw: dict[str, Any] = dict(
             groups=self.groups, a=self.a, alpha=self.alpha,
             lambdas=self.lambdas, n_lambdas=self.n_lambdas,
-            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights,
+            lambda_min_ratio=self.lambda_min_ratio, ties=self.ties, weights=self.weights,
             coord_weights=self.coord_weights,
             max_iter=self.max_iter, tol=self.tol,
             acceleration=self.acceleration, max_outer=self.max_outer,

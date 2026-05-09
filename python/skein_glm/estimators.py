@@ -4059,6 +4059,7 @@ class CoxMCPRegressor(_CoxRegressorBase):
         lambda_: float = 0.1,
         gamma: float = 3.0,
         *,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -4069,6 +4070,7 @@ class CoxMCPRegressor(_CoxRegressorBase):
     ) -> None:
         self.lambda_ = lambda_
         self.gamma = gamma
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -4081,6 +4083,7 @@ class CoxMCPRegressor(_CoxRegressorBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=False,
         )
+        common["ties"] = self.ties
         common["gamma"] = self.gamma
         if payload is not None:
             coefs, _intercepts, _lambdas, info = _core.solve_cox_mcp_path_sparse(
@@ -4107,6 +4110,7 @@ class CoxMCPPathRegressor(_CoxPathRegressorBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -4119,6 +4123,7 @@ class CoxMCPPathRegressor(_CoxPathRegressorBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -4131,6 +4136,7 @@ class CoxMCPPathRegressor(_CoxPathRegressorBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=True,
         )
+        common["ties"] = self.ties
         common["gamma"] = self.gamma
         if payload is not None:
             coefs, _intercepts, lambdas_used, info = _core.solve_cox_mcp_path_sparse(
@@ -4156,6 +4162,7 @@ class CoxSCADRegressor(_CoxRegressorBase):
         lambda_: float = 0.1,
         a: float = 3.7,
         *,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -4166,6 +4173,7 @@ class CoxSCADRegressor(_CoxRegressorBase):
     ) -> None:
         self.lambda_ = lambda_
         self.a = a
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -4178,6 +4186,7 @@ class CoxSCADRegressor(_CoxRegressorBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=False,
         )
+        common["ties"] = self.ties
         common["a"] = self.a
         if payload is not None:
             coefs, _intercepts, _lambdas, info = _core.solve_cox_scad_path_sparse(
@@ -4204,6 +4213,7 @@ class CoxSCADPathRegressor(_CoxPathRegressorBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -4216,6 +4226,7 @@ class CoxSCADPathRegressor(_CoxPathRegressorBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -4228,6 +4239,7 @@ class CoxSCADPathRegressor(_CoxPathRegressorBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=True,
         )
+        common["ties"] = self.ties
         common["a"] = self.a
         if payload is not None:
             coefs, _intercepts, lambdas_used, info = _core.solve_cox_scad_path_sparse(
@@ -4265,6 +4277,7 @@ class CoxGroupLassoRegressor(_CoxGroupSingleLambdaBase):
         groups: NDArray[np.int64],
         lambda_: float = 0.1,
         *,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -4275,6 +4288,7 @@ class CoxGroupLassoRegressor(_CoxGroupSingleLambdaBase):
     ) -> None:
         self.groups = groups
         self.lambda_ = lambda_
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -4287,6 +4301,7 @@ class CoxGroupLassoRegressor(_CoxGroupSingleLambdaBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=False, groups=self.groups,
         )
+        common["ties"] = self.ties
         if payload is not None:
             coefs, _intercepts, _lambdas, info = _core.solve_cox_group_lasso_path_sparse(
                 *payload, **common
@@ -4313,6 +4328,7 @@ class CoxGroupLassoPathRegressor(_CoxGroupPathBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -4325,6 +4341,7 @@ class CoxGroupLassoPathRegressor(_CoxGroupPathBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -4337,6 +4354,7 @@ class CoxGroupLassoPathRegressor(_CoxGroupPathBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=True, groups=self.groups,
         )
+        common["ties"] = self.ties
         if payload is not None:
             coefs, _intercepts, lambdas_used, info = _core.solve_cox_group_lasso_path_sparse(
                 *payload, **common
@@ -4363,6 +4381,7 @@ class CoxGroupMCPRegressor(_CoxGroupSingleLambdaBase):
         lambda_: float = 0.1,
         gamma: float = 3.0,
         *,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -4374,6 +4393,7 @@ class CoxGroupMCPRegressor(_CoxGroupSingleLambdaBase):
         self.groups = groups
         self.lambda_ = lambda_
         self.gamma = gamma
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -4386,6 +4406,7 @@ class CoxGroupMCPRegressor(_CoxGroupSingleLambdaBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=False, groups=self.groups,
         )
+        common["ties"] = self.ties
         common["gamma"] = self.gamma
         if payload is not None:
             coefs, _intercepts, _lambdas, info = _core.solve_cox_group_mcp_path_sparse(
@@ -4414,6 +4435,7 @@ class CoxGroupMCPPathRegressor(_CoxGroupPathBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -4427,6 +4449,7 @@ class CoxGroupMCPPathRegressor(_CoxGroupPathBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -4439,6 +4462,7 @@ class CoxGroupMCPPathRegressor(_CoxGroupPathBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=True, groups=self.groups,
         )
+        common["ties"] = self.ties
         common["gamma"] = self.gamma
         if payload is not None:
             coefs, _intercepts, lambdas_used, info = _core.solve_cox_group_mcp_path_sparse(
@@ -4466,6 +4490,7 @@ class CoxSparseGroupLassoRegressor(_CoxGroupSingleLambdaBase):
         lambda_: float = 0.1,
         alpha: float = 0.5,
         *,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -4477,6 +4502,7 @@ class CoxSparseGroupLassoRegressor(_CoxGroupSingleLambdaBase):
         self.groups = groups
         self.lambda_ = lambda_
         self.alpha = alpha
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -4489,6 +4515,7 @@ class CoxSparseGroupLassoRegressor(_CoxGroupSingleLambdaBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=False, groups=self.groups,
         )
+        common["ties"] = self.ties
         common["alpha"] = self.alpha
         if payload is not None:
             coefs, _intercepts, _lambdas, info = _core.solve_cox_sparse_group_lasso_path_sparse(
@@ -4517,6 +4544,7 @@ class CoxSparseGroupLassoPathRegressor(_CoxGroupPathBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
@@ -4530,6 +4558,7 @@ class CoxSparseGroupLassoPathRegressor(_CoxGroupPathBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.max_iter = max_iter
         self.tol = tol
@@ -4542,6 +4571,7 @@ class CoxSparseGroupLassoPathRegressor(_CoxGroupPathBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=True, groups=self.groups,
         )
+        common["ties"] = self.ties
         common["alpha"] = self.alpha
         if payload is not None:
             coefs, _intercepts, lambdas_used, info = _core.solve_cox_sparse_group_lasso_path_sparse(
@@ -4570,6 +4600,7 @@ class CoxSparseGroupMCPRegressor(_CoxGroupSingleLambdaBase):
         gamma: float = 3.0,
         alpha: float = 0.5,
         *,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -4583,6 +4614,7 @@ class CoxSparseGroupMCPRegressor(_CoxGroupSingleLambdaBase):
         self.lambda_ = lambda_
         self.gamma = gamma
         self.alpha = alpha
+        self.ties = ties
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter
@@ -4596,6 +4628,7 @@ class CoxSparseGroupMCPRegressor(_CoxGroupSingleLambdaBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=False, groups=self.groups,
         )
+        common["ties"] = self.ties
         common["gamma"] = self.gamma
         common["alpha"] = self.alpha
         common["coord_weights"] = (
@@ -4631,6 +4664,7 @@ class CoxSparseGroupMCPPathRegressor(_CoxGroupPathBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -4646,6 +4680,7 @@ class CoxSparseGroupMCPPathRegressor(_CoxGroupPathBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter
@@ -4659,6 +4694,7 @@ class CoxSparseGroupMCPPathRegressor(_CoxGroupPathBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=True, groups=self.groups,
         )
+        common["ties"] = self.ties
         common["gamma"] = self.gamma
         common["alpha"] = self.alpha
         common["coord_weights"] = (
@@ -4694,6 +4730,7 @@ class CoxSparseGroupSCADRegressor(_CoxGroupSingleLambdaBase):
         a: float = 3.7,
         alpha: float = 0.5,
         *,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -4707,6 +4744,7 @@ class CoxSparseGroupSCADRegressor(_CoxGroupSingleLambdaBase):
         self.lambda_ = lambda_
         self.a = a
         self.alpha = alpha
+        self.ties = ties
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter
@@ -4720,6 +4758,7 @@ class CoxSparseGroupSCADRegressor(_CoxGroupSingleLambdaBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=False, groups=self.groups,
         )
+        common["ties"] = self.ties
         common["a"] = self.a
         common["alpha"] = self.alpha
         common["coord_weights"] = (
@@ -4755,6 +4794,7 @@ class CoxSparseGroupSCADPathRegressor(_CoxGroupPathBase):
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
+        ties: str = 'breslow',
         weights: NDArray[np.float64] | None = None,
         coord_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
@@ -4770,6 +4810,7 @@ class CoxSparseGroupSCADPathRegressor(_CoxGroupPathBase):
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
+        self.ties = ties
         self.weights = weights
         self.coord_weights = coord_weights
         self.max_iter = max_iter
@@ -4783,6 +4824,7 @@ class CoxSparseGroupSCADPathRegressor(_CoxGroupPathBase):
         common, payload, n_features = _cox_dispatch_inputs(
             self, x, time, event, is_path=True, groups=self.groups,
         )
+        common["ties"] = self.ties
         common["a"] = self.a
         common["alpha"] = self.alpha
         common["coord_weights"] = (

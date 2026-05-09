@@ -16,14 +16,14 @@ load-bearing piece; everything after stacks on top of it.
 | M0 — Scaffold | ✅ done | trait surface + smoke solver |
 | M1 — Production CD core | ✅ done | path solver, screening, Anderson, KKT-stop, standardization |
 | M2 — LLA + group block-CD + parallel | ✅ done | inner CD, working set, LLA outer, path, Rayon, op-norm Lipschitz, sparse-group, gap-safe, PyO3, criterion benches |
-| M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + **Poisson offsets** + M3.5 Cox PH Breslow + M3.6 multinomial (Rust + PyO3 + estimators) done; Efron ties + opportunistic GLMs (M3.7) pending |
+| M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + **Poisson offsets** + M3.5 Cox PH (Breslow + **Efron** ties) + M3.6 multinomial (Rust + PyO3 + estimators) done; opportunistic GLMs (M3.7) pending |
 | M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; **bridge `\|β\|^q` (LS, scalar LLA path) done**; **adaptive {Lasso, MCP, SCAD} (LS, two-stage pilot fit) done**; overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **261 cargo + 253 pytest, all green.**
+Test count at this snapshot: **265 cargo + 261 pytest, all green.**
 
 ---
 
@@ -346,9 +346,24 @@ and `loss` semantics differ.
   No `fit_intercept`, no `intercept_` (baseline hazard absorbs).
   `predict(x) = decision_function(x) = Xβ` (prognostic index, matches
   `glmnet::predict.cox`). Deferred to M3.7: per-sample weights
-  (frequency vs. probability weighting), Efron ties, Breslow's
+  (frequency vs. probability weighting), Breslow's
   cumulative-baseline-hazard estimator for absolute survival
   predictions.
+- ✅ **Efron ties** (M3.x follow-up): `CoxPH` gains
+  `with_ties(time, event, TieHandling::{Breslow, Efron})`; default
+  constructor still uses Breslow. Efron's per-event reduced risk set
+  `S_eff_i(t) = S(t) − (i/k)·S_D(t)` is threaded through both `loss`
+  (per-tie-block log-S accumulation) and `compute_cum_h` (running
+  CumH / CumH2 over the same reduced sets); reduces exactly to
+  Breslow when no ties. PyO3: every Cox entry (14 total including
+  SparseGroupSCAD) accepts a `ties: str = "breslow"` kwarg parsed
+  via `parse_cox_ties`. All 14 Cox sklearn estimators + 7 CoxPathCV
+  wrappers gain a `ties` constructor argument forwarded through
+  `_cox_dispatch_inputs`. 4 cargo tests (Efron ≡ Breslow with unique
+  times, Efron-with-ties hand derivation against the reduced-risk-
+  set formula, default-constructor parity); 8 pytest covering
+  unique-times parity, heavy-ties divergence, group / sparse-group
+  / CV threading, parameter validation, dense ↔ sparse equivalence.
 
 ### ✅ M3.6 — Multinomial / softmax
 
@@ -399,11 +414,11 @@ is the M7.1 reduction reused unchanged: every existing GLM-aware solver
 
 ### M3.7 — Opportunistic GLMs
 
-Negative binomial, Huber / quantile (smoothed), Cox Efron ties — ship
-whichever has user demand. Gaussian-with-offsets is achievable today
-by subtracting the offset from `y` (LS is shift-equivariant); only
-GLMs need explicit offset support, and **Poisson offsets** ship now
-(see M3.4 follow-up above).
+Negative binomial, Huber / quantile (smoothed) — ship whichever has
+user demand. Gaussian-with-offsets is achievable today by subtracting
+the offset from `y` (LS is shift-equivariant); only GLMs need explicit
+offset support, and both **Poisson offsets** and **Cox Efron ties**
+ship now (see M3.4 / M3.5 follow-ups above).
 
 ---
 

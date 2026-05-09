@@ -25,7 +25,9 @@ use pyo3::types::PyDict;
 
 use ndarray::{Array2, ArrayView1};
 use skein_core::{
-    datafit::{BinomialLogit, CoxPH, GlmDatafit, LeastSquares, MultinomialLogit, PoissonLog},
+    datafit::{
+        BinomialLogit, CoxPH, GlmDatafit, LeastSquares, MultinomialLogit, PoissonLog, TieHandling,
+    },
     design::{
         Augmented, Chunked, DenseMatrix, DesignMatrix, MmapMatrix, MmapMatrixF32, MultiTaskDesign,
         SparseCSC, Standardized,
@@ -3219,6 +3221,17 @@ fn solve_poisson_sparse_group_scad_path<'py>(
 // Cox proportional hazards (Breslow ties) via prox-Newton (M3.5)
 // ---------------------------------------------------------------------
 
+/// Parse a `ties` string ("breslow" / "efron") into a `TieHandling`.
+fn parse_cox_ties(s: &str) -> PyResult<TieHandling> {
+    match s {
+        "breslow" => Ok(TieHandling::Breslow),
+        "efron" => Ok(TieHandling::Efron),
+        other => Err(PyValueError::new_err(format!(
+            "ties must be 'breslow' or 'efron'; got {other:?}"
+        ))),
+    }
+}
+
 /// Validate Cox outcomes: `time` finite ≥ 0, `event ∈ {0, 1}`, at least
 /// one event observed. Length consistency is checked by the caller.
 fn validate_cox_outcomes(
@@ -3268,6 +3281,7 @@ fn build_cox_path_outputs<'py, F>(
     standardize_x: bool,
     max_outer: usize,
     outer_tol: f64,
+    ties: TieHandling,
     make_penalty: F,
 ) -> PyResult<PathOutput<'py>>
 where
@@ -3323,7 +3337,7 @@ where
     }
 
     let design = DenseMatrix::new(x_arr);
-    let glm = CoxPH::new(time_arr, event_arr);
+    let glm = CoxPH::with_ties(time_arr, event_arr, ties);
 
     let make_pen = move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, pen_weights.clone()) };
 
@@ -3404,6 +3418,7 @@ fn build_cox_block_path_outputs<'py, F>(
     standardize_x: bool,
     max_outer: usize,
     outer_tol: f64,
+    ties: TieHandling,
     make_inner: F,
 ) -> PyResult<PathOutput<'py>>
 where
@@ -3463,7 +3478,7 @@ where
     };
 
     let design = DenseMatrix::new(x_arr);
-    let glm = CoxPH::new(time_arr, event_arr);
+    let glm = CoxPH::with_ties(time_arr, event_arr, ties);
 
     let group_w_for_closure = group_w.clone();
     let make_inner_wrapped =
@@ -3538,6 +3553,7 @@ where
 #[pyfunction]
 #[pyo3(signature = (
     x, time, event, *, gamma=3.0,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -3549,6 +3565,7 @@ fn solve_cox_mcp_path<'py>(
     time: PyReadonlyArray1<f64>,
     event: PyReadonlyArray1<f64>,
     gamma: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -3560,6 +3577,7 @@ fn solve_cox_mcp_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let ties = parse_cox_ties(ties)?;
     build_cox_path_outputs(
         py,
         x,
@@ -3575,6 +3593,7 @@ fn solve_cox_mcp_path<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
     )
 }
@@ -3582,6 +3601,7 @@ fn solve_cox_mcp_path<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x, time, event, *, a=3.7,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -3593,6 +3613,7 @@ fn solve_cox_scad_path<'py>(
     time: PyReadonlyArray1<f64>,
     event: PyReadonlyArray1<f64>,
     a: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -3604,6 +3625,7 @@ fn solve_cox_scad_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let ties = parse_cox_ties(ties)?;
     build_cox_path_outputs(
         py,
         x,
@@ -3619,6 +3641,7 @@ fn solve_cox_scad_path<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
     )
 }
@@ -3626,6 +3649,7 @@ fn solve_cox_scad_path<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x, time, event, groups, *,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -3637,6 +3661,7 @@ fn solve_cox_group_lasso_path<'py>(
     time: PyReadonlyArray1<f64>,
     event: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -3648,6 +3673,7 @@ fn solve_cox_group_lasso_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let ties = parse_cox_ties(ties)?;
     build_cox_block_path_outputs(
         py,
         x,
@@ -3664,6 +3690,7 @@ fn solve_cox_group_lasso_path<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         |_beta, _groups, lam, group_w| Box::new(GroupLasso::with_weights(lam, group_w.clone())),
     )
 }
@@ -3671,6 +3698,7 @@ fn solve_cox_group_lasso_path<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x, time, event, groups, *, gamma=3.0,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -3683,6 +3711,7 @@ fn solve_cox_group_mcp_path<'py>(
     event: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
     gamma: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -3694,6 +3723,7 @@ fn solve_cox_group_mcp_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let ties = parse_cox_ties(ties)?;
     build_cox_block_path_outputs(
         py,
         x,
@@ -3710,6 +3740,7 @@ fn solve_cox_group_mcp_path<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |beta, g, lam, group_w| {
             let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
             Box::new(GroupLasso::with_weights(lam, w))
@@ -3720,6 +3751,7 @@ fn solve_cox_group_mcp_path<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x, time, event, groups, *, alpha=0.5,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -3732,6 +3764,7 @@ fn solve_cox_sparse_group_lasso_path<'py>(
     event: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
     alpha: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -3743,6 +3776,7 @@ fn solve_cox_sparse_group_lasso_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let ties = parse_cox_ties(ties)?;
     build_cox_block_path_outputs(
         py,
         x,
@@ -3759,6 +3793,7 @@ fn solve_cox_sparse_group_lasso_path<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |_beta, _groups, lam, group_w| {
             Box::new(SparseGroupLasso::with_weights(lam, alpha, group_w.clone()))
         },
@@ -3768,6 +3803,7 @@ fn solve_cox_sparse_group_lasso_path<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x, time, event, groups, *, gamma=3.0, alpha=0.5,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
     weights=None, coord_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
@@ -3782,6 +3818,7 @@ fn solve_cox_sparse_group_mcp_path<'py>(
     groups: PyReadonlyArray1<i64>,
     gamma: f64,
     alpha: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -3810,6 +3847,7 @@ fn solve_cox_sparse_group_mcp_path<'py>(
         None => Array1::ones(p),
     };
 
+    let ties = parse_cox_ties(ties)?;
     build_cox_block_path_outputs(
         py,
         x,
@@ -3826,6 +3864,7 @@ fn solve_cox_sparse_group_mcp_path<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_mcp(
                 beta,
@@ -3844,6 +3883,7 @@ fn solve_cox_sparse_group_mcp_path<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x, time, event, groups, *, a=3.7, alpha=0.5,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
     weights=None, coord_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
@@ -3858,6 +3898,7 @@ fn solve_cox_sparse_group_scad_path<'py>(
     groups: PyReadonlyArray1<i64>,
     a: f64,
     alpha: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -3891,6 +3932,7 @@ fn solve_cox_sparse_group_scad_path<'py>(
         None => Array1::ones(p),
     };
 
+    let ties = parse_cox_ties(ties)?;
     build_cox_block_path_outputs(
         py,
         x,
@@ -3907,6 +3949,7 @@ fn solve_cox_sparse_group_scad_path<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_scad(
                 beta,
@@ -7052,6 +7095,7 @@ fn build_cox_path_outputs_sparse<'py, F>(
     standardize_x: bool,
     max_outer: usize,
     outer_tol: f64,
+    ties: TieHandling,
     make_penalty: F,
 ) -> PyResult<PathOutput<'py>>
 where
@@ -7103,7 +7147,7 @@ where
         }
     }
 
-    let glm = CoxPH::new(time_arr, event_arr);
+    let glm = CoxPH::with_ties(time_arr, event_arr, ties);
     let make_pen = move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, pen_weights.clone()) };
 
     let cd_cfg = CdConfig {
@@ -7187,6 +7231,7 @@ fn build_cox_block_path_outputs_sparse<'py, F>(
     standardize_x: bool,
     max_outer: usize,
     outer_tol: f64,
+    ties: TieHandling,
     make_inner: F,
 ) -> PyResult<PathOutput<'py>>
 where
@@ -7244,7 +7289,7 @@ where
         None
     };
 
-    let glm = CoxPH::new(time_arr, event_arr);
+    let glm = CoxPH::with_ties(time_arr, event_arr, ties);
 
     let group_w_for_closure = group_w.clone();
     let make_inner_wrapped =
@@ -8257,6 +8302,7 @@ fn solve_poisson_sparse_group_scad_path_sparse<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x_data, x_indices, x_indptr, n_rows, n_cols, time, event, *, gamma=3.0,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -8272,6 +8318,7 @@ fn solve_cox_mcp_path_sparse<'py>(
     time: PyReadonlyArray1<f64>,
     event: PyReadonlyArray1<f64>,
     gamma: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -8283,6 +8330,7 @@ fn solve_cox_mcp_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let ties = parse_cox_ties(ties)?;
     build_cox_path_outputs_sparse(
         py,
         n_rows,
@@ -8302,6 +8350,7 @@ fn solve_cox_mcp_path_sparse<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
     )
 }
@@ -8309,6 +8358,7 @@ fn solve_cox_mcp_path_sparse<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x_data, x_indices, x_indptr, n_rows, n_cols, time, event, *, a=3.7,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -8324,6 +8374,7 @@ fn solve_cox_scad_path_sparse<'py>(
     time: PyReadonlyArray1<f64>,
     event: PyReadonlyArray1<f64>,
     a: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -8335,6 +8386,7 @@ fn solve_cox_scad_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let ties = parse_cox_ties(ties)?;
     build_cox_path_outputs_sparse(
         py,
         n_rows,
@@ -8354,6 +8406,7 @@ fn solve_cox_scad_path_sparse<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
     )
 }
@@ -8361,6 +8414,7 @@ fn solve_cox_scad_path_sparse<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x_data, x_indices, x_indptr, n_rows, n_cols, time, event, groups, *,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -8376,6 +8430,7 @@ fn solve_cox_group_lasso_path_sparse<'py>(
     time: PyReadonlyArray1<f64>,
     event: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -8387,6 +8442,7 @@ fn solve_cox_group_lasso_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let ties = parse_cox_ties(ties)?;
     build_cox_block_path_outputs_sparse(
         py,
         n_rows,
@@ -8407,6 +8463,7 @@ fn solve_cox_group_lasso_path_sparse<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         |_beta, _g, lam, group_w| Box::new(GroupLasso::with_weights(lam, group_w.clone())),
     )
 }
@@ -8414,6 +8471,7 @@ fn solve_cox_group_lasso_path_sparse<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x_data, x_indices, x_indptr, n_rows, n_cols, time, event, groups, *, gamma=3.0,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -8430,6 +8488,7 @@ fn solve_cox_group_mcp_path_sparse<'py>(
     event: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
     gamma: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -8441,6 +8500,7 @@ fn solve_cox_group_mcp_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let ties = parse_cox_ties(ties)?;
     build_cox_block_path_outputs_sparse(
         py,
         n_rows,
@@ -8461,6 +8521,7 @@ fn solve_cox_group_mcp_path_sparse<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |beta, g, lam, group_w| {
             let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
             Box::new(GroupLasso::with_weights(lam, w))
@@ -8471,6 +8532,7 @@ fn solve_cox_group_mcp_path_sparse<'py>(
 #[pyfunction]
 #[pyo3(signature = (
     x_data, x_indices, x_indptr, n_rows, n_cols, time, event, groups, *, alpha=0.5,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     standardize_x=false, max_outer=10, outer_tol=1e-6,
@@ -8487,6 +8549,7 @@ fn solve_cox_sparse_group_lasso_path_sparse<'py>(
     event: PyReadonlyArray1<f64>,
     groups: PyReadonlyArray1<i64>,
     alpha: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -8498,6 +8561,7 @@ fn solve_cox_sparse_group_lasso_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
+    let ties = parse_cox_ties(ties)?;
     build_cox_block_path_outputs_sparse(
         py,
         n_rows,
@@ -8518,6 +8582,7 @@ fn solve_cox_sparse_group_lasso_path_sparse<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |_beta, _g, lam, group_w| {
             Box::new(SparseGroupLasso::with_weights(lam, alpha, group_w.clone()))
         },
@@ -8528,6 +8593,7 @@ fn solve_cox_sparse_group_lasso_path_sparse<'py>(
 #[pyo3(signature = (
     x_data, x_indices, x_indptr, n_rows, n_cols, time, event, groups, *,
     gamma=3.0, alpha=0.5,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
     weights=None, coord_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
@@ -8546,6 +8612,7 @@ fn solve_cox_sparse_group_mcp_path_sparse<'py>(
     groups: PyReadonlyArray1<i64>,
     gamma: f64,
     alpha: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -8573,6 +8640,7 @@ fn solve_cox_sparse_group_mcp_path_sparse<'py>(
         None => Array1::ones(n_cols),
     };
 
+    let ties = parse_cox_ties(ties)?;
     build_cox_block_path_outputs_sparse(
         py,
         n_rows,
@@ -8593,6 +8661,7 @@ fn solve_cox_sparse_group_mcp_path_sparse<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_mcp(
                 beta,
@@ -8612,6 +8681,7 @@ fn solve_cox_sparse_group_mcp_path_sparse<'py>(
 #[pyo3(signature = (
     x_data, x_indices, x_indptr, n_rows, n_cols, time, event, groups, *,
     a=3.7, alpha=0.5,
+    ties="breslow",
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
     weights=None, coord_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
@@ -8630,6 +8700,7 @@ fn solve_cox_sparse_group_scad_path_sparse<'py>(
     groups: PyReadonlyArray1<i64>,
     a: f64,
     alpha: f64,
+    ties: &str,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -8662,6 +8733,7 @@ fn solve_cox_sparse_group_scad_path_sparse<'py>(
         None => Array1::ones(n_cols),
     };
 
+    let ties = parse_cox_ties(ties)?;
     build_cox_block_path_outputs_sparse(
         py,
         n_rows,
@@ -8682,6 +8754,7 @@ fn solve_cox_sparse_group_scad_path_sparse<'py>(
         standardize_x,
         max_outer,
         outer_tol,
+        ties,
         move |beta, g, lam, group_w| {
             let (gw, cw) = surrogate_sparse_group_scad(
                 beta,

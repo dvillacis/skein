@@ -1,5 +1,5 @@
 //! Cox proportional-hazards regression via diagonal-IRLS prox-Newton
-//! (Breslow tie handling).
+//! (Breslow or Efron tie handling).
 //!
 //! `CoxPH` holds right-censored survival outcomes `(time, event)` where
 //! `event ∈ {0, 1}` (1 = observed event, 0 = right-censored) and
@@ -23,18 +23,29 @@
 //!     z_i         = η_i − g_i / w_i
 //! ```
 //!
-//! Ties at the same time share `S(t)`; samples in a tie-block all see
-//! the same `S` and the running `CumH`/`CumH2` jump only after the block
-//! has been fully processed (Breslow's approximation).
+//! ## Ties handling
+//!
+//! Two methods are supported — pick via [`CoxPH::with_ties`] (default
+//! [`TieHandling::Breslow`]):
+//!
+//! - **Breslow.** All `k` events tied at time `t` share the same risk
+//!   set `S(t)` and contribute `k/S(t)` to `CumH` and `k/S(t)²` to
+//!   `CumH2`. Cheap; mildly biased when ties are heavy.
+//! - **Efron.** The `i`-th tied event (0-indexed) sees a reduced risk
+//!   set `S_eff_i(t) = S(t) − (i/k) · S_D(t)`, where
+//!   `S_D(t) = Σ_{j: tied event} exp(η_j)`. More accurate under heavy
+//!   ties; matches R's `survival::coxph(..., ties="efron")` (the R
+//!   default) and `glmnet(..., ties="efron")`. Reduces to Breslow
+//!   when `k = 1` per block.
 //!
 //! `η` is clamped to `[-30, 30]` before `exp()` for overflow safety;
 //! `w_i` is floored at `1e-6` so the working response stays finite when
 //! the diagonal Hessian collapses.
 //!
-//! v0.1 scope: Breslow ties only; no per-sample weights (weighted Cox
-//! has subtle conventions — frequency vs. probability weighting — and
-//! lands in M3.x). No `fit_intercept`: the baseline hazard absorbs any
-//! constant, and `S(t)` is invariant to a uniform shift of `η`.
+//! No per-sample weights yet (weighted Cox has subtle conventions —
+//! frequency vs. probability weighting). No `fit_intercept`: the
+//! baseline hazard absorbs any constant, and `S(t)` is invariant to a
+//! uniform shift of `η`.
 
 use super::{GlmDatafit, LeastSquares};
 use crate::design::DesignMatrix;
@@ -48,6 +59,18 @@ const ETA_CLAMP: f64 = 30.0;
 /// diagonal entry can degenerate).
 const W_FLOOR: f64 = 1e-6;
 
+/// Tie-handling method for `CoxPH`. See module docs for the math.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TieHandling {
+    /// Breslow approximation. All tied events share the same risk set.
+    /// Cheaper; matches `glmnet`'s default and the older Cox literature.
+    #[default]
+    Breslow,
+    /// Efron's exact-method approximation. More accurate when ties are
+    /// heavy; matches R `survival::coxph`'s default.
+    Efron,
+}
+
 /// Cox proportional-hazards regression with right-censored outcomes.
 ///
 /// Construct with `(time, event)` — both length `n`, `time ≥ 0` finite,
@@ -59,10 +82,16 @@ pub struct CoxPH {
     event: Array1<f64>,
     /// Permutation of `0..n` putting samples in ascending time order.
     sort_order: Vec<usize>,
+    ties: TieHandling,
 }
 
 impl CoxPH {
+    /// Construct with the default Breslow tie handling.
     pub fn new(time: Array1<f64>, event: Array1<f64>) -> Self {
+        Self::with_ties(time, event, TieHandling::Breslow)
+    }
+
+    pub fn with_ties(time: Array1<f64>, event: Array1<f64>, ties: TieHandling) -> Self {
         assert_eq!(
             time.len(),
             event.len(),
@@ -103,6 +132,7 @@ impl CoxPH {
             time,
             event,
             sort_order,
+            ties,
         }
     }
 
@@ -114,21 +144,62 @@ impl CoxPH {
         self.event.view()
     }
 
-    /// Negative Breslow log partial likelihood divided by `n`:
-    /// `(1/n) Σ_{k: δ_k=1} [ log S(t_k) − η_k ]`.
+    pub fn ties(&self) -> TieHandling {
+        self.ties
+    }
+
+    /// Negative Cox log partial likelihood divided by `n`. Under Breslow
+    /// ties this is `(1/n) Σ_{k: δ_k=1} [ log S(t_k) − η_k ]`; under
+    /// Efron the per-tie-block log-S contribution becomes
+    /// `Σ_{i=0}^{k−1} log(S(t) − (i/k)·S_D(t))` where `S_D(t)` sums
+    /// `exp(η)` over tied events.
     pub fn loss(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> f64 {
         let n_f = design.n_samples() as f64;
+        let n = design.n_samples();
         let eta = design.matvec(beta);
 
         let exp_eta_sorted = self.exp_eta_in_sort_order(&eta);
         let s = self.compute_s_per_sample(&exp_eta_sorted);
 
         let mut total = 0.0_f64;
-        for (k, &orig) in self.sort_order.iter().enumerate() {
-            if self.event[orig] > 0.5 {
-                let eta_k = eta[orig].clamp(-ETA_CLAMP, ETA_CLAMP);
-                total += s[k].max(1e-300).ln() - eta_k;
+        let mut i = 0;
+        while i < n {
+            let block_t = self.time[self.sort_order[i]];
+            let block_start = i;
+            let mut block_end = i + 1;
+            while block_end < n && self.time[self.sort_order[block_end]] == block_t {
+                block_end += 1;
             }
+
+            // Sum exp(η) over events in this block, and accumulate −η
+            // per event into the NLL.
+            let mut s_d = 0.0_f64;
+            let mut events_in_block = 0_usize;
+            for k in block_start..block_end {
+                let orig = self.sort_order[k];
+                if self.event[orig] > 0.5 {
+                    events_in_block += 1;
+                    s_d += exp_eta_sorted[k];
+                    let eta_k = eta[orig].clamp(-ETA_CLAMP, ETA_CLAMP);
+                    total -= eta_k;
+                }
+            }
+
+            let s_block = s[block_start].max(1e-300);
+            match self.ties {
+                TieHandling::Breslow => {
+                    total += (events_in_block as f64) * s_block.ln();
+                }
+                TieHandling::Efron => {
+                    let k_events = events_in_block as f64;
+                    for ev_idx in 0..events_in_block {
+                        let frac = ev_idx as f64 / k_events;
+                        let s_eff = (s_block - frac * s_d).max(1e-300);
+                        total += s_eff.ln();
+                    }
+                }
+            }
+            i = block_end;
         }
         total / n_f
     }
@@ -143,7 +214,7 @@ impl CoxPH {
         let eta = design.matvec(beta);
         let exp_eta_sorted = self.exp_eta_in_sort_order(&eta);
         let s = self.compute_s_per_sample(&exp_eta_sorted);
-        let (cum_h, cum_h2) = self.compute_cum_h(&s);
+        let (cum_h, cum_h2) = self.compute_cum_h(&s, &exp_eta_sorted);
 
         let mut w = Array1::<f64>::zeros(n);
         let mut z = Array1::<f64>::zeros(n);
@@ -198,10 +269,12 @@ impl CoxPH {
     }
 
     /// `CumH(t_i)` and `CumH2(t_i)` per sample, in time-sorted order.
-    /// Walks forward through tie-blocks, accumulating `events_in_block /
-    /// S_block` and `events_in_block / S_block²` after fully processing
-    /// each block (Breslow approximation: ties share the same `S`).
-    fn compute_cum_h(&self, s_per_sample: &[f64]) -> (Vec<f64>, Vec<f64>) {
+    /// Walks forward through tie-blocks. Under Breslow each block's `k`
+    /// events all share `S(t)` and contribute `k/S(t)` and `k/S(t)²`;
+    /// under Efron the `i`-th event sees a reduced risk set
+    /// `S_eff_i = S(t) − (i/k) · S_D(t)`, where
+    /// `S_D(t) = Σ_{j ∈ block, δ_j=1} exp(η_j)`.
+    fn compute_cum_h(&self, s_per_sample: &[f64], exp_eta_sorted: &[f64]) -> (Vec<f64>, Vec<f64>) {
         let n = s_per_sample.len();
         let mut cum_h = vec![0.0_f64; n];
         let mut cum_h2 = vec![0.0_f64; n];
@@ -218,14 +291,29 @@ impl CoxPH {
             }
 
             let mut events_in_block = 0_usize;
+            let mut s_d = 0.0_f64;
             for k in block_start..block_end {
                 if self.event[self.sort_order[k]] > 0.5 {
                     events_in_block += 1;
+                    s_d += exp_eta_sorted[k];
                 }
             }
             let s_block = s_per_sample[block_start].max(1e-300);
-            running_h += events_in_block as f64 / s_block;
-            running_h2 += events_in_block as f64 / (s_block * s_block);
+            match self.ties {
+                TieHandling::Breslow => {
+                    running_h += events_in_block as f64 / s_block;
+                    running_h2 += events_in_block as f64 / (s_block * s_block);
+                }
+                TieHandling::Efron => {
+                    let k_events = events_in_block as f64;
+                    for ev_idx in 0..events_in_block {
+                        let frac = ev_idx as f64 / k_events;
+                        let s_eff = (s_block - frac * s_d).max(1e-300);
+                        running_h += 1.0 / s_eff;
+                        running_h2 += 1.0 / (s_eff * s_eff);
+                    }
+                }
+            }
 
             for k in block_start..block_end {
                 cum_h[k] = running_h;
@@ -369,5 +457,122 @@ mod tests {
     #[should_panic(expected = "time ≥ 0")]
     fn cox_panics_on_negative_time() {
         let _ = CoxPH::new(array![1.0, -1.0], array![1.0, 1.0]);
+    }
+
+    #[test]
+    fn cox_efron_with_unique_times_matches_breslow() {
+        // No ties ⇒ Efron's per-event reduced risk set has only one
+        // term per block (i=0 ⇒ s_eff = S − 0 = S), reducing to Breslow.
+        // Loss + surrogate must match exactly.
+        let (design, _glm_b) = tiny_problem();
+        let breslow = CoxPH::with_ties(
+            array![1.0, 2.0, 3.0],
+            array![1.0, 1.0, 0.0],
+            TieHandling::Breslow,
+        );
+        let efron = CoxPH::with_ties(
+            array![1.0, 2.0, 3.0],
+            array![1.0, 1.0, 0.0],
+            TieHandling::Efron,
+        );
+        let beta = array![0.3, -0.2];
+        assert_abs_diff_eq!(
+            breslow.loss(&design, beta.view()),
+            efron.loss(&design, beta.view()),
+            epsilon = 1e-12
+        );
+        let s_b = breslow.surrogate_at(&design, beta.view());
+        let s_e = efron.surrogate_at(&design, beta.view());
+        let r_b = s_b.init_residual(&design, beta.view());
+        let r_e = s_e.init_residual(&design, beta.view());
+        for i in 0..3 {
+            assert_abs_diff_eq!(r_b[i], r_e[i], epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn cox_efron_with_two_tied_events_uses_reduced_risk_set() {
+        // Two tied events at t=1, one censored at t=2. At β=0:
+        // S(1) = 3, S_D(1) = 2 (two tied events with exp(η)=1 each).
+        // Efron contributions to running_h at t=1:
+        //   i=0: 1/(3 − 0·2/2) = 1/3
+        //   i=1: 1/(3 − 1·2/2) = 1/(3−1) = 1/2
+        // Running CumH at t=1 = 1/3 + 1/2 = 5/6
+        // Running CumH2 at t=1 = 1/9 + 1/4 = 13/36
+        // (Breslow would give 2/3 and 2/9; Efron > Breslow because the
+        // i=1 event sees a smaller risk set.)
+        // Censored sample at t=2 inherits the same running CumH/CumH2.
+        // w_i(η=0) = CumH − CumH2:
+        //   sample 0: 5/6 − 13/36 = 30/36 − 13/36 = 17/36
+        //   sample 1: 17/36
+        //   sample 2: 17/36
+        // g_i = -δ + CumH:
+        //   sample 0: -1 + 5/6 = -1/6
+        //   sample 1: -1/6
+        //   sample 2:  0 + 5/6 = 5/6
+        // z_i = -g/w:
+        //   sample 0: -(-1/6)/(17/36) = 6/17
+        //   sample 1: 6/17
+        //   sample 2: -(5/6)/(17/36) = -30/17
+        let x = array![[1.0], [1.0], [1.0]];
+        let time = array![1.0, 1.0, 2.0];
+        let event = array![1.0, 1.0, 0.0];
+        let design = DenseMatrix::new(x);
+        let glm = CoxPH::with_ties(time, event, TieHandling::Efron);
+        let beta = Array1::<f64>::zeros(1);
+        let surr = glm.surrogate_at(&design, beta.view());
+        let r = surr.init_residual(&design, beta.view());
+        assert_abs_diff_eq!(r[0], -6.0 / 17.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(r[1], -6.0 / 17.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(r[2], 30.0 / 17.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn cox_efron_loss_with_two_tied_events_matches_hand_derivation() {
+        // At β=0: NLL = -η_0 - η_1 + log(3) + log(3 − 1)
+        //              = 0 + 0 + log 3 + log 2 = log 6.
+        // Wait — that's the same as Breslow at β=0 since events_in_block
+        // · log S_block = 2 log 3 = log 9 vs Efron's log 3 + log 2 = log 6.
+        // So NLL = log 6 / n. (Compared to Breslow's log 9 / n.)
+        let x = array![[1.0], [1.0], [1.0]];
+        let time = array![1.0, 1.0, 2.0];
+        let event = array![1.0, 1.0, 0.0];
+        let design = DenseMatrix::new(x);
+
+        let breslow = CoxPH::with_ties(
+            time.clone(),
+            event.clone(),
+            TieHandling::Breslow,
+        );
+        let efron = CoxPH::with_ties(time, event, TieHandling::Efron);
+        let beta = Array1::<f64>::zeros(1);
+        let n_f = 3.0_f64;
+        assert_abs_diff_eq!(
+            breslow.loss(&design, beta.view()),
+            (9.0_f64).ln() / n_f,
+            epsilon = 1e-12
+        );
+        assert_abs_diff_eq!(
+            efron.loss(&design, beta.view()),
+            (6.0_f64).ln() / n_f,
+            epsilon = 1e-12
+        );
+    }
+
+    #[test]
+    fn cox_default_constructor_uses_breslow() {
+        let (design, glm) = tiny_problem();
+        assert_eq!(glm.ties(), TieHandling::Breslow);
+        let beta = array![0.3, -0.2];
+        let glm_b = CoxPH::with_ties(
+            array![1.0, 2.0, 3.0],
+            array![1.0, 1.0, 0.0],
+            TieHandling::Breslow,
+        );
+        assert_abs_diff_eq!(
+            glm.loss(&design, beta.view()),
+            glm_b.loss(&design, beta.view()),
+            epsilon = 1e-12
+        );
     }
 }
