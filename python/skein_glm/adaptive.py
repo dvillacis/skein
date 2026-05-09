@@ -31,14 +31,25 @@ from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
-from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.model_selection import KFold
 
 from skein_glm import _core
+from skein_glm.cv import (
+    _CoxPathCVMixin,
+    _LogisticPathCVMixin,
+    _PoissonPathCVMixin,
+)
 from skein_glm.estimators import (
+    CoxMCPPathRegressor,
+    CoxSCADPathRegressor,
     GroupLassoPathRegressor,
     GroupMCPPathRegressor,
+    LogisticMCPPathRegressor,
+    LogisticSCADPathRegressor,
     MCPPathRegressor,
+    PoissonMCPPathRegressor,
+    PoissonSCADPathRegressor,
     SCADPathRegressor,
     _is_sparse,
 )
@@ -1040,6 +1051,1203 @@ class AdaptiveGroupMCPPathCV(_AdaptiveGroupPathCVBase):
         }
 
 
+# =========================================================================
+# Adaptive GLM estimators (Logistic, Poisson, Cox × Lasso, MCP, SCAD)
+# =========================================================================
+#
+# Pilot is the corresponding GLM's lasso path (e.g.,
+# `LogisticMCPPathRegressor(gamma=1e9)`). Final is the user's chosen
+# GLM-penalty path with adaptive weights derived from the pilot.
+#
+# Path classes store the fitted final estimator as `_final_estimator_`
+# and delegate `predict_proba` / `decision_function` / `predict` to it
+# (so the GLM-specific predict semantics — binary class label for
+# logistic, μ = exp(η) for Poisson, η for Cox — are inherited).
+#
+# CV classes extend the existing per-family CV mixins
+# (`_LogisticPathCVMixin`, `_PoissonPathCVMixin`, `_CoxPathCVMixin`),
+# overriding `fit` to compute pilot weights once on the full data and
+# `_make_base_path` to inject those weights into every per-fold
+# refit. Cox uses `fit(x, time, event)` and StratifiedKFold by event.
+
+
+def _fit_pilot_logistic(
+    x,
+    y,
+    n_pilot_lambdas: int,
+    pilot_position,
+    fit_intercept: bool,
+    standardize: bool,
+) -> NDArray[np.float64]:
+    pilot = LogisticMCPPathRegressor(
+        gamma=1e9,
+        n_lambdas=n_pilot_lambdas,
+        lambda_min_ratio=1e-3,
+        fit_intercept=fit_intercept,
+        standardize=standardize,
+    ).fit(x, y)
+    idx = _validate_pilot_position(pilot_position, len(pilot.lambdas_))
+    return pilot.coefs_[idx].copy()
+
+
+def _fit_pilot_poisson(
+    x,
+    y,
+    n_pilot_lambdas: int,
+    pilot_position,
+    fit_intercept: bool,
+    standardize: bool,
+) -> NDArray[np.float64]:
+    pilot = PoissonMCPPathRegressor(
+        gamma=1e9,
+        n_lambdas=n_pilot_lambdas,
+        lambda_min_ratio=1e-3,
+        fit_intercept=fit_intercept,
+        standardize=standardize,
+    ).fit(x, y)
+    idx = _validate_pilot_position(pilot_position, len(pilot.lambdas_))
+    return pilot.coefs_[idx].copy()
+
+
+def _fit_pilot_cox(
+    x,
+    time,
+    event,
+    n_pilot_lambdas: int,
+    pilot_position,
+    standardize: bool,
+) -> NDArray[np.float64]:
+    pilot = CoxMCPPathRegressor(
+        gamma=1e9,
+        n_lambdas=n_pilot_lambdas,
+        lambda_min_ratio=1e-3,
+        standardize=standardize,
+    ).fit(x, time, event)
+    idx = _validate_pilot_position(pilot_position, len(pilot.lambdas_))
+    return pilot.coefs_[idx].copy()
+
+
+# ---- Logistic ----------------------------------------------------------
+
+
+class _AdaptiveLogisticPathBase(BaseEstimator, ClassifierMixin):
+    """Adaptive logistic path: pilot lasso → adaptive weights → final fit.
+    Subclass sets `_final_cls` and `_extra_kwargs()`."""
+
+    coefs_: NDArray[np.float64]
+    intercepts_: NDArray[np.float64]
+    lambdas_: NDArray[np.float64]
+    coef_pilot_: NDArray[np.float64]
+    weights_: NDArray[np.float64]
+    info_: dict[str, Any]
+    n_features_in_: int
+
+    _final_cls: Any
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def _make_final(self, weights: NDArray[np.float64]):
+        kw: dict[str, Any] = dict(
+            lambdas=self.lambdas,  # type: ignore[attr-defined]
+            n_lambdas=self.n_lambdas,  # type: ignore[attr-defined]
+            lambda_min_ratio=self.lambda_min_ratio,  # type: ignore[attr-defined]
+            weights=weights,
+            max_iter=self.max_iter,  # type: ignore[attr-defined]
+            tol=self.tol,  # type: ignore[attr-defined]
+            fit_intercept=self.fit_intercept,  # type: ignore[attr-defined]
+            standardize=self.standardize,  # type: ignore[attr-defined]
+            acceleration=self.acceleration,  # type: ignore[attr-defined]
+            max_outer=self.max_outer,  # type: ignore[attr-defined]
+            outer_tol=self.outer_tol,  # type: ignore[attr-defined]
+        )
+        kw.update(self._extra_kwargs())
+        return self._final_cls(**kw)
+
+    def fit(self, x, y) -> "_AdaptiveLogisticPathBase":
+        beta_pilot = _fit_pilot_logistic(
+            x, y,
+            self.n_pilot_lambdas,  # type: ignore[attr-defined]
+            self.pilot_position,  # type: ignore[attr-defined]
+            self.fit_intercept,  # type: ignore[attr-defined]
+            self.standardize,  # type: ignore[attr-defined]
+        )
+        weights = _adaptive_weights(
+            beta_pilot,
+            self.eta,  # type: ignore[attr-defined]
+            self.eps_pilot,  # type: ignore[attr-defined]
+        )
+        final = self._make_final(weights).fit(x, y)
+        self._final_estimator_ = final
+        self.coefs_ = final.coefs_
+        self.intercepts_ = final.intercepts_
+        self.lambdas_ = final.lambdas_
+        self.coef_pilot_ = beta_pilot
+        self.weights_ = weights
+        self.info_ = final.info_
+        self.n_features_in_ = final.n_features_in_
+        return self
+
+    def decision_function(self, x):
+        return self._final_estimator_.decision_function(x)
+
+    def predict_proba(self, x):
+        return self._final_estimator_.predict_proba(x)
+
+    def predict(self, x):
+        return self._final_estimator_.predict(x)
+
+
+def _logistic_path_init(self, gamma_or_a, *, eta, eps_pilot, n_pilot_lambdas,
+                         pilot_position, lambdas, n_lambdas, lambda_min_ratio,
+                         max_iter, tol, max_outer, outer_tol, fit_intercept,
+                         standardize, acceleration, gamma_or_a_attr):
+    setattr(self, gamma_or_a_attr, gamma_or_a)
+    self.eta = eta
+    self.eps_pilot = eps_pilot
+    self.n_pilot_lambdas = n_pilot_lambdas
+    self.pilot_position = pilot_position
+    self.lambdas = lambdas
+    self.n_lambdas = n_lambdas
+    self.lambda_min_ratio = lambda_min_ratio
+    self.max_iter = max_iter
+    self.tol = tol
+    self.max_outer = max_outer
+    self.outer_tol = outer_tol
+    self.fit_intercept = fit_intercept
+    self.standardize = standardize
+    self.acceleration = acceleration
+
+
+class AdaptiveLogisticLassoPathRegressor(_AdaptiveLogisticPathBase):
+    """Adaptive logistic lasso (pilot lasso + adaptive lasso final)."""
+
+    _final_cls = LogisticMCPPathRegressor
+
+    def __init__(
+        self,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": 1e9}
+
+
+class AdaptiveLogisticMCPPathRegressor(_AdaptiveLogisticPathBase):
+    """Adaptive logistic MCP."""
+
+    _final_cls = LogisticMCPPathRegressor
+
+    def __init__(
+        self,
+        gamma: float = 3.0,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.gamma = gamma
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": self.gamma}
+
+
+class AdaptiveLogisticSCADPathRegressor(_AdaptiveLogisticPathBase):
+    """Adaptive logistic SCAD."""
+
+    _final_cls = LogisticSCADPathRegressor
+
+    def __init__(
+        self,
+        a: float = 3.7,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.a = a
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"a": self.a}
+
+
+class _AdaptiveLogisticPathCVBase(_LogisticPathCVMixin, BaseEstimator, ClassifierMixin):
+    """Logistic adaptive CV: pilot weights once on full data, K-fold CV
+    on the final fit with those fixed weights. Subclass sets `_final_cls`
+    and `_extra_kwargs()`."""
+
+    coef_pilot_: NDArray[np.float64]
+    weights_: NDArray[np.float64]
+    _final_cls: Any
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def _make_base_path(self, **overrides):
+        kw: dict[str, Any] = dict(
+            lambdas=self.lambdas,
+            n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio,
+            weights=self.weights_,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            max_outer=self.max_outer,
+            outer_tol=self.outer_tol,
+            fit_intercept=self.fit_intercept,
+            standardize=self.standardize,
+            acceleration=self.acceleration,
+        )
+        kw.update(self._extra_kwargs())
+        kw.update(overrides)
+        return self._final_cls(**kw)
+
+    def fit(self, x, y):
+        beta_pilot = _fit_pilot_logistic(
+            x, y,
+            self.n_pilot_lambdas,
+            self.pilot_position,
+            self.fit_intercept,
+            self.standardize,
+        )
+        self.coef_pilot_ = beta_pilot
+        self.weights_ = _adaptive_weights(beta_pilot, self.eta, self.eps_pilot)
+        return super().fit(x, y)
+
+
+def _adaptive_logistic_cv_init(
+    self, gamma_or_a, gamma_or_a_attr, *, eta, eps_pilot, n_pilot_lambdas,
+    pilot_position, cv, random_state, lambdas, n_lambdas, lambda_min_ratio,
+    max_iter, tol, max_outer, outer_tol, fit_intercept, standardize, acceleration,
+):
+    setattr(self, gamma_or_a_attr, gamma_or_a)
+    self.eta = eta
+    self.eps_pilot = eps_pilot
+    self.n_pilot_lambdas = n_pilot_lambdas
+    self.pilot_position = pilot_position
+    self.cv = cv
+    self.random_state = random_state
+    self.lambdas = lambdas
+    self.n_lambdas = n_lambdas
+    self.lambda_min_ratio = lambda_min_ratio
+    self.max_iter = max_iter
+    self.tol = tol
+    self.max_outer = max_outer
+    self.outer_tol = outer_tol
+    self.fit_intercept = fit_intercept
+    self.standardize = standardize
+    self.acceleration = acceleration
+
+
+class AdaptiveLogisticLassoPathCV(_AdaptiveLogisticPathCVBase):
+    """K-fold CV over an adaptive logistic-lasso path."""
+
+    _final_cls = LogisticMCPPathRegressor
+
+    def __init__(
+        self,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": 1e9}
+
+
+class AdaptiveLogisticMCPPathCV(_AdaptiveLogisticPathCVBase):
+    """K-fold CV over an adaptive logistic-MCP path."""
+
+    _final_cls = LogisticMCPPathRegressor
+
+    def __init__(
+        self,
+        gamma: float = 3.0,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        _adaptive_logistic_cv_init(
+            self, gamma, "gamma", eta=eta, eps_pilot=eps_pilot,
+            n_pilot_lambdas=n_pilot_lambdas, pilot_position=pilot_position,
+            cv=cv, random_state=random_state, lambdas=lambdas,
+            n_lambdas=n_lambdas, lambda_min_ratio=lambda_min_ratio,
+            max_iter=max_iter, tol=tol, max_outer=max_outer, outer_tol=outer_tol,
+            fit_intercept=fit_intercept, standardize=standardize,
+            acceleration=acceleration,
+        )
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": self.gamma}
+
+
+class AdaptiveLogisticSCADPathCV(_AdaptiveLogisticPathCVBase):
+    """K-fold CV over an adaptive logistic-SCAD path."""
+
+    _final_cls = LogisticSCADPathRegressor
+
+    def __init__(
+        self,
+        a: float = 3.7,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        _adaptive_logistic_cv_init(
+            self, a, "a", eta=eta, eps_pilot=eps_pilot,
+            n_pilot_lambdas=n_pilot_lambdas, pilot_position=pilot_position,
+            cv=cv, random_state=random_state, lambdas=lambdas,
+            n_lambdas=n_lambdas, lambda_min_ratio=lambda_min_ratio,
+            max_iter=max_iter, tol=tol, max_outer=max_outer, outer_tol=outer_tol,
+            fit_intercept=fit_intercept, standardize=standardize,
+            acceleration=acceleration,
+        )
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"a": self.a}
+
+
+# ---- Poisson -----------------------------------------------------------
+
+
+class _AdaptivePoissonPathBase(BaseEstimator, RegressorMixin):
+    """Adaptive Poisson path: same pattern as logistic but uses
+    `PoissonMCPPathRegressor`/`PoissonSCADPathRegressor` for the final."""
+
+    coefs_: NDArray[np.float64]
+    intercepts_: NDArray[np.float64]
+    lambdas_: NDArray[np.float64]
+    coef_pilot_: NDArray[np.float64]
+    weights_: NDArray[np.float64]
+    info_: dict[str, Any]
+    n_features_in_: int
+
+    _final_cls: Any
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def _make_final(self, weights):
+        kw: dict[str, Any] = dict(
+            lambdas=self.lambdas, n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio, weights=weights,
+            max_iter=self.max_iter, tol=self.tol,
+            fit_intercept=self.fit_intercept, standardize=self.standardize,
+            acceleration=self.acceleration,
+            max_outer=self.max_outer, outer_tol=self.outer_tol,
+        )
+        kw.update(self._extra_kwargs())
+        return self._final_cls(**kw)
+
+    def fit(self, x, y) -> "_AdaptivePoissonPathBase":
+        beta_pilot = _fit_pilot_poisson(
+            x, y, self.n_pilot_lambdas, self.pilot_position,
+            self.fit_intercept, self.standardize,
+        )
+        weights = _adaptive_weights(beta_pilot, self.eta, self.eps_pilot)
+        final = self._make_final(weights).fit(x, y)
+        self._final_estimator_ = final
+        self.coefs_ = final.coefs_
+        self.intercepts_ = final.intercepts_
+        self.lambdas_ = final.lambdas_
+        self.coef_pilot_ = beta_pilot
+        self.weights_ = weights
+        self.info_ = final.info_
+        self.n_features_in_ = final.n_features_in_
+        return self
+
+    def decision_function(self, x):
+        return self._final_estimator_.decision_function(x)
+
+    def predict(self, x):
+        return self._final_estimator_.predict(x)
+
+
+class AdaptivePoissonLassoPathRegressor(_AdaptivePoissonPathBase):
+    """Adaptive Poisson lasso."""
+
+    _final_cls = PoissonMCPPathRegressor
+
+    def __init__(
+        self,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": 1e9}
+
+
+class AdaptivePoissonMCPPathRegressor(_AdaptivePoissonPathBase):
+    """Adaptive Poisson MCP."""
+
+    _final_cls = PoissonMCPPathRegressor
+
+    def __init__(
+        self,
+        gamma: float = 3.0,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.gamma = gamma
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": self.gamma}
+
+
+class AdaptivePoissonSCADPathRegressor(_AdaptivePoissonPathBase):
+    """Adaptive Poisson SCAD."""
+
+    _final_cls = PoissonSCADPathRegressor
+
+    def __init__(
+        self,
+        a: float = 3.7,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.a = a
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"a": self.a}
+
+
+class _AdaptivePoissonPathCVBase(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
+    coef_pilot_: NDArray[np.float64]
+    weights_: NDArray[np.float64]
+    _final_cls: Any
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def _make_base_path(self, **overrides):
+        kw: dict[str, Any] = dict(
+            lambdas=self.lambdas, n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights_,
+            max_iter=self.max_iter, tol=self.tol, max_outer=self.max_outer,
+            outer_tol=self.outer_tol, fit_intercept=self.fit_intercept,
+            standardize=self.standardize, acceleration=self.acceleration,
+        )
+        kw.update(self._extra_kwargs())
+        kw.update(overrides)
+        return self._final_cls(**kw)
+
+    def fit(self, x, y):
+        beta_pilot = _fit_pilot_poisson(
+            x, y, self.n_pilot_lambdas, self.pilot_position,
+            self.fit_intercept, self.standardize,
+        )
+        self.coef_pilot_ = beta_pilot
+        self.weights_ = _adaptive_weights(beta_pilot, self.eta, self.eps_pilot)
+        return super().fit(x, y)
+
+
+class AdaptivePoissonLassoPathCV(_AdaptivePoissonPathCVBase):
+    """K-fold CV over an adaptive Poisson-lasso path."""
+
+    _final_cls = PoissonMCPPathRegressor
+
+    def __init__(
+        self,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": 1e9}
+
+
+class AdaptivePoissonMCPPathCV(_AdaptivePoissonPathCVBase):
+    """K-fold CV over an adaptive Poisson-MCP path."""
+
+    _final_cls = PoissonMCPPathRegressor
+
+    def __init__(
+        self,
+        gamma: float = 3.0,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.gamma = gamma
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": self.gamma}
+
+
+class AdaptivePoissonSCADPathCV(_AdaptivePoissonPathCVBase):
+    """K-fold CV over an adaptive Poisson-SCAD path."""
+
+    _final_cls = PoissonSCADPathRegressor
+
+    def __init__(
+        self,
+        a: float = 3.7,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.a = a
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"a": self.a}
+
+
+# ---- Cox (no intercept; fit(x, time, event)) ---------------------------
+
+
+class _AdaptiveCoxPathBase(BaseEstimator, RegressorMixin):
+    """Adaptive Cox path. `fit(x, time, event)`. No intercept (baseline
+    hazard absorbs). `predict(x) = decision_function(x) = Xβ` (Cox
+    prognostic index) per the existing `CoxPathRegressor` convention."""
+
+    coefs_: NDArray[np.float64]
+    lambdas_: NDArray[np.float64]
+    coef_pilot_: NDArray[np.float64]
+    weights_: NDArray[np.float64]
+    info_: dict[str, Any]
+    n_features_in_: int
+
+    _final_cls: Any
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def _make_final(self, weights):
+        kw: dict[str, Any] = dict(
+            lambdas=self.lambdas, n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio, weights=weights,
+            max_iter=self.max_iter, tol=self.tol,
+            standardize=self.standardize, acceleration=self.acceleration,
+            max_outer=self.max_outer, outer_tol=self.outer_tol,
+        )
+        kw.update(self._extra_kwargs())
+        return self._final_cls(**kw)
+
+    def fit(self, x, time, event) -> "_AdaptiveCoxPathBase":
+        beta_pilot = _fit_pilot_cox(
+            x, time, event, self.n_pilot_lambdas, self.pilot_position,
+            self.standardize,
+        )
+        weights = _adaptive_weights(beta_pilot, self.eta, self.eps_pilot)
+        final = self._make_final(weights).fit(x, time, event)
+        self._final_estimator_ = final
+        self.coefs_ = final.coefs_
+        self.lambdas_ = final.lambdas_
+        self.coef_pilot_ = beta_pilot
+        self.weights_ = weights
+        self.info_ = final.info_
+        self.n_features_in_ = final.n_features_in_
+        return self
+
+    def decision_function(self, x):
+        return self._final_estimator_.decision_function(x)
+
+    def predict(self, x):
+        return self._final_estimator_.predict(x)
+
+
+class AdaptiveCoxLassoPathRegressor(_AdaptiveCoxPathBase):
+    """Adaptive Cox lasso."""
+
+    _final_cls = CoxMCPPathRegressor
+
+    def __init__(
+        self,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": 1e9}
+
+
+class AdaptiveCoxMCPPathRegressor(_AdaptiveCoxPathBase):
+    """Adaptive Cox MCP."""
+
+    _final_cls = CoxMCPPathRegressor
+
+    def __init__(
+        self,
+        gamma: float = 3.0,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.gamma = gamma
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": self.gamma}
+
+
+class AdaptiveCoxSCADPathRegressor(_AdaptiveCoxPathBase):
+    """Adaptive Cox SCAD."""
+
+    _final_cls = CoxSCADPathRegressor
+
+    def __init__(
+        self,
+        a: float = 3.7,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.a = a
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"a": self.a}
+
+
+class _AdaptiveCoxPathCVBase(_CoxPathCVMixin, BaseEstimator):
+    """Cox adaptive CV: uses StratifiedKFold by event indicator (inherited
+    from `_CoxPathCVMixin`) and Harrell c-index scoring. Pilot weights
+    are computed once on full data."""
+
+    coef_pilot_: NDArray[np.float64]
+    weights_: NDArray[np.float64]
+    _final_cls: Any
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def _make_base_path(self, **overrides):
+        kw: dict[str, Any] = dict(
+            lambdas=self.lambdas, n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio, weights=self.weights_,
+            max_iter=self.max_iter, tol=self.tol, max_outer=self.max_outer,
+            outer_tol=self.outer_tol, standardize=self.standardize,
+            acceleration=self.acceleration,
+        )
+        kw.update(self._extra_kwargs())
+        kw.update(overrides)
+        return self._final_cls(**kw)
+
+    def fit(self, x, time, event):
+        beta_pilot = _fit_pilot_cox(
+            x, time, event, self.n_pilot_lambdas, self.pilot_position,
+            self.standardize,
+        )
+        self.coef_pilot_ = beta_pilot
+        self.weights_ = _adaptive_weights(beta_pilot, self.eta, self.eps_pilot)
+        return super().fit(x, time, event)
+
+
+class AdaptiveCoxLassoPathCV(_AdaptiveCoxPathCVBase):
+    """K-fold CV over an adaptive Cox-lasso path."""
+
+    _final_cls = CoxMCPPathRegressor
+
+    def __init__(
+        self,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": 1e9}
+
+
+class AdaptiveCoxMCPPathCV(_AdaptiveCoxPathCVBase):
+    """K-fold CV over an adaptive Cox-MCP path."""
+
+    _final_cls = CoxMCPPathRegressor
+
+    def __init__(
+        self,
+        gamma: float = 3.0,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.gamma = gamma
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": self.gamma}
+
+
+class AdaptiveCoxSCADPathCV(_AdaptiveCoxPathCVBase):
+    """K-fold CV over an adaptive Cox-SCAD path."""
+
+    _final_cls = CoxSCADPathRegressor
+
+    def __init__(
+        self,
+        a: float = 3.7,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.a = a
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"a": self.a}
+
+
 __all__ = [
     "AdaptiveLassoPathRegressor",
     "AdaptiveMCPPathRegressor",
@@ -1051,4 +2259,22 @@ __all__ = [
     "AdaptiveGroupMCPPathRegressor",
     "AdaptiveGroupLassoPathCV",
     "AdaptiveGroupMCPPathCV",
+    "AdaptiveLogisticLassoPathRegressor",
+    "AdaptiveLogisticMCPPathRegressor",
+    "AdaptiveLogisticSCADPathRegressor",
+    "AdaptiveLogisticLassoPathCV",
+    "AdaptiveLogisticMCPPathCV",
+    "AdaptiveLogisticSCADPathCV",
+    "AdaptivePoissonLassoPathRegressor",
+    "AdaptivePoissonMCPPathRegressor",
+    "AdaptivePoissonSCADPathRegressor",
+    "AdaptivePoissonLassoPathCV",
+    "AdaptivePoissonMCPPathCV",
+    "AdaptivePoissonSCADPathCV",
+    "AdaptiveCoxLassoPathRegressor",
+    "AdaptiveCoxMCPPathRegressor",
+    "AdaptiveCoxSCADPathRegressor",
+    "AdaptiveCoxLassoPathCV",
+    "AdaptiveCoxMCPPathCV",
+    "AdaptiveCoxSCADPathCV",
 ]

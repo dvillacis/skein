@@ -96,3 +96,79 @@ plain `GroupSCAD` is a small wiring task on its own).
 .. autoclass:: skein_glm.adaptive.AdaptiveGroupMCPPathCV
    :members:
 ```
+
+## Adaptive GLMs (Logistic, Poisson, Cox)
+
+Same recipe applied to GLM datafits. Pilot is the GLM's lasso path
+(e.g., `LogisticMCPPathRegressor(gamma=1e9)`); final is the user's
+chosen GLM-penalty path with adaptive weights. CV inherits the
+per-family scoring from the existing CV mixins (binomial deviance for
+logistic, Poisson deviance for Poisson, Harrell c-index for Cox), and
+Cox keeps its `fit(x, time, event)` signature with StratifiedKFold by
+event indicator.
+
+### Adaptive logistic — Path + CV
+
+```{eval-rst}
+.. autoclass:: skein_glm.adaptive.AdaptiveLogisticLassoPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveLogisticLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveLogisticMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveLogisticMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveLogisticSCADPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveLogisticSCADPathCV
+   :members:
+```
+
+### Adaptive Poisson — Path + CV
+
+```{eval-rst}
+.. autoclass:: skein_glm.adaptive.AdaptivePoissonLassoPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptivePoissonLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptivePoissonMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptivePoissonMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptivePoissonSCADPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptivePoissonSCADPathCV
+   :members:
+```
+
+### Adaptive Cox PH — Path + CV
+
+```{eval-rst}
+.. autoclass:: skein_glm.adaptive.AdaptiveCoxLassoPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveCoxLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveCoxMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveCoxMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveCoxSCADPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveCoxSCADPathCV
+   :members:
+```

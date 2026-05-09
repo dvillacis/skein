@@ -23,7 +23,7 @@ load-bearing piece; everything after stacks on top of it.
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **257 cargo + 233 pytest, all green.**
+Test count at this snapshot: **257 cargo + 243 pytest, all green.**
 
 ---
 
@@ -766,6 +766,17 @@ ordered by user demand and by what differentiates us.
 - **Fused lasso / generalized lasso**: 1D and graph-structured
   fusion. Solved via specialized prox (taut-string for 1D, ADMM for
   general). Lives behind `solver::fused`.
+- ✅ **Adaptive GLM {Lasso, MCP, SCAD}** (Logistic / Poisson / Cox):
+  three families × three penalties × {Path, PathCV} = **18 sklearn
+  classes**. Pilot is the GLM's lasso path (e.g.,
+  `LogisticMCPPathRegressor(gamma=1e9)`); final is the user's chosen
+  GLM-penalty path with adaptive weights. CV inherits the
+  per-family scoring (binomial / Poisson deviance / Cox c-index) and
+  splitter (KFold for logistic+Poisson, StratifiedKFold-by-event for
+  Cox) from the existing M5 CV mixins. Cox keeps its `fit(x, time,
+  event)` signature. 10 pytest cover support recovery, predict
+  shapes, dense ↔ sparse, no-intercept on Cox, predict ≡ decision_
+  function on Cox.
 - ✅ **Adaptive group {Lasso, MCP}** (LS, group two-stage): mirrors
   the scalar adaptive recipe with **per-group** weights
   `w_g = 1 / max(‖β_pilot[g]‖_2, ε)^η` derived from a plain

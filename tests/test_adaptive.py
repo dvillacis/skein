@@ -227,3 +227,140 @@ def test_adaptive_group_validation():
         skein_glm.AdaptiveGroupLassoPathRegressor(
             groups=groups, eps_pilot=0.0, n_lambdas=4
         ).fit(x, y)
+
+
+# =========================================================================
+# Adaptive GLM estimators (logistic / Poisson / Cox)
+# =========================================================================
+
+
+def _logistic_problem(seed: int = 0, n: int = 200, p: int = 8):
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((n, p))
+    eta = 0.8 * x[:, 0] - 0.6 * x[:, 2] + 0.5 * x[:, 4]
+    p_y = 1.0 / (1.0 + np.exp(-eta))
+    y = (rng.uniform(size=n) < p_y).astype(np.float64)
+    return x, y
+
+
+def _poisson_problem(seed: int = 0, n: int = 200, p: int = 8):
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((n, p))
+    eta = 0.4 * x[:, 0] - 0.3 * x[:, 2] + 0.5 * x[:, 4]
+    y = rng.poisson(np.exp(np.clip(eta, -3, 3))).astype(np.float64)
+    return x, y
+
+
+def _cox_problem(seed: int = 0, n: int = 200, p: int = 8):
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((n, p))
+    eta = 0.5 * x[:, 0] - 0.4 * x[:, 2]
+    time = rng.exponential(1.0 / np.exp(np.clip(eta, -3, 3)))
+    event = (rng.uniform(size=n) < 0.7).astype(np.float64)
+    return x, time, event
+
+
+def test_adaptive_logistic_lasso_recovers_support():
+    x, y = _logistic_problem(0, n=300)
+    m = skein_glm.AdaptiveLogisticLassoPathRegressor(
+        n_lambdas=15, lambda_min_ratio=1e-2
+    ).fit(x, y)
+    last = m.coefs_[-1]
+    # Active features 0, 2, 4 have substantial magnitude.
+    for j in [0, 2, 4]:
+        assert abs(last[j]) > 0.1
+    # Noise features should be near zero (large adaptive weights pin them).
+    for j in [1, 3, 5, 6, 7]:
+        assert abs(last[j]) < 0.5
+
+
+def test_adaptive_logistic_predict_proba_shape():
+    x, y = _logistic_problem(1, n=80)
+    m = skein_glm.AdaptiveLogisticMCPPathRegressor(
+        gamma=3.0, n_lambdas=8, lambda_min_ratio=1e-2
+    ).fit(x, y)
+    proba = m.predict_proba(x)
+    assert proba.shape == (x.shape[0], 8)
+    assert (proba >= 0).all() and (proba <= 1).all()
+
+
+def test_adaptive_logistic_path_cv_picks_lambda():
+    x, y = _logistic_problem(2, n=200)
+    cv = skein_glm.AdaptiveLogisticLassoPathCV(
+        cv=3, random_state=0, n_lambdas=10, lambda_min_ratio=1e-2
+    ).fit(x, y)
+    assert cv.coef_.shape == (8,)
+    assert cv.lambda_best_ in cv.lambdas_
+    assert cv.weights_.shape == (8,)
+
+
+def test_adaptive_poisson_path_smoke():
+    x, y = _poisson_problem(3, n=200)
+    m = skein_glm.AdaptivePoissonMCPPathRegressor(
+        gamma=3.0, n_lambdas=8, lambda_min_ratio=1e-2
+    ).fit(x, y)
+    assert m.coefs_.shape == (8, 8)
+    pred = m.predict(x)
+    assert pred.shape == (x.shape[0], 8)
+    assert (pred >= 0).all()  # Poisson means are non-negative
+
+
+def test_adaptive_poisson_path_cv_smoke():
+    x, y = _poisson_problem(4, n=200)
+    cv = skein_glm.AdaptivePoissonSCADPathCV(
+        a=3.7, cv=3, random_state=0, n_lambdas=8, lambda_min_ratio=1e-2
+    ).fit(x, y)
+    assert cv.coef_.shape == (8,)
+
+
+def test_adaptive_cox_path_no_intercept():
+    x, time, event = _cox_problem(5, n=200)
+    m = skein_glm.AdaptiveCoxLassoPathRegressor(
+        n_lambdas=8, lambda_min_ratio=1e-2
+    ).fit(x, time, event)
+    # Cox has no intercept attribute.
+    assert not hasattr(m, "intercepts_") or m.coefs_.shape == (8, 8)
+    assert m.coefs_.shape == (8, 8)
+    pred = m.predict(x)
+    assert pred.shape == (x.shape[0], 8)
+
+
+def test_adaptive_cox_path_cv_picks_lambda():
+    x, time, event = _cox_problem(6, n=200)
+    cv = skein_glm.AdaptiveCoxMCPPathCV(
+        gamma=3.0, cv=3, random_state=0, n_lambdas=8, lambda_min_ratio=1e-2
+    ).fit(x, time, event)
+    assert cv.coef_.shape == (8,)
+    # c-index higher-is-better, so cv_mean_scores_ are concordances in [0, 1].
+    finite = cv.cv_mean_scores_[np.isfinite(cv.cv_mean_scores_)]
+    assert ((finite >= 0) & (finite <= 1)).all()
+
+
+def test_adaptive_glm_validation():
+    x, y = _logistic_problem(7, n=40)
+    with pytest.raises(ValueError, match=r"eta must be > 0"):
+        skein_glm.AdaptiveLogisticLassoPathRegressor(eta=-1.0, n_lambdas=4).fit(x, y)
+
+
+def test_adaptive_logistic_dense_sparse_equivalence():
+    pytest.importorskip("scipy")
+    from scipy import sparse
+
+    x, y = _logistic_problem(8, n=80)
+    x_csc = sparse.csc_matrix(x)
+    m_d = skein_glm.AdaptiveLogisticLassoPathRegressor(
+        n_lambdas=8, lambda_min_ratio=1e-2,
+    ).fit(x, y)
+    m_s = skein_glm.AdaptiveLogisticLassoPathRegressor(
+        lambdas=m_d.lambdas_,
+    ).fit(x_csc, y)
+    np.testing.assert_allclose(m_d.coefs_, m_s.coefs_, atol=1e-3)
+    np.testing.assert_allclose(m_d.weights_, m_s.weights_, atol=1e-4)
+
+
+def test_adaptive_cox_scad_path_predict_eq_decision():
+    x, time, event = _cox_problem(9, n=80)
+    m = skein_glm.AdaptiveCoxSCADPathRegressor(
+        a=3.7, n_lambdas=8, lambda_min_ratio=1e-2
+    ).fit(x, time, event)
+    np.testing.assert_array_equal(m.predict(x), m.decision_function(x))
