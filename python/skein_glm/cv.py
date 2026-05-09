@@ -28,6 +28,7 @@ from skein_glm.estimators import (
     CoxSparseGroupLassoPathRegressor,
     CoxSparseGroupMCPPathRegressor,
     ElasticNetPathRegressor,
+    GroupElasticNetPathRegressor,
     GroupLassoPathRegressor,
     GroupMCPPathRegressor,
     LogisticGroupLassoPathRegressor,
@@ -390,6 +391,65 @@ class GroupLassoPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         )
         kw.update(overrides)
         return GroupLassoPathRegressor(**kw)
+
+
+class GroupElasticNetPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
+    """K-fold CV over a group elastic-net λ-path. Picks the λ
+    minimizing mean test MSE."""
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        alpha: float = 0.5,
+        *,
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+    ) -> None:
+        self.groups = groups
+        self.alpha = alpha
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+
+    def _make_base_path(self, **overrides) -> GroupElasticNetPathRegressor:
+        kw: dict[str, Any] = dict(
+            groups=self.groups,
+            alpha=self.alpha,
+            lambdas=self.lambdas,
+            n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio,
+            weights=self.weights,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            fit_intercept=self.fit_intercept,
+            standardize=self.standardize,
+            screening=self.screening,
+            acceleration=self.acceleration,
+            parallel=self.parallel,
+        )
+        kw.update(overrides)
+        return GroupElasticNetPathRegressor(**kw)
 
 
 class GroupMCPPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):

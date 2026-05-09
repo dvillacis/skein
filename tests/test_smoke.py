@@ -2403,6 +2403,142 @@ def test_elastic_net_rejects_alpha_out_of_range():
         skein.ElasticNetRegressor(lambda_=0.1, alpha=-0.1).fit(X, y)
 
 
+# ====================================================================
+# Group elastic net (M6.2)
+# ====================================================================
+
+
+def _group_problem(seed: int, n: int = 100, p: int = 12, group_size: int = 3):
+    rng = np.random.default_rng(seed)
+    X = rng.standard_normal((n, p))
+    true_beta = np.zeros(p)
+    # First two groups active.
+    true_beta[: 2 * group_size] = [1.5, -1.0, 0.7, 0.5, -0.8, 0.6][: 2 * group_size]
+    y = X @ true_beta + 0.1 * rng.standard_normal(n)
+    groups = np.repeat(np.arange(p // group_size), group_size).astype(np.int64)
+    return X, y, groups, true_beta
+
+
+def test_group_elastic_net_alpha_one_matches_group_lasso_path():
+    X, y, groups, _ = _group_problem(seed=41)
+    lambdas = np.array([0.5, 0.2, 0.1, 0.05, 0.02, 0.01], dtype=np.float64)
+    common = dict(
+        groups=groups, lambdas=lambdas, tol=1e-12, max_iter=20000,
+        screening="off", fit_intercept=True,
+    )
+    gen = skein.GroupElasticNetPathRegressor(alpha=1.0, **common).fit(X, y)
+    gl = skein.GroupLassoPathRegressor(**common).fit(X, y)
+    np.testing.assert_allclose(gen.coefs_, gl.coefs_, atol=1e-7)
+    np.testing.assert_allclose(gen.intercepts_, gl.intercepts_, atol=1e-7)
+
+
+def test_group_elastic_net_alpha_zero_matches_closed_form_block_ridge():
+    rng = np.random.default_rng(43)
+    n, p, gs = 60, 6, 2
+    X = rng.standard_normal((n, p))
+    y = X @ np.array([1.0, -1.5, 0.5, 0.0, 0.0, 0.0]) + 0.2 * rng.standard_normal(n)
+    groups = np.repeat(np.arange(p // gs), gs).astype(np.int64)
+
+    lam = 0.3
+    xtx = X.T @ X / n
+    A = xtx + lam * np.eye(p)
+    xty = X.T @ y / n
+    beta_closed = np.linalg.solve(A, xty)
+
+    model = skein.GroupElasticNetRegressor(
+        groups=groups, lambda_=lam, alpha=0.0,
+        fit_intercept=False, standardize=False,
+        tol=1e-12, max_iter=20000, screening="off",
+    ).fit(X, y)
+    np.testing.assert_allclose(model.coef_, beta_closed, atol=1e-7)
+
+
+def test_group_elastic_net_path_recovers_active_groups():
+    X, y, groups, true_beta = _group_problem(seed=47, n=200, p=15, group_size=3)
+    model = skein.GroupElasticNetPathRegressor(
+        groups=groups, alpha=0.5, n_lambdas=40, lambda_min_ratio=1e-3,
+        tol=1e-10, max_iter=10000, fit_intercept=True,
+    ).fit(X, y)
+    last = model.coefs_[-1]
+    for j in range(6):
+        if abs(true_beta[j]) > 0:
+            assert np.sign(last[j]) == np.sign(true_beta[j]), (
+                f"feature {j} sign mismatch: got {last[j]}"
+            )
+
+
+def test_group_elastic_net_path_dense_sparse_equivalence():
+    rng = np.random.default_rng(53)
+    n, p, gs = 80, 12, 3
+    X_dense = rng.standard_normal((n, p))
+    mask = rng.uniform(size=(n, p)) > 0.5
+    X_dense[mask] = 0.0
+    true_beta = np.zeros(p)
+    true_beta[:3] = [1.0, -1.5, 0.7]
+    y = X_dense @ true_beta + 0.1 * rng.standard_normal(n)
+    X_sparse = scipy_sparse.csc_matrix(X_dense)
+    groups = np.repeat(np.arange(p // gs), gs).astype(np.int64)
+
+    lambdas = np.array([0.5, 0.2, 0.08, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        groups=groups, alpha=0.5, lambdas=lambdas, tol=1e-12,
+        max_iter=20000, screening="off", fit_intercept=True,
+    )
+    dense = skein.GroupElasticNetPathRegressor(**common).fit(X_dense, y)
+    sparse = skein.GroupElasticNetPathRegressor(**common).fit(X_sparse, y)
+    np.testing.assert_allclose(dense.coefs_, sparse.coefs_, atol=1e-5)
+    np.testing.assert_allclose(dense.intercepts_, sparse.intercepts_, atol=1e-5)
+
+
+def test_group_elastic_net_path_with_standardize_dense_sparse_equivalence():
+    rng = np.random.default_rng(59)
+    n, p, gs = 60, 9, 3
+    X_dense = rng.standard_normal((n, p))
+    X_dense[:, 0] *= 30.0
+    mask = rng.uniform(size=(n, p)) > 0.5
+    X_dense[mask] = 0.0
+    y = (
+        X_dense @ np.array([0.05, 0.0, -1.5, 0.0, 0.0, 0.7, 0.0, 0.0, 0.0])
+        + 0.1 * rng.standard_normal(n)
+    )
+    X_sparse = scipy_sparse.csc_matrix(X_dense)
+    groups = np.repeat(np.arange(p // gs), gs).astype(np.int64)
+
+    lambdas = np.array([1.0, 0.3, 0.1, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        groups=groups, alpha=0.5, lambdas=lambdas, tol=1e-12,
+        max_iter=20000, screening="off", fit_intercept=True, standardize=True,
+    )
+    dense = skein.GroupElasticNetPathRegressor(**common).fit(X_dense, y)
+    sparse = skein.GroupElasticNetPathRegressor(**common).fit(X_sparse, y)
+    np.testing.assert_allclose(dense.coefs_, sparse.coefs_, atol=1e-5)
+    np.testing.assert_allclose(dense.intercepts_, sparse.intercepts_, atol=1e-5)
+
+
+def test_group_elastic_net_path_cv_picks_reasonable_lambda():
+    X, y, groups, _ = _group_problem(seed=61, n=200, p=15, group_size=3)
+    cv = skein.GroupElasticNetPathCV(
+        groups=groups, alpha=0.5, n_lambdas=30, cv=5,
+        tol=1e-10, max_iter=5000, random_state=0,
+    ).fit(X, y)
+    assert cv.lambda_best_ > 0
+    assert cv.coef_.shape == (X.shape[1],)
+    active = np.where(np.abs(cv.coef_) > 1e-3)[0].tolist()
+    assert any(j in active for j in range(3)), f"group 0 not selected: {active}"
+    assert any(j in active for j in range(3, 6)), f"group 1 not selected: {active}"
+
+
+def test_group_elastic_net_rejects_alpha_out_of_range():
+    rng = np.random.default_rng(67)
+    X = rng.standard_normal((40, 6))
+    y = rng.standard_normal(40)
+    groups = np.repeat(np.arange(3), 2).astype(np.int64)
+    with pytest.raises(ValueError, match="alpha must be in"):
+        skein.GroupElasticNetRegressor(groups=groups, lambda_=0.1, alpha=1.5).fit(X, y)
+    with pytest.raises(ValueError, match="alpha must be in"):
+        skein.GroupElasticNetRegressor(groups=groups, lambda_=0.1, alpha=-0.1).fit(X, y)
+
+
 def _split_into_chunks(x: np.ndarray, n_chunks: int):
     """Yield (start, end) row-index pairs for `n_chunks` roughly
     equal-sized splits."""

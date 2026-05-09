@@ -19,11 +19,11 @@ load-bearing piece; everything after stacks on top of it.
 | M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + M3.5 Cox PH Breslow (Rust + PyO3 + estimators) done; multinomial + Efron ties pending |
 | M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
-| M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net + sparse-group SCAD shell + bridge + overlapping group + fused + constrained variants pending |
+| M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; sparse-group SCAD shell + bridge + overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ | multi-response GLMs |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **214 cargo + 155 pytest, all green.**
+Test count at this snapshot: **231 cargo + 162 pytest, all green.**
 
 ---
 
@@ -680,9 +680,24 @@ ordered by user demand and by what differentiates us.
   high-γ, α=0 closed-form ridge, signal recovery, dense ↔
   sparse, dense ↔ sparse + standardize, CV picks reasonable λ,
   validates α ∈ [0, 1]).
-- **Group elastic net** (M6.2 pending) — same shape at the
-  block level. Mechanical port of M6.1 to the GroupPenalty
-  trait.
+- ✅ **M6.2 Group elastic net (scalar LS)**: convex per-group
+  penalty `α λ w_g ‖β_g‖₂ + (1-α) λ w_g ‖β_g‖₂² / 2`. Closed-
+  form block prox (`prox::group_elastic_net_prox`) — block soft-
+  threshold then per-block ridge shrinkage, derived from the
+  rotational symmetry of the mixed group-L2 + ridge objective.
+  `GroupPenalty::weights()` returns the L1-effective view `α·w_g`
+  so `block_lambda_max`, strong-rule, and KKT verification see
+  the right per-group active-set boundary. PyO3 entries
+  `solve_group_elastic_net_ls_path` (dense + sparse). Python: 3
+  estimators (`GroupElasticNetRegressor`,
+  `GroupElasticNetPathRegressor`, `GroupElasticNetPathCV`) with
+  full sparse + standardize support. Tests: 17 cargo (prox
+  identities at α=0/α=1, value, weights views, panic-on-bad-α,
+  prox-matches-group-lasso at α=1, solver-path equivalence to
+  GroupLasso at α=1, closed-form ridge match at α=0) + 7 pytest
+  (α=1 ↔ GroupLasso path, α=0 closed-form block ridge, signal
+  recovery, dense ↔ sparse, dense ↔ sparse + standardize, CV
+  picks both active groups, validates α ∈ [0, 1]).
 - **`SparseGroupSCAD` end-to-end** — the M2.7 surrogate helper exists;
   what's left is wiring through to a `SparseGroupSCADRegressor` (Rust
   trait + PyO3) for users who want it directly.

@@ -111,6 +111,29 @@ def solve_sparse_group_lasso_ls_path(
     NDArray[np.float64],
     dict,
 ]: ...
+def solve_group_elastic_net_ls_path(
+    x: NDArray[np.float64],
+    y: NDArray[np.float64],
+    groups: NDArray[np.int64],
+    *,
+    alpha: float = ...,
+    lambdas: NDArray[np.float64] | None = ...,
+    n_lambdas: int = ...,
+    lambda_min_ratio: float = ...,
+    weights: NDArray[np.float64] | None = ...,
+    max_iter: int = ...,
+    tol: float = ...,
+    screening: str = ...,
+    acceleration: int | None = ...,
+    parallel: bool = ...,
+    fit_intercept: bool = ...,
+    standardize_x: bool = ...,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    dict,
+]: ...
 def solve_group_mcp_ls_path(
     x: NDArray[np.float64],
     y: NDArray[np.float64],
@@ -630,6 +653,33 @@ def solve_group_mcp_ls_path_sparse(
     dict,
 ]: ...
 def solve_sparse_group_lasso_ls_path_sparse(
+    x_data: NDArray[np.float64],
+    x_indices: NDArray[np.int64],
+    x_indptr: NDArray[np.int64],
+    n_rows: int,
+    n_cols: int,
+    y: NDArray[np.float64],
+    groups: NDArray[np.int64],
+    *,
+    alpha: float = ...,
+    lambdas: NDArray[np.float64] | None = ...,
+    n_lambdas: int = ...,
+    lambda_min_ratio: float = ...,
+    weights: NDArray[np.float64] | None = ...,
+    max_iter: int = ...,
+    tol: float = ...,
+    screening: str = ...,
+    acceleration: int | None = ...,
+    parallel: bool = ...,
+    fit_intercept: bool = ...,
+    standardize_x: bool = ...,
+) -> tuple[
+    NDArray[np.float64],
+    NDArray[np.float64],
+    NDArray[np.float64],
+    dict,
+]: ...
+def solve_group_elastic_net_ls_path_sparse(
     x_data: NDArray[np.float64],
     x_indices: NDArray[np.int64],
     x_indptr: NDArray[np.int64],

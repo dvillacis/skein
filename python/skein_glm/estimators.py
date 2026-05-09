@@ -1449,6 +1449,126 @@ class SparseGroupLassoPathRegressor(_GroupPathBase):
         return self
 
 
+# ---- group elastic net (convex) ----------------------------------------
+
+
+class GroupElasticNetRegressor(_GroupSingleLambdaBase):
+    """Group elastic net at a single λ.
+
+    Convex per-group penalty `α λ w_g ‖β_g‖₂ + (1-α) λ w_g ‖β_g‖₂² / 2`.
+    `α = 1` reduces to plain group lasso; `α = 0` is per-block ridge.
+    """
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        lambda_: float = 0.1,
+        alpha: float = 0.5,
+        *,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+    ) -> None:
+        self.groups = groups
+        self.lambda_ = lambda_
+        self.alpha = alpha
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+
+    def fit(self, x, y: NDArray[np.float64]) -> "GroupElasticNetRegressor":
+        common, sparse_payload, n_features = _ls_group_dispatch_inputs(
+            self, x, y, self.groups, is_path=False,
+        )
+        common["alpha"] = self.alpha
+        if sparse_payload is not None:
+            data, indices, indptr, n_rows, n_cols, y_arr, groups_arr = sparse_payload
+            coefs, intercepts, _, info = _core.solve_group_elastic_net_ls_path_sparse(
+                data, indices, indptr, n_rows, n_cols, y_arr, groups_arr, **common,
+            )
+        else:
+            x_arr = common.pop("_x")
+            y_arr = common.pop("_y")
+            groups_arr = common.pop("_groups")
+            coefs, intercepts, _, info = _core.solve_group_elastic_net_ls_path(
+                x_arr, y_arr, groups_arr, **common,
+            )
+        self.coef_ = coefs[0]
+        self.intercept_ = float(intercepts[0])
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
+class GroupElasticNetPathRegressor(_GroupPathBase):
+    """Group elastic net along an entire λ-path with warm starts."""
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        alpha: float = 0.5,
+        *,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+    ) -> None:
+        self.groups = groups
+        self.alpha = alpha
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+
+    def fit(self, x, y: NDArray[np.float64]) -> "GroupElasticNetPathRegressor":
+        common, sparse_payload, n_features = _ls_group_dispatch_inputs(
+            self, x, y, self.groups, is_path=True,
+        )
+        common["alpha"] = self.alpha
+        if sparse_payload is not None:
+            data, indices, indptr, n_rows, n_cols, y_arr, groups_arr = sparse_payload
+            coefs, intercepts, lambdas_used, info = _core.solve_group_elastic_net_ls_path_sparse(
+                data, indices, indptr, n_rows, n_cols, y_arr, groups_arr, **common,
+            )
+        else:
+            x_arr = common.pop("_x")
+            y_arr = common.pop("_y")
+            groups_arr = common.pop("_groups")
+            coefs, intercepts, lambdas_used, info = _core.solve_group_elastic_net_ls_path(
+                x_arr, y_arr, groups_arr, **common,
+            )
+        self.coefs_ = coefs
+        self.intercepts_ = intercepts
+        self.lambdas_ = lambdas_used
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
 # ---- sparse-group MCP (LLA-wrapped) -------------------------------------
 
 
