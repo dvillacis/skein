@@ -61,6 +61,9 @@ for any analysis that picks λ post-hoc.
 .. autoclass:: skein_glm.estimators.GroupMCPRegressor
    :members:
 
+.. autoclass:: skein_glm.estimators.GroupSCADRegressor
+   :members:
+
 .. autoclass:: skein_glm.estimators.GroupElasticNetRegressor
    :members:
 
@@ -81,6 +84,9 @@ for any analysis that picks λ post-hoc.
    :members:
 
 .. autoclass:: skein_glm.estimators.GroupMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.GroupSCADPathRegressor
    :members:
 
 .. autoclass:: skein_glm.estimators.GroupElasticNetPathRegressor

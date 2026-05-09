@@ -1091,6 +1091,75 @@ fn solve_group_mcp_ls_path<'py>(
 
 #[pyfunction]
 #[pyo3(signature = (
+    x, y, groups, *, a=3.7,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, screening="strong", acceleration=Some(5),
+    parallel=false, fit_intercept=true, standardize_x=false,
+    max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_group_scad_ls_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    a: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    screening: &str,
+    acceleration: Option<usize>,
+    parallel: bool,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if a <= 2.0 {
+        return Err(PyValueError::new_err(format!(
+            "SCAD shape parameter `a` must be > 2; got {a}"
+        )));
+    }
+    let labels_owned = groups.as_array().to_owned();
+    let groups_obj = groups_from_labels(&labels_owned.to_vec())?;
+    let n_groups = groups_obj.n_groups();
+    let _ = groups_obj;
+
+    let base_weights = match &weights {
+        Some(w) => w.as_array().to_owned(),
+        None => ndarray::Array1::ones(n_groups),
+    };
+    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+        let w = surrogate_weights_group_scad(beta, g, lam, a, base_weights.view());
+        Box::new(GroupLasso::with_weights(lam, w))
+    };
+    build_block_path_lla_outputs(
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        make_inner,
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
     x, y, groups, *, gamma=3.0, alpha=0.5,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     coord_weights=None,
@@ -4961,6 +5030,87 @@ fn solve_group_mcp_ls_path_sparse<'py>(
 
     let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
         let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w_eff_for_lla.view());
+        Box::new(GroupLasso::with_weights(lam, w))
+    };
+
+    build_block_path_lla_outputs_sparse_ls(
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        make_inner,
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *, a=3.7,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, screening="strong", acceleration=Some(5),
+    parallel=false, fit_intercept=true, standardize_x=false,
+    max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_group_scad_ls_path_sparse<'py>(
+    py: Python<'py>,
+    x_data: PyReadonlyArray1<f64>,
+    x_indices: PyReadonlyArray1<i64>,
+    x_indptr: PyReadonlyArray1<i64>,
+    n_rows: usize,
+    n_cols: usize,
+    y: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    a: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    screening: &str,
+    acceleration: Option<usize>,
+    parallel: bool,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if a <= 2.0 {
+        return Err(PyValueError::new_err(format!(
+            "SCAD shape parameter `a` must be > 2; got {a}"
+        )));
+    }
+    let labels_owned = groups.as_array().to_owned();
+    let groups_obj = groups_from_labels(&labels_owned.to_vec())?;
+    let n_groups_user = groups_obj.n_groups();
+    let _ = groups_obj;
+
+    let base_weights_for_lla = match &weights {
+        Some(w) => w.as_array().to_owned(),
+        None => Array1::ones(n_groups_user),
+    };
+    let group_w_eff_for_lla =
+        build_sparse_group_weights(&Some(base_weights_for_lla), n_groups_user, fit_intercept);
+
+    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+        let w = surrogate_weights_group_scad(beta, g, lam, a, group_w_eff_for_lla.view());
         Box::new(GroupLasso::with_weights(lam, w))
     };
 
@@ -9547,6 +9697,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_group_lasso_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_elastic_net_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_mcp_ls_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_group_scad_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_sparse_group_lasso_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_sparse_group_mcp_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_sparse_group_scad_ls_path, m)?)?;
@@ -9581,6 +9732,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_group_lasso_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_elastic_net_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_mcp_ls_path_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_group_scad_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(
         solve_sparse_group_lasso_ls_path_sparse,
         m

@@ -33,6 +33,7 @@ from skein_glm.estimators import (
     GroupElasticNetPathRegressor,
     GroupLassoPathRegressor,
     GroupMCPPathRegressor,
+    GroupSCADPathRegressor,
     LogisticGroupLassoPathRegressor,
     LogisticGroupMCPPathRegressor,
     LogisticMCPPathRegressor,
@@ -591,6 +592,71 @@ class GroupMCPPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         )
         kw.update(overrides)
         return GroupMCPPathRegressor(**kw)
+
+
+class GroupSCADPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
+    """K-fold CV over a group SCAD λ-path (LLA outer loop). SCAD shape
+    `a > 2` (default 3.7)."""
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        a: float = 3.7,
+        *,
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.groups = groups
+        self.a = a
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def _make_base_path(self, **overrides) -> GroupSCADPathRegressor:
+        kw: dict[str, Any] = dict(
+            groups=self.groups,
+            a=self.a,
+            lambdas=self.lambdas,
+            n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio,
+            weights=self.weights,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            fit_intercept=self.fit_intercept,
+            standardize=self.standardize,
+            screening=self.screening,
+            acceleration=self.acceleration,
+            parallel=self.parallel,
+            max_outer=self.max_outer,
+            outer_tol=self.outer_tol,
+        )
+        kw.update(overrides)
+        return GroupSCADPathRegressor(**kw)
 
 
 class SparseGroupLassoPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):

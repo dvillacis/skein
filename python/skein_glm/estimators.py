@@ -1570,6 +1570,133 @@ class GroupMCPPathRegressor(_GroupPathBase):
         return self
 
 
+class GroupSCADRegressor(_GroupSingleLambdaBase):
+    """Group SCAD at a single λ, solved by LLA outer loop. SCAD shape
+    `a > 2` (default 3.7 — Fan & Li's recommendation)."""
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        lambda_: float = 0.1,
+        a: float = 3.7,
+        *,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.groups = groups
+        self.lambda_ = lambda_
+        self.a = a
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y: NDArray[np.float64]) -> "GroupSCADRegressor":
+        common, sparse_payload, n_features = _ls_group_dispatch_inputs(
+            self, x, y, self.groups, is_path=False,
+        )
+        common["a"] = self.a
+        common["max_outer"] = self.max_outer
+        common["outer_tol"] = self.outer_tol
+        if sparse_payload is not None:
+            data, indices, indptr, n_rows, n_cols, y_arr, groups_arr = sparse_payload
+            coefs, intercepts, _, info = _core.solve_group_scad_ls_path_sparse(
+                data, indices, indptr, n_rows, n_cols, y_arr, groups_arr, **common,
+            )
+        else:
+            x_arr = common.pop("_x")
+            y_arr = common.pop("_y")
+            groups_arr = common.pop("_groups")
+            coefs, intercepts, _, info = _core.solve_group_scad_ls_path(
+                x_arr, y_arr, groups_arr, **common,
+            )
+        self.coef_ = coefs[0]
+        self.intercept_ = float(intercepts[0])
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
+class GroupSCADPathRegressor(_GroupPathBase):
+    """Group SCAD along an entire λ-path; LLA at every λ. SCAD shape
+    `a > 2` (default 3.7)."""
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        a: float = 3.7,
+        *,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.groups = groups
+        self.a = a
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y: NDArray[np.float64]) -> "GroupSCADPathRegressor":
+        common, sparse_payload, n_features = _ls_group_dispatch_inputs(
+            self, x, y, self.groups, is_path=True,
+        )
+        common["a"] = self.a
+        common["max_outer"] = self.max_outer
+        common["outer_tol"] = self.outer_tol
+        if sparse_payload is not None:
+            data, indices, indptr, n_rows, n_cols, y_arr, groups_arr = sparse_payload
+            coefs, intercepts, lambdas_used, info = _core.solve_group_scad_ls_path_sparse(
+                data, indices, indptr, n_rows, n_cols, y_arr, groups_arr, **common,
+            )
+        else:
+            x_arr = common.pop("_x")
+            y_arr = common.pop("_y")
+            groups_arr = common.pop("_groups")
+            coefs, intercepts, lambdas_used, info = _core.solve_group_scad_ls_path(
+                x_arr, y_arr, groups_arr, **common,
+            )
+        self.coefs_ = coefs
+        self.intercepts_ = intercepts
+        self.lambdas_ = lambdas_used
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
 # ---- sparse-group lasso (convex) ----------------------------------------
 
 

@@ -44,6 +44,7 @@ from skein_glm.estimators import (
     CoxSCADPathRegressor,
     GroupLassoPathRegressor,
     GroupMCPPathRegressor,
+    GroupSCADPathRegressor,
     LogisticMCPPathRegressor,
     LogisticSCADPathRegressor,
     MCPPathRegressor,
@@ -831,6 +832,62 @@ class AdaptiveGroupMCPPathRegressor(_AdaptiveGroupPathBase):
         }
 
 
+class AdaptiveGroupSCADPathRegressor(_AdaptiveGroupPathBase):
+    """Adaptive group SCAD along a λ-path. Pilot is plain group lasso;
+    final is group SCAD at the user's `a` with per-group adaptive
+    weights `w_g = 1 / max(‖β_pilot[g]‖_2, ε)^η`."""
+
+    _final_cls = GroupSCADPathRegressor
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        a: float = 3.7,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+    ) -> None:
+        self.groups = groups
+        self.a = a
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {
+            "a": self.a,
+            "max_outer": self.max_outer,
+            "outer_tol": self.outer_tol,
+        }
+
+
 class _AdaptiveGroupPathCVBase(BaseEstimator, RegressorMixin):
     """K-fold CV for adaptive group estimators. Pilot weights computed
     once on full data; per-fold final fit uses fixed weights."""
@@ -1045,6 +1102,64 @@ class AdaptiveGroupMCPPathCV(_AdaptiveGroupPathCVBase):
     def _extra_kwargs(self) -> dict[str, Any]:
         return {
             "gamma": self.gamma,
+            "max_outer": self.max_outer,
+            "outer_tol": self.outer_tol,
+        }
+
+
+class AdaptiveGroupSCADPathCV(_AdaptiveGroupPathCVBase):
+    """K-fold CV over an adaptive-group-SCAD λ-path."""
+
+    _final_cls = GroupSCADPathRegressor
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        a: float = 3.7,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+    ) -> None:
+        self.groups = groups
+        self.a = a
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {
+            "a": self.a,
             "max_outer": self.max_outer,
             "outer_tol": self.outer_tol,
         }
@@ -2256,8 +2371,10 @@ __all__ = [
     "AdaptiveSCADPathCV",
     "AdaptiveGroupLassoPathRegressor",
     "AdaptiveGroupMCPPathRegressor",
+    "AdaptiveGroupSCADPathRegressor",
     "AdaptiveGroupLassoPathCV",
     "AdaptiveGroupMCPPathCV",
+    "AdaptiveGroupSCADPathCV",
     "AdaptiveLogisticLassoPathRegressor",
     "AdaptiveLogisticMCPPathRegressor",
     "AdaptiveLogisticSCADPathRegressor",

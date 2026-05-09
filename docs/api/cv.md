@@ -36,6 +36,9 @@ their non-CV counterparts.
 .. autoclass:: skein_glm.cv.GroupMCPPathCV
    :members:
 
+.. autoclass:: skein_glm.cv.GroupSCADPathCV
+   :members:
+
 .. autoclass:: skein_glm.cv.GroupElasticNetPathCV
    :members:
 

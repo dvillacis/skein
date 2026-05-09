@@ -95,6 +95,12 @@ plain `GroupSCAD` is a small wiring task on its own).
 
 .. autoclass:: skein_glm.adaptive.AdaptiveGroupMCPPathCV
    :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveGroupSCADPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveGroupSCADPathCV
+   :members:
 ```
 
 ## Adaptive GLMs (Logistic, Poisson, Cox)

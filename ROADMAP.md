@@ -23,7 +23,7 @@ load-bearing piece; everything after stacks on top of it.
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **265 cargo + 261 pytest, all green.**
+Test count at this snapshot: **265 cargo + 268 pytest, all green.**
 
 ---
 
@@ -807,6 +807,16 @@ ordered by user demand and by what differentiates us.
   event)` signature. 10 pytest cover support recovery, predict
   shapes, dense ↔ sparse, no-intercept on Cox, predict ≡ decision_
   function on Cox.
+- ✅ **Plain `GroupSCAD`** (LS): the previously-dangling prerequisite
+  to `AdaptiveGroupSCAD`. Surrogate helper `surrogate_weights_group_scad`
+  was already in place from M2.8; this commit adds the
+  `solve_group_scad_ls_path[_sparse]` PyO3 entries plus three sklearn
+  classes (`GroupSCADRegressor`, `GroupSCADPathRegressor`,
+  `GroupSCADPathCV`). Validates `a > 2`. Pytest covers signal recovery,
+  large-`a` ↔ GroupLasso parity, dense ↔ sparse, CV.
+- ✅ **Adaptive group SCAD** (LS): completes the M6.x adaptive group
+  family with `AdaptiveGroupSCAD{PathRegressor, PathCV}`. Pure Python
+  composition over the new `GroupSCADPathRegressor`.
 - ✅ **Adaptive group {Lasso, MCP}** (LS, group two-stage): mirrors
   the scalar adaptive recipe with **per-group** weights
   `w_g = 1 / max(‖β_pilot[g]‖_2, ε)^η` derived from a plain
