@@ -157,6 +157,10 @@ from skein_glm.cv import (
 )
 from skein_glm.ic import select_by_ic
 from skein_glm.adaptive import (
+    AdaptiveGroupLassoPathCV,
+    AdaptiveGroupLassoPathRegressor,
+    AdaptiveGroupMCPPathCV,
+    AdaptiveGroupMCPPathRegressor,
     AdaptiveLassoPathCV,
     AdaptiveLassoPathRegressor,
     AdaptiveMCPPathCV,
@@ -253,6 +257,8 @@ __all__ = [
     "AdaptiveLassoPathRegressor",
     "AdaptiveMCPPathRegressor",
     "AdaptiveSCADPathRegressor",
+    "AdaptiveGroupLassoPathRegressor",
+    "AdaptiveGroupMCPPathRegressor",
     "GroupElasticNetRegressor",
     "GroupElasticNetPathRegressor",
     "GroupLassoRegressor",
@@ -326,6 +332,8 @@ __all__ = [
     "AdaptiveLassoPathCV",
     "AdaptiveMCPPathCV",
     "AdaptiveSCADPathCV",
+    "AdaptiveGroupLassoPathCV",
+    "AdaptiveGroupMCPPathCV",
     "GroupElasticNetPathCV",
     "GroupLassoPathCV",
     "GroupMCPPathCV",

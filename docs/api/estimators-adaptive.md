@@ -70,3 +70,29 @@ re-fitting the pilot per-fold would be a different procedure.
 .. autoclass:: skein_glm.adaptive.AdaptiveSCADPathCV
    :members:
 ```
+
+## Adaptive group estimators
+
+For group penalties, the adaptive weights are **per-group**: pilot is
+plain group lasso, and the per-group L2 norm `‖β_pilot[g]‖_2` becomes
+the weight `w_g = 1 / max(‖β_pilot[g]‖_2, ε)^η`. Active groups receive
+small weights and are shrunk less; inactive groups get huge weights and
+stay zero.
+
+`GroupLasso` and `GroupMCP` are wired up; `GroupSCAD` is a separate
+prerequisite (only the `SparseGroup` variant of SCAD ships today —
+plain `GroupSCAD` is a small wiring task on its own).
+
+```{eval-rst}
+.. autoclass:: skein_glm.adaptive.AdaptiveGroupLassoPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveGroupLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveGroupMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.adaptive.AdaptiveGroupMCPPathCV
+   :members:
+```

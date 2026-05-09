@@ -144,3 +144,86 @@ def test_adaptive_lasso_predict_after_cv():
     ).fit(x, y)
     pred = cv.predict(x)
     assert pred.shape == (x.shape[0],)
+
+
+# =========================================================================
+# Adaptive group estimators
+# =========================================================================
+
+
+def _group_problem(seed: int = 0, n: int = 200):
+    """5 groups of 2 features each. Groups 0 and 2 are active."""
+    rng = np.random.default_rng(seed)
+    p = 10
+    x = rng.standard_normal((n, p))
+    true_beta = np.zeros(p)
+    true_beta[0] = 1.5
+    true_beta[1] = -0.8
+    true_beta[4] = 1.0
+    true_beta[5] = -0.6
+    y = x @ true_beta + 0.1 * rng.standard_normal(n)
+    groups = np.array([0, 0, 1, 1, 2, 2, 3, 3, 4, 4], dtype=np.int64)
+    return x, y, groups, true_beta
+
+
+def test_adaptive_group_lasso_recovers_active_groups():
+    x, y, groups, _ = _group_problem(0)
+    m = skein_glm.AdaptiveGroupLassoPathRegressor(
+        groups=groups, n_lambdas=15, lambda_min_ratio=1e-2
+    ).fit(x, y)
+    last = m.coefs_[-1]
+    # Groups 0, 2 active; 1, 3, 4 zero.
+    for j in [0, 1, 4, 5]:  # active
+        assert abs(last[j]) > 0.4
+    for j in [2, 3, 6, 7, 8, 9]:  # noise
+        assert abs(last[j]) < 0.1
+    # Per-group weights: 5 entries, 2 small (active groups), 3 huge.
+    assert m.weights_.shape == (5,)
+    assert np.sum(m.weights_ > 1e3) >= 3  # noise groups blown up
+
+
+def test_adaptive_group_mcp_path_cv_picks_active_groups():
+    x, y, groups, _ = _group_problem(1, n=300)
+    cv = skein_glm.AdaptiveGroupMCPPathCV(
+        groups=groups, gamma=3.0, cv=3, random_state=0, n_lambdas=12, lambda_min_ratio=1e-3
+    ).fit(x, y)
+    assert cv.coef_.shape == (10,)
+    for j in [0, 1, 4, 5]:
+        assert abs(cv.coef_[j]) > 0.3
+
+
+def test_adaptive_group_dense_sparse_equivalence():
+    pytest.importorskip("scipy")
+    from scipy import sparse
+
+    x, y, groups, _ = _group_problem(2, n=80)
+    x_csc = sparse.csc_matrix(x)
+    m_d = skein_glm.AdaptiveGroupLassoPathRegressor(
+        groups=groups, n_lambdas=8, lambda_min_ratio=1e-2,
+    ).fit(x, y)
+    m_s = skein_glm.AdaptiveGroupLassoPathRegressor(
+        groups=groups, lambdas=m_d.lambdas_,
+    ).fit(x_csc, y)
+    np.testing.assert_allclose(m_d.coefs_, m_s.coefs_, atol=1e-4)
+    np.testing.assert_allclose(m_d.weights_, m_s.weights_, atol=1e-4)
+
+
+def test_adaptive_group_predict_shape():
+    x, y, groups, _ = _group_problem(3, n=60)
+    m = skein_glm.AdaptiveGroupMCPPathRegressor(
+        groups=groups, gamma=3.0, n_lambdas=8, lambda_min_ratio=1e-2
+    ).fit(x, y)
+    pred = m.predict(x)
+    assert pred.shape == (x.shape[0], 8)
+
+
+def test_adaptive_group_validation():
+    x, y, groups, _ = _group_problem(4, n=40)
+    with pytest.raises(ValueError, match=r"eta must be > 0"):
+        skein_glm.AdaptiveGroupLassoPathRegressor(
+            groups=groups, eta=-1.0, n_lambdas=4
+        ).fit(x, y)
+    with pytest.raises(ValueError, match=r"eps_pilot must be > 0"):
+        skein_glm.AdaptiveGroupLassoPathRegressor(
+            groups=groups, eps_pilot=0.0, n_lambdas=4
+        ).fit(x, y)

@@ -23,7 +23,7 @@ load-bearing piece; everything after stacks on top of it.
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **257 cargo + 228 pytest, all green.**
+Test count at this snapshot: **257 cargo + 233 pytest, all green.**
 
 ---
 
@@ -766,6 +766,16 @@ ordered by user demand and by what differentiates us.
 - **Fused lasso / generalized lasso**: 1D and graph-structured
   fusion. Solved via specialized prox (taut-string for 1D, ADMM for
   general). Lives behind `solver::fused`.
+- ✅ **Adaptive group {Lasso, MCP}** (LS, group two-stage): mirrors
+  the scalar adaptive recipe with **per-group** weights
+  `w_g = 1 / max(‖β_pilot[g]‖_2, ε)^η` derived from a plain
+  `GroupLassoPathRegressor` pilot. 4 sklearn classes
+  (`AdaptiveGroupLassoPathRegressor`, `AdaptiveGroupMCPPathRegressor`,
+  plus the matching `*PathCV` wrappers). 5 pytest cover signal
+  recovery, CV active-group selection, dense↔sparse equivalence,
+  predict shape, and validation. `AdaptiveGroupSCAD` is deferred —
+  plain `GroupSCAD` (the prerequisite) needs a separate tiny wiring
+  task on top of the existing `surrogate_weights_group_scad`.
 - ✅ **Adaptive {Lasso, MCP, SCAD}** (scalar LS, two-stage):
   `python/skein_glm/adaptive.py` — six classes
   (`AdaptiveLassoPathRegressor`, `AdaptiveMCPPathRegressor`,

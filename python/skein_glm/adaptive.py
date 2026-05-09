@@ -36,6 +36,8 @@ from sklearn.model_selection import KFold
 
 from skein_glm import _core
 from skein_glm.estimators import (
+    GroupLassoPathRegressor,
+    GroupMCPPathRegressor,
     MCPPathRegressor,
     SCADPathRegressor,
     _is_sparse,
@@ -78,6 +80,33 @@ def _adaptive_weights(
     if not eps_pilot > 0.0:
         raise ValueError(f"eps_pilot must be > 0; got {eps_pilot}")
     mag = np.maximum(np.abs(beta_pilot), eps_pilot)
+    return 1.0 / np.power(mag, eta)
+
+
+def _adaptive_weights_per_group(
+    beta_pilot: NDArray[np.float64],
+    groups: NDArray[np.int64],
+    eta: float,
+    eps_pilot: float,
+) -> NDArray[np.float64]:
+    """Per-group `w_g = 1 / max(‖β_pilot[g]‖_2, ε)^η`. Returns one weight
+    per unique group label, in the same label order as the underlying
+    Rust `Groups` (ascending integer labels starting at 0)."""
+    if not eta > 0.0:
+        raise ValueError(f"eta must be > 0; got {eta}")
+    if not eps_pilot > 0.0:
+        raise ValueError(f"eps_pilot must be > 0; got {eps_pilot}")
+    groups_arr = np.asarray(groups, dtype=np.int64)
+    if groups_arr.shape[0] != beta_pilot.shape[0]:
+        raise ValueError(
+            f"groups length {groups_arr.shape[0]} does not match β length {beta_pilot.shape[0]}"
+        )
+    n_groups = int(groups_arr.max()) + 1
+    norms = np.zeros(n_groups, dtype=np.float64)
+    for g in range(n_groups):
+        mask = groups_arr == g
+        norms[g] = float(np.linalg.norm(beta_pilot[mask]))
+    mag = np.maximum(norms, eps_pilot)
     return 1.0 / np.power(mag, eta)
 
 
@@ -598,6 +627,419 @@ class AdaptiveSCADPathCV(_AdaptivePathCVBase):
         return {"a": self.a}
 
 
+# =========================================================================
+# Adaptive group estimators (LS only; pilot is GroupLassoPathRegressor)
+# =========================================================================
+
+
+def _fit_group_pilot(
+    x,
+    y,
+    groups: NDArray[np.int64],
+    n_pilot_lambdas: int,
+    pilot_position,
+    fit_intercept: bool,
+    standardize: bool,
+) -> NDArray[np.float64]:
+    """Run a plain group lasso path on `(X, y)` and return β at the
+    resolved `pilot_position`."""
+    pilot = GroupLassoPathRegressor(
+        groups=groups,
+        n_lambdas=n_pilot_lambdas,
+        lambda_min_ratio=1e-3,
+        fit_intercept=fit_intercept,
+        standardize=standardize,
+    ).fit(x, y)
+    idx = _validate_pilot_position(pilot_position, len(pilot.lambdas_))
+    return pilot.coefs_[idx].copy()
+
+
+class _AdaptiveGroupPathBase(BaseEstimator, RegressorMixin):
+    """Common scaffold for adaptive group-penalty path estimators.
+    Subclasses set `_final_cls` and `_extra_kwargs()` for penalty params."""
+
+    coefs_: NDArray[np.float64]
+    intercepts_: NDArray[np.float64]
+    lambdas_: NDArray[np.float64]
+    coef_pilot_: NDArray[np.float64]
+    weights_: NDArray[np.float64]
+    info_: dict[str, Any]
+    n_features_in_: int
+
+    _final_cls: Any
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def _make_final(self, weights: NDArray[np.float64]):
+        kw: dict[str, Any] = dict(
+            groups=self.groups,  # type: ignore[attr-defined]
+            lambdas=self.lambdas,  # type: ignore[attr-defined]
+            n_lambdas=self.n_lambdas,  # type: ignore[attr-defined]
+            lambda_min_ratio=self.lambda_min_ratio,  # type: ignore[attr-defined]
+            weights=weights,
+            max_iter=self.max_iter,  # type: ignore[attr-defined]
+            tol=self.tol,  # type: ignore[attr-defined]
+            fit_intercept=self.fit_intercept,  # type: ignore[attr-defined]
+            standardize=self.standardize,  # type: ignore[attr-defined]
+            screening=self.screening,  # type: ignore[attr-defined]
+            acceleration=self.acceleration,  # type: ignore[attr-defined]
+            parallel=self.parallel,  # type: ignore[attr-defined]
+        )
+        kw.update(self._extra_kwargs())
+        return self._final_cls(**kw)
+
+    def fit(self, x, y) -> "_AdaptiveGroupPathBase":
+        beta_pilot = _fit_group_pilot(
+            x,
+            y,
+            self.groups,  # type: ignore[attr-defined]
+            self.n_pilot_lambdas,  # type: ignore[attr-defined]
+            self.pilot_position,  # type: ignore[attr-defined]
+            self.fit_intercept,  # type: ignore[attr-defined]
+            self.standardize,  # type: ignore[attr-defined]
+        )
+        weights = _adaptive_weights_per_group(
+            beta_pilot,
+            self.groups,  # type: ignore[attr-defined]
+            self.eta,  # type: ignore[attr-defined]
+            self.eps_pilot,  # type: ignore[attr-defined]
+        )
+        final = self._make_final(weights).fit(x, y)
+        self.coefs_ = final.coefs_
+        self.intercepts_ = final.intercepts_
+        self.lambdas_ = final.lambdas_
+        self.coef_pilot_ = beta_pilot
+        self.weights_ = weights
+        self.info_ = final.info_
+        self.n_features_in_ = final.n_features_in_
+        return self
+
+    def predict(self, x) -> NDArray[np.float64]:
+        if _is_sparse(x):
+            return np.asarray(x @ self.coefs_.T) + self.intercepts_[None, :]
+        x = np.ascontiguousarray(x, dtype=np.float64)
+        return x @ self.coefs_.T + self.intercepts_[None, :]
+
+
+class AdaptiveGroupLassoPathRegressor(_AdaptiveGroupPathBase):
+    """Adaptive group lasso along a λ-path. Pilot is plain group lasso;
+    final is also group lasso with per-group inverse-norm weights
+    `w_g = 1 / max(‖β_pilot[g]‖_2, ε)^η`."""
+
+    _final_cls = GroupLassoPathRegressor
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+    ) -> None:
+        self.groups = groups
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+
+
+class AdaptiveGroupMCPPathRegressor(_AdaptiveGroupPathBase):
+    """Adaptive group MCP along a λ-path. Pilot is plain group lasso;
+    final is group MCP at the user's `gamma` with per-group adaptive
+    weights."""
+
+    _final_cls = GroupMCPPathRegressor
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        gamma: float = 3.0,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+    ) -> None:
+        self.groups = groups
+        self.gamma = gamma
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {
+            "gamma": self.gamma,
+            "max_outer": self.max_outer,
+            "outer_tol": self.outer_tol,
+        }
+
+
+class _AdaptiveGroupPathCVBase(BaseEstimator, RegressorMixin):
+    """K-fold CV for adaptive group estimators. Pilot weights computed
+    once on full data; per-fold final fit uses fixed weights."""
+
+    coef_: NDArray[np.float64]
+    intercept_: float
+    coef_pilot_: NDArray[np.float64]
+    weights_: NDArray[np.float64]
+    cv_scores_: NDArray[np.float64]
+    cv_mean_scores_: NDArray[np.float64]
+    cv_std_scores_: NDArray[np.float64]
+    lambdas_: NDArray[np.float64]
+    lambda_best_: float
+    info_: dict[str, Any]
+    n_features_in_: int
+
+    _final_cls: Any
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def _make_final(self, weights: NDArray[np.float64], **overrides):
+        kw: dict[str, Any] = dict(
+            groups=self.groups,  # type: ignore[attr-defined]
+            lambdas=self.lambdas,  # type: ignore[attr-defined]
+            n_lambdas=self.n_lambdas,  # type: ignore[attr-defined]
+            lambda_min_ratio=self.lambda_min_ratio,  # type: ignore[attr-defined]
+            weights=weights,
+            max_iter=self.max_iter,  # type: ignore[attr-defined]
+            tol=self.tol,  # type: ignore[attr-defined]
+            fit_intercept=self.fit_intercept,  # type: ignore[attr-defined]
+            standardize=self.standardize,  # type: ignore[attr-defined]
+            screening=self.screening,  # type: ignore[attr-defined]
+            acceleration=self.acceleration,  # type: ignore[attr-defined]
+            parallel=self.parallel,  # type: ignore[attr-defined]
+        )
+        kw.update(self._extra_kwargs())
+        kw.update(overrides)
+        return self._final_cls(**kw)
+
+    def fit(self, x, y) -> "_AdaptiveGroupPathCVBase":
+        beta_pilot = _fit_group_pilot(
+            x, y,
+            self.groups,  # type: ignore[attr-defined]
+            self.n_pilot_lambdas,  # type: ignore[attr-defined]
+            self.pilot_position,  # type: ignore[attr-defined]
+            self.fit_intercept,  # type: ignore[attr-defined]
+            self.standardize,  # type: ignore[attr-defined]
+        )
+        weights = _adaptive_weights_per_group(
+            beta_pilot,
+            self.groups,  # type: ignore[attr-defined]
+            self.eta,  # type: ignore[attr-defined]
+            self.eps_pilot,  # type: ignore[attr-defined]
+        )
+
+        full = self._make_final(weights).fit(x, y)
+        lambdas = full.lambdas_
+
+        y_arr = np.ascontiguousarray(y, dtype=np.float64)
+        if _is_sparse(x):
+            from scipy import sparse  # type: ignore[import-untyped]
+            x_for_indexing = x.tocsr() if not sparse.isspmatrix_csr(x) else x
+        else:
+            x_for_indexing = np.ascontiguousarray(x, dtype=np.float64)
+
+        cv = self.cv  # type: ignore[attr-defined]
+        random_state = self.random_state  # type: ignore[attr-defined]
+        if isinstance(cv, int):
+            splitter = KFold(n_splits=cv, shuffle=True, random_state=random_state)
+        else:
+            splitter = cv
+
+        n_lambdas = lambdas.shape[0]
+        n = y_arr.shape[0]
+        split_input = np.zeros((n, 1)) if _is_sparse(x) else x_for_indexing
+        scores = np.full((splitter.get_n_splits(split_input), n_lambdas), np.nan)
+
+        for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(split_input)):
+            x_tr = x_for_indexing[train_idx]
+            x_te = x_for_indexing[test_idx]
+            y_tr = y_arr[train_idx]
+            y_te = y_arr[test_idx]
+            fold = self._make_final(weights, lambdas=lambdas).fit(x_tr, y_tr)
+            for lam_idx in range(n_lambdas):
+                pred = x_te @ fold.coefs_[lam_idx] + fold.intercepts_[lam_idx]
+                if hasattr(pred, "toarray"):
+                    pred = pred.toarray()
+                pred = np.asarray(pred).ravel()
+                diff = y_te - pred
+                scores[fold_idx, lam_idx] = float(np.mean(diff * diff))
+
+        self.cv_scores_ = scores
+        self.cv_mean_scores_ = np.nanmean(scores, axis=0)
+        self.cv_std_scores_ = np.nanstd(scores, axis=0)
+        best = int(np.argmin(self.cv_mean_scores_))
+        self.lambdas_ = lambdas
+        self.lambda_best_ = float(lambdas[best])
+        self.coef_ = full.coefs_[best]
+        self.intercept_ = float(full.intercepts_[best])
+        self.coef_pilot_ = beta_pilot
+        self.weights_ = weights
+        self.info_ = full.info_
+        self.n_features_in_ = full.n_features_in_
+        return self
+
+    def predict(self, x) -> NDArray[np.float64]:
+        if _is_sparse(x):
+            pred = x @ self.coef_
+            if hasattr(pred, "toarray"):
+                pred = pred.toarray()
+            return np.asarray(pred) + self.intercept_
+        x = np.ascontiguousarray(x, dtype=np.float64)
+        return x @ self.coef_ + self.intercept_
+
+
+class AdaptiveGroupLassoPathCV(_AdaptiveGroupPathCVBase):
+    """K-fold CV over an adaptive-group-lasso λ-path."""
+
+    _final_cls = GroupLassoPathRegressor
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+    ) -> None:
+        self.groups = groups
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+
+
+class AdaptiveGroupMCPPathCV(_AdaptiveGroupPathCVBase):
+    """K-fold CV over an adaptive-group-MCP λ-path."""
+
+    _final_cls = GroupMCPPathRegressor
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        gamma: float = 3.0,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+        parallel: bool = False,
+    ) -> None:
+        self.groups = groups
+        self.gamma = gamma
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+        self.parallel = parallel
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {
+            "gamma": self.gamma,
+            "max_outer": self.max_outer,
+            "outer_tol": self.outer_tol,
+        }
+
+
 __all__ = [
     "AdaptiveLassoPathRegressor",
     "AdaptiveMCPPathRegressor",
@@ -605,4 +1047,8 @@ __all__ = [
     "AdaptiveLassoPathCV",
     "AdaptiveMCPPathCV",
     "AdaptiveSCADPathCV",
+    "AdaptiveGroupLassoPathRegressor",
+    "AdaptiveGroupMCPPathRegressor",
+    "AdaptiveGroupLassoPathCV",
+    "AdaptiveGroupMCPPathCV",
 ]
