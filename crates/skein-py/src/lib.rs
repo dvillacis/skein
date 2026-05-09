@@ -34,8 +34,9 @@ use skein_core::{
     penalty::{ElasticNet, GroupElasticNet, GroupLasso, GroupPenalty, Mcp, Scad, SparseGroupLasso},
     solver::{
         cd_solve, prox_newton_block_solve_path, prox_newton_solve_path, solve_block_path,
-        solve_block_path_lla, solve_path, surrogate_sparse_group_mcp, surrogate_weights_group_mcp,
-        surrogate_weights_group_scad, BlockPathConfig, CdConfig, PathConfig, Screening,
+        solve_block_path_lla, solve_path, surrogate_sparse_group_mcp, surrogate_sparse_group_scad,
+        surrogate_weights_group_mcp, surrogate_weights_group_scad, BlockPathConfig, CdConfig,
+        PathConfig, Screening,
     },
     standardize::{
         destandardize_path, rescale_weights_for_standardize, standardize, StandardizeConfig,
@@ -880,6 +881,106 @@ fn solve_sparse_group_mcp_ls_path<'py>(
             g,
             lam,
             gamma,
+            alpha,
+            base_group.view(),
+            base_coord.view(),
+        );
+        Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+    };
+    build_block_path_lla_outputs(
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        make_inner,
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, groups, *, a=3.7, alpha=0.5,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    coord_weights=None,
+    max_iter=100, tol=1e-6, screening="strong", acceleration=Some(5),
+    parallel=false, fit_intercept=true, standardize_x=false,
+    max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_sparse_group_scad_ls_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    a: f64,
+    alpha: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    coord_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    screening: &str,
+    acceleration: Option<usize>,
+    parallel: bool,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if a <= 2.0 {
+        return Err(PyValueError::new_err(format!(
+            "SCAD shape parameter `a` must be > 2; got {a}"
+        )));
+    }
+    let labels_owned = groups.as_array().to_owned();
+    let groups_obj = groups_from_labels(&labels_owned.to_vec())?;
+    let n_groups = groups_obj.n_groups();
+    let p = x.as_array().ncols();
+
+    let base_group = match &weights {
+        Some(w) => w.as_array().to_owned(),
+        None => ndarray::Array1::ones(n_groups),
+    };
+    let base_coord = match &coord_weights {
+        Some(w) => w.as_array().to_owned(),
+        None => ndarray::Array1::ones(p),
+    };
+    if base_group.len() != n_groups {
+        return Err(PyValueError::new_err(format!(
+            "weights length {} does not match n_groups {}",
+            base_group.len(),
+            n_groups
+        )));
+    }
+    if base_coord.len() != p {
+        return Err(PyValueError::new_err(format!(
+            "coord_weights length {} does not match n_features {}",
+            base_coord.len(),
+            p
+        )));
+    }
+    let _ = groups_obj;
+
+    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+        let (gw, cw) = surrogate_sparse_group_scad(
+            beta,
+            g,
+            lam,
+            a,
             alpha,
             base_group.view(),
             base_coord.view(),
@@ -2292,6 +2393,90 @@ fn solve_logistic_sparse_group_mcp_path<'py>(
     )
 }
 
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, groups, *, a=3.7, alpha=0.5,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
+    weights=None, coord_weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_logistic_sparse_group_scad_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    a: f64,
+    alpha: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    coord_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if a <= 2.0 {
+        return Err(PyValueError::new_err(format!(
+            "SCAD shape parameter `a` must be > 2; got {a}"
+        )));
+    }
+    let p_user = x.as_array().ncols();
+    let user_coord = match &coord_weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != p_user {
+                return Err(PyValueError::new_err(format!(
+                    "coord_weights length {} does not match n_features {}",
+                    arr.len(),
+                    p_user
+                )));
+            }
+            Some(arr)
+        }
+        None => None,
+    };
+    let coord_w_eff = build_logistic_coord_weights(&user_coord, p_user, fit_intercept);
+
+    build_glm_block_path_outputs(
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        validate_y_binary,
+        |y_arr| Box::new(BinomialLogit::new(y_arr)),
+        move |beta, g, lam, group_w| {
+            let (gw, cw) = surrogate_sparse_group_scad(
+                beta,
+                g,
+                lam,
+                a,
+                alpha,
+                group_w.view(),
+                coord_w_eff.view(),
+            );
+            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+        },
+    )
+}
+
 // ---------------------------------------------------------------------
 // Poisson regression (log link) via prox-Newton (M3.4)
 // ---------------------------------------------------------------------
@@ -2606,6 +2791,90 @@ fn solve_poisson_sparse_group_mcp_path<'py>(
                 g,
                 lam,
                 gamma,
+                alpha,
+                group_w.view(),
+                coord_w_eff.view(),
+            );
+            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+        },
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, groups, *, a=3.7, alpha=0.5,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
+    weights=None, coord_weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_poisson_sparse_group_scad_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    a: f64,
+    alpha: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    coord_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if a <= 2.0 {
+        return Err(PyValueError::new_err(format!(
+            "SCAD shape parameter `a` must be > 2; got {a}"
+        )));
+    }
+    let p_user = x.as_array().ncols();
+    let user_coord = match &coord_weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != p_user {
+                return Err(PyValueError::new_err(format!(
+                    "coord_weights length {} does not match n_features {}",
+                    arr.len(),
+                    p_user
+                )));
+            }
+            Some(arr)
+        }
+        None => None,
+    };
+    let coord_w_eff = build_logistic_coord_weights(&user_coord, p_user, fit_intercept);
+
+    build_glm_block_path_outputs(
+        py,
+        x,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        validate_y_nonneg,
+        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        move |beta, g, lam, group_w| {
+            let (gw, cw) = surrogate_sparse_group_scad(
+                beta,
+                g,
+                lam,
+                a,
                 alpha,
                 group_w.view(),
                 coord_w_eff.view(),
@@ -3232,6 +3501,87 @@ fn solve_cox_sparse_group_mcp_path<'py>(
                 g,
                 lam,
                 gamma,
+                alpha,
+                group_w.view(),
+                coord_w.view(),
+            );
+            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+        },
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x, time, event, groups, *, a=3.7, alpha=0.5,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
+    weights=None, coord_weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_cox_sparse_group_scad_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    time: PyReadonlyArray1<f64>,
+    event: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    a: f64,
+    alpha: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    coord_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if a <= 2.0 {
+        return Err(PyValueError::new_err(format!(
+            "SCAD shape parameter `a` must be > 2; got {a}"
+        )));
+    }
+    let p = x.as_array().ncols();
+    let coord_w = match &coord_weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != p {
+                return Err(PyValueError::new_err(format!(
+                    "coord_weights length {} does not match n_features {}",
+                    arr.len(),
+                    p
+                )));
+            }
+            arr
+        }
+        None => Array1::ones(p),
+    };
+
+    build_cox_block_path_outputs(
+        py,
+        x,
+        time,
+        event,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        move |beta, g, lam, group_w| {
+            let (gw, cw) = surrogate_sparse_group_scad(
+                beta,
+                g,
+                lam,
+                a,
                 alpha,
                 group_w.view(),
                 coord_w.view(),
@@ -4344,6 +4694,113 @@ fn solve_sparse_group_mcp_ls_path_sparse<'py>(
             g,
             lam,
             gamma,
+            alpha,
+            group_w_eff.view(),
+            coord_w_eff.view(),
+        );
+        Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+    };
+
+    build_block_path_lla_outputs_sparse_ls(
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        make_inner,
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *,
+    a=3.7, alpha=0.5,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    coord_weights=None,
+    max_iter=100, tol=1e-6, screening="strong", acceleration=Some(5),
+    parallel=false, fit_intercept=true, standardize_x=false,
+    max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_sparse_group_scad_ls_path_sparse<'py>(
+    py: Python<'py>,
+    x_data: PyReadonlyArray1<f64>,
+    x_indices: PyReadonlyArray1<i64>,
+    x_indptr: PyReadonlyArray1<i64>,
+    n_rows: usize,
+    n_cols: usize,
+    y: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    a: f64,
+    alpha: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    coord_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    screening: &str,
+    acceleration: Option<usize>,
+    parallel: bool,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if a <= 2.0 {
+        return Err(PyValueError::new_err(format!(
+            "SCAD shape parameter `a` must be > 2; got {a}"
+        )));
+    }
+    let labels_owned = groups.as_array().to_owned();
+    let groups_obj = groups_from_labels(&labels_owned.to_vec())?;
+    let n_groups_user = groups_obj.n_groups();
+    let _ = groups_obj;
+
+    let base_group = match &weights {
+        Some(w) => w.as_array().to_owned(),
+        None => Array1::ones(n_groups_user),
+    };
+    let user_coord = match &coord_weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != n_cols {
+                return Err(PyValueError::new_err(format!(
+                    "coord_weights length {} does not match n_features {}",
+                    arr.len(),
+                    n_cols
+                )));
+            }
+            Some(arr)
+        }
+        None => None,
+    };
+    let group_w_eff = build_sparse_group_weights(&Some(base_group), n_groups_user, fit_intercept);
+    let coord_w_eff = build_sparse_coord_weights(&user_coord, n_cols, fit_intercept);
+
+    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+        let (gw, cw) = surrogate_sparse_group_scad(
+            beta,
+            g,
+            lam,
+            a,
             alpha,
             group_w_eff.view(),
             coord_w_eff.view(),
@@ -6897,6 +7354,98 @@ fn solve_logistic_sparse_group_mcp_path_sparse<'py>(
     )
 }
 
+#[pyfunction]
+#[pyo3(signature = (
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *,
+    a=3.7, alpha=0.5,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
+    weights=None, coord_weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_logistic_sparse_group_scad_path_sparse<'py>(
+    py: Python<'py>,
+    x_data: PyReadonlyArray1<f64>,
+    x_indices: PyReadonlyArray1<i64>,
+    x_indptr: PyReadonlyArray1<i64>,
+    n_rows: usize,
+    n_cols: usize,
+    y: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    a: f64,
+    alpha: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    coord_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if a <= 2.0 {
+        return Err(PyValueError::new_err(format!(
+            "SCAD shape parameter `a` must be > 2; got {a}"
+        )));
+    }
+    let user_coord = match &coord_weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != n_cols {
+                return Err(PyValueError::new_err(format!(
+                    "coord_weights length {} does not match n_features {}",
+                    arr.len(),
+                    n_cols
+                )));
+            }
+            Some(arr)
+        }
+        None => None,
+    };
+    let coord_w_eff = build_sparse_coord_weights(&user_coord, n_cols, fit_intercept);
+
+    build_glm_block_path_outputs_sparse(
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        validate_y_binary,
+        |y_arr| Box::new(BinomialLogit::new(y_arr)),
+        move |beta, g, lam, group_w| {
+            let (gw, cw) = surrogate_sparse_group_scad(
+                beta,
+                g,
+                lam,
+                a,
+                alpha,
+                group_w.view(),
+                coord_w_eff.view(),
+            );
+            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+        },
+    )
+}
+
 // ---- Sparse Poisson PyO3 wrappers (M4.2c) -------------------------------
 
 #[pyfunction]
@@ -7266,6 +7815,98 @@ fn solve_poisson_sparse_group_mcp_path_sparse<'py>(
     )
 }
 
+#[pyfunction]
+#[pyo3(signature = (
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *,
+    a=3.7, alpha=0.5,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
+    weights=None, coord_weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_poisson_sparse_group_scad_path_sparse<'py>(
+    py: Python<'py>,
+    x_data: PyReadonlyArray1<f64>,
+    x_indices: PyReadonlyArray1<i64>,
+    x_indptr: PyReadonlyArray1<i64>,
+    n_rows: usize,
+    n_cols: usize,
+    y: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    a: f64,
+    alpha: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    coord_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if a <= 2.0 {
+        return Err(PyValueError::new_err(format!(
+            "SCAD shape parameter `a` must be > 2; got {a}"
+        )));
+    }
+    let user_coord = match &coord_weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != n_cols {
+                return Err(PyValueError::new_err(format!(
+                    "coord_weights length {} does not match n_features {}",
+                    arr.len(),
+                    n_cols
+                )));
+            }
+            Some(arr)
+        }
+        None => None,
+    };
+    let coord_w_eff = build_sparse_coord_weights(&user_coord, n_cols, fit_intercept);
+
+    build_glm_block_path_outputs_sparse(
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        validate_y_nonneg,
+        |y_arr| Box::new(PoissonLog::new(y_arr)),
+        move |beta, g, lam, group_w| {
+            let (gw, cw) = surrogate_sparse_group_scad(
+                beta,
+                g,
+                lam,
+                a,
+                alpha,
+                group_w.view(),
+                coord_w_eff.view(),
+            );
+            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+        },
+    )
+}
+
 // ---- Sparse Cox PyO3 wrappers (M4.2c) -----------------------------------
 
 #[pyfunction]
@@ -7613,6 +8254,95 @@ fn solve_cox_sparse_group_mcp_path_sparse<'py>(
                 g,
                 lam,
                 gamma,
+                alpha,
+                group_w.view(),
+                coord_w.view(),
+            );
+            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+        },
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x_data, x_indices, x_indptr, n_rows, n_cols, time, event, groups, *,
+    a=3.7, alpha=0.5,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
+    weights=None, coord_weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_cox_sparse_group_scad_path_sparse<'py>(
+    py: Python<'py>,
+    x_data: PyReadonlyArray1<f64>,
+    x_indices: PyReadonlyArray1<i64>,
+    x_indptr: PyReadonlyArray1<i64>,
+    n_rows: usize,
+    n_cols: usize,
+    time: PyReadonlyArray1<f64>,
+    event: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    a: f64,
+    alpha: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    coord_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if a <= 2.0 {
+        return Err(PyValueError::new_err(format!(
+            "SCAD shape parameter `a` must be > 2; got {a}"
+        )));
+    }
+    let coord_w = match &coord_weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != n_cols {
+                return Err(PyValueError::new_err(format!(
+                    "coord_weights length {} does not match n_features {}",
+                    arr.len(),
+                    n_cols
+                )));
+            }
+            arr
+        }
+        None => Array1::ones(n_cols),
+    };
+
+    build_cox_block_path_outputs_sparse(
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        time,
+        event,
+        groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        move |beta, g, lam, group_w| {
+            let (gw, cw) = surrogate_sparse_group_scad(
+                beta,
+                g,
+                lam,
+                a,
                 alpha,
                 group_w.view(),
                 coord_w.view(),
@@ -8415,6 +9145,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_group_mcp_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_sparse_group_lasso_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_sparse_group_mcp_ls_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_sparse_group_scad_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_multitask_lasso_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_multitask_mcp_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_multitask_scad_ls_path, m)?)?;
@@ -8425,18 +9156,21 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_logistic_group_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_sparse_group_lasso_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_sparse_group_mcp_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_logistic_sparse_group_scad_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_scad_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_group_lasso_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_group_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_sparse_group_lasso_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_sparse_group_mcp_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_poisson_sparse_group_scad_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_cox_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_cox_scad_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_cox_group_lasso_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_cox_group_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_cox_sparse_group_lasso_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_cox_sparse_group_mcp_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_cox_sparse_group_scad_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_mcp_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_scad_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_elastic_net_ls_path_sparse, m)?)?;
@@ -8448,6 +9182,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(solve_sparse_group_mcp_ls_path_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_sparse_group_scad_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_multinomial_lasso_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_multinomial_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_multinomial_scad_path, m)?)?;
@@ -8478,6 +9213,10 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         solve_logistic_sparse_group_mcp_path_sparse,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(
+        solve_logistic_sparse_group_scad_path_sparse,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_mcp_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_scad_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_group_lasso_path_sparse, m)?)?;
@@ -8490,6 +9229,10 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         solve_poisson_sparse_group_mcp_path_sparse,
         m
     )?)?;
+    m.add_function(wrap_pyfunction!(
+        solve_poisson_sparse_group_scad_path_sparse,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(solve_cox_mcp_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_cox_scad_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_cox_group_lasso_path_sparse, m)?)?;
@@ -8499,6 +9242,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(solve_cox_sparse_group_mcp_path_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_cox_sparse_group_scad_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_mcp_ls_path_mmap, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_mcp_path_mmap, m)?)?;
     m.add_function(wrap_pyfunction!(solve_mcp_ls_path_mmap_f32, m)?)?;

@@ -19,11 +19,11 @@ load-bearing piece; everything after stacks on top of it.
 | M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + M3.5 Cox PH Breslow + M3.6 multinomial (Rust + PyO3 + estimators) done; Efron ties + opportunistic GLMs (M3.7) pending |
 | M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
-| M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; sparse-group SCAD shell + bridge + overlapping group + fused + constrained variants pending |
+| M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; bridge + overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **254 cargo + 197 pytest, all green.**
+Test count at this snapshot: **254 cargo + 208 pytest, all green.**
 
 ---
 
@@ -739,9 +739,16 @@ ordered by user demand and by what differentiates us.
   (α=1 ↔ GroupLasso path, α=0 closed-form block ridge, signal
   recovery, dense ↔ sparse, dense ↔ sparse + standardize, CV
   picks both active groups, validates α ∈ [0, 1]).
-- **`SparseGroupSCAD` end-to-end** — the M2.7 surrogate helper exists;
-  what's left is wiring through to a `SparseGroupSCADRegressor` (Rust
-  trait + PyO3) for users who want it directly.
+- ✅ **`SparseGroupSCAD` end-to-end** — the M2.7 surrogate is now wired
+  through to user-facing PyO3 entries and sklearn estimators across
+  all four datafits. 8 PyO3 entries (LS + logistic + Poisson + Cox ×
+  dense/sparse): `solve_sparse_group_scad_ls_path[_sparse]` plus the
+  `solve_{logistic,poisson,cox}_sparse_group_scad_path[_sparse]`
+  twins. 12 sklearn estimators following the same `*Regressor /
+  *PathRegressor / *PathCV` shape as `SparseGroupMCP*`. Validates
+  `a > 2`. 11 pytest tests cover path shape, signal recovery,
+  dense↔sparse equivalence, large-`a` parity with `SparseGroupLasso`,
+  Cox/Poisson/Logistic smoke, and `a > 2` rejection across families.
 - **Overlapping group lasso / latent group lasso** via duplication
   trick; surface a friendly group-construction API.
 - **Fused lasso / generalized lasso**: 1D and graph-structured

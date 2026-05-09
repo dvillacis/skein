@@ -41,6 +41,9 @@ mean — matches sklearn's `PoissonRegressor.predict`),
 
 .. autoclass:: skein_glm.estimators.PoissonSparseGroupMCPRegressor
    :members:
+
+.. autoclass:: skein_glm.estimators.PoissonSparseGroupSCADRegressor
+   :members:
 ```
 
 ## Group — path
@@ -56,5 +59,8 @@ mean — matches sklearn's `PoissonRegressor.predict`),
    :members:
 
 .. autoclass:: skein_glm.estimators.PoissonSparseGroupMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonSparseGroupSCADPathRegressor
    :members:
 ```

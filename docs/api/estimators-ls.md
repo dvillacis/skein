@@ -9,7 +9,8 @@ classes follow the same shape:
   `ElasticNetPathRegressor`.
 - **Group penalty + single λ**: `GroupLassoRegressor`,
   `GroupMCPRegressor`, `GroupElasticNetRegressor`,
-  `SparseGroupLassoRegressor`, `SparseGroupMCPRegressor`.
+  `SparseGroupLassoRegressor`, `SparseGroupMCPRegressor`,
+  `SparseGroupSCADRegressor`.
 - **Group penalty + path**: their `*PathRegressor` siblings.
 
 For multi-response Y (shape `(n, K)`) with joint feature selection,
@@ -62,6 +63,9 @@ for any analysis that picks λ post-hoc.
 
 .. autoclass:: skein_glm.estimators.SparseGroupMCPRegressor
    :members:
+
+.. autoclass:: skein_glm.estimators.SparseGroupSCADRegressor
+   :members:
 ```
 
 ## Group — path
@@ -80,5 +84,8 @@ for any analysis that picks λ post-hoc.
    :members:
 
 .. autoclass:: skein_glm.estimators.SparseGroupMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.SparseGroupSCADPathRegressor
    :members:
 ```

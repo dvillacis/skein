@@ -43,6 +43,9 @@ roadmap), so survival probabilities aren't directly available.
 
 .. autoclass:: skein_glm.estimators.CoxSparseGroupMCPRegressor
    :members:
+
+.. autoclass:: skein_glm.estimators.CoxSparseGroupSCADRegressor
+   :members:
 ```
 
 ## Group — path
@@ -58,5 +61,8 @@ roadmap), so survival probabilities aren't directly available.
    :members:
 
 .. autoclass:: skein_glm.estimators.CoxSparseGroupMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.CoxSparseGroupSCADPathRegressor
    :members:
 ```

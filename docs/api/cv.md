@@ -41,6 +41,9 @@ their non-CV counterparts.
 
 .. autoclass:: skein_glm.cv.SparseGroupMCPPathCV
    :members:
+
+.. autoclass:: skein_glm.cv.SparseGroupSCADPathCV
+   :members:
 ```
 
 ## Multi-task LS family
@@ -84,6 +87,9 @@ for the data shape and convention notes.
 
 .. autoclass:: skein_glm.cv.LogisticSparseGroupMCPPathCV
    :members:
+
+.. autoclass:: skein_glm.cv.LogisticSparseGroupSCADPathCV
+   :members:
 ```
 
 ## Poisson family
@@ -105,6 +111,9 @@ for the data shape and convention notes.
    :members:
 
 .. autoclass:: skein_glm.cv.PoissonSparseGroupMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.PoissonSparseGroupSCADPathCV
    :members:
 ```
 
@@ -155,5 +164,8 @@ events are defensively skipped.
    :members:
 
 .. autoclass:: skein_glm.cv.CoxSparseGroupMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.CoxSparseGroupSCADPathCV
    :members:
 ```

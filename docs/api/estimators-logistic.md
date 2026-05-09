@@ -43,6 +43,9 @@ logistic base class.
 
 .. autoclass:: skein_glm.estimators.LogisticSparseGroupMCPRegressor
    :members:
+
+.. autoclass:: skein_glm.estimators.LogisticSparseGroupSCADRegressor
+   :members:
 ```
 
 ## Group — path
@@ -58,5 +61,8 @@ logistic base class.
    :members:
 
 .. autoclass:: skein_glm.estimators.LogisticSparseGroupMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.LogisticSparseGroupSCADPathRegressor
    :members:
 ```
