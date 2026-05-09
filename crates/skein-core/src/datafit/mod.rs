@@ -14,11 +14,13 @@
 mod binomial_logit;
 mod cox_ph;
 mod least_squares;
+mod multinomial_logit;
 mod poisson_log;
 
 pub use binomial_logit::BinomialLogit;
 pub use cox_ph::CoxPH;
 pub use least_squares::LeastSquares;
+pub use multinomial_logit::MultinomialLogit;
 pub use poisson_log::PoissonLog;
 
 use crate::design::DesignMatrix;

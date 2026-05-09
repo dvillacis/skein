@@ -16,14 +16,14 @@ load-bearing piece; everything after stacks on top of it.
 | M0 — Scaffold | ✅ done | trait surface + smoke solver |
 | M1 — Production CD core | ✅ done | path solver, screening, Anderson, KKT-stop, standardization |
 | M2 — LLA + group block-CD + parallel | ✅ done | inner CD, working set, LLA outer, path, Rayon, op-norm Lipschitz, sparse-group, gap-safe, PyO3, criterion benches |
-| M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + M3.5 Cox PH Breslow (Rust + PyO3 + estimators) done; multinomial + Efron ties pending |
+| M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + M3.5 Cox PH Breslow + M3.6 multinomial (Rust + PyO3 + estimators) done; Efron ties + opportunistic GLMs (M3.7) pending |
 | M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; sparse-group SCAD shell + bridge + overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **241 cargo + 184 pytest, all green.**
+Test count at this snapshot: **254 cargo + 197 pytest, all green.**
 
 ---
 
@@ -338,11 +338,52 @@ and `loss` semantics differ.
   cumulative-baseline-hazard estimator for absolute survival
   predictions.
 
-### M3.6 — Multinomial / softmax
+### ✅ M3.6 — Multinomial / softmax
 
-`MultinomialLogit` with the grouped-by-class parameterization so group
-penalties penalize a feature's whole row of class coefficients. Reuses
-the multi-task path from M7 once that lands.
+K-class softmax with `B ∈ ℝ^{p×K}` row-major (`bvec[jK + k] = B[j, k]`).
+Reduces — through Böhning's diagonal majorization (constant per-(i,k)
+Hessian = 1/2, the recipe glmnet uses; Friedman/Hastie/Tibshirani 2010
+§4.4) — to a sequence of multi-task LS problems on
+`MultiTaskDesign<X>`. Per-class intercepts via the column-augmentation
+trick (1s column at `j = p`, row-group weight 0). Symmetric (no
+reference class) parameterization, matching `glmnet`. The whole stack
+is the M7.1 reduction reused unchanged: every existing GLM-aware solver
+(`prox_newton_block_solve_path`) and design wrapper (`Augmented`,
+`Standardized`) composes for free.
+
+- ✅ **`MultinomialLogit` datafit** (`crates/skein-core/src/datafit/`):
+  one-hot `Y ∈ ℝ^{n×K}` + `from_labels(labels, n_classes)` constructor;
+  stable logsumexp loss, surrogate at β returns task-outer-stacked
+  weighted LS with uniform `1/2` Böhning weights and working response
+  `z_{i,k} = η_{i,k} − 2(p_{i,k} − Y_{i,k})`. 13 cargo tests:
+  one-hot encoding, panic-on-K=1 / out-of-range labels, loss-at-zero =
+  `log K`, surrogate-at-zero `z = 2(Y − 1/K)` with uniform `1/2` weights,
+  softmax simplex + extreme-η stability, λ_max-returns-zero,
+  signal recovery (lasso + MCP via LLA), `Standardized<MultiTaskDesign<…>>`
+  matches pre-scaled, sparse-CSC matches dense at machine precision.
+- ✅ **PyO3 surface**: 4 dense + 4 sparse path entries
+  (`solve_multinomial_{lasso,mcp,scad,elastic_net}_path[_sparse]`)
+  taking `(X, labels, n_classes, …)`. Output: `coefs`
+  `(n_lambdas, p × K)` row-major bvec, `intercepts` `(n_lambdas, K)`.
+  Sparse uses `Augmented<SparseCSC>` for the intercept; dense uses
+  physical column augmentation. Both compose with `Standardized<…>`.
+- ✅ **Python estimators** (`python/skein_glm/multinomial.py`):
+  12 sklearn-compatible classes — `Multinomial{Lasso,MCP,SCAD,ElasticNet}{Classifier,PathClassifier,PathCV}`.
+  `Classifier` suffix (sklearn convention; the binary `LogisticMCPRegressor`
+  naming stays as-is for back-compat). `coef_ (K, p)`, `intercept_ (K,)`,
+  `decision_function(X) → (n, K)` η, `predict_proba(X) → (n, K)` softmax,
+  `predict(X) → (n,)` class labels via `argmax` on the original-label
+  dtype (numeric or string — labels are LabelEncoder-style mapped
+  internally). CV scores by multinomial deviance via `StratifiedKFold`
+  default. `select_by_ic` gets a multinomial-NLL helper +
+  row-grouped active-feature-count df.
+- ✅ **Tests** (`tests/test_multinomial.py`): 13 pytest covering
+  predict-shape semantics, signal recovery (lasso + MCP), path
+  shape + λ_max ≈ 0, dense↔sparse equivalence, dense↔sparse with
+  standardize on inflated-scale columns, CV picks active features,
+  IC for all three criteria, single-class rejection, SCAD `a > 2`
+  validation, EN `α ∈ [0, 1]`, EN α=1 ≡ lasso path agreement,
+  string-label round trip.
 
 ### M3.7 — Opportunistic GLMs
 

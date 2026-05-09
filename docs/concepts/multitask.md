@@ -111,10 +111,12 @@ turned on for both backends.
 
 ## Limitations
 
-skein v0.2 ships **multi-task LS only** — no multi-task GLM
-(logistic, Poisson, Cox) and no multinomial logit yet. The
-algebraic reduction works the same way for those, but the
-prox-Newton outer loop needs adjustment; that's M7.3.
+skein v0.2 ships **multi-task LS** and **multinomial / softmax
+classification** (M3.6 — see [Multinomial](multinomial.md)). Both
+ride the same `MultiTaskDesign<X>` reduction. Multi-task GLMs for
+Poisson and Cox aren't there yet (M7.3); the wrapper supports
+them at the design layer, but the prox-Newton outer loop has to
+be adapted per family.
 
 `coord_weights` (per-task L1 weights independent of the per-row L2
 weights) aren't exposed yet; the per-feature `weights=` argument

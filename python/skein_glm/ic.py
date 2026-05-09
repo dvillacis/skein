@@ -84,6 +84,47 @@ def _compute_nll_poisson(path_model, x, y) -> NDArray[np.float64]:
     return np.sum(mu - y_col * eta_clamped, axis=0)
 
 
+def _compute_nll_multinomial(path_model, x, y) -> NDArray[np.float64]:
+    """Multinomial NLL: per-λ Σ_i (logsumexp(η_i) − η_{i, y_i}). The path
+    estimator's `coefs_` has shape `(n_lambdas, K, p)` and η is the per-λ
+    `(n, K)` matrix from `decision_function` recomputed at each λ — but
+    `decision_function` only honors the single-best-λ refit, so we
+    recompute η directly off `coefs_` / `intercepts_`."""
+    coefs_3d: NDArray[np.float64] = path_model.coefs_  # (n_lambdas, K, p)
+    intercepts: NDArray[np.float64] = path_model.intercepts_  # (n_lambdas, K)
+    n_lambdas = coefs_3d.shape[0]
+    classes = np.asarray(path_model.classes_)
+    y_arr = np.asarray(y)
+    codes = np.searchsorted(classes, y_arr).astype(np.intp)
+    n = codes.shape[0]
+
+    # Build a single (n, K) η per λ.
+    nll = np.zeros(n_lambdas)
+    rows = np.arange(n)
+    for li in range(n_lambdas):
+        if hasattr(x, "toarray"):
+            eta = (x @ coefs_3d[li].T)
+            if hasattr(eta, "toarray"):
+                eta = eta.toarray()
+            eta = np.asarray(eta) + intercepts[li]
+        else:
+            eta = np.asarray(x) @ coefs_3d[li].T + intercepts[li]
+        m = eta.max(axis=1, keepdims=True)
+        lse = (np.log(np.exp(eta - m).sum(axis=1, keepdims=True)) + m).ravel()
+        eta_y = eta[rows, codes]
+        nll[li] = float(np.sum(lse - eta_y))
+    return nll
+
+
+def _multinomial_active_size(coefs_3d: NDArray[np.float64], eps: float) -> NDArray[np.int64]:
+    """Active-feature count per λ for row-grouped multinomial: a feature
+    is active if **any** of its K class coefficients is nonzero. `coefs_3d`
+    has shape `(n_lambdas, K, p)`."""
+    # Take max-abs across the class axis, then count features above eps.
+    max_abs_per_feature = np.max(np.abs(coefs_3d), axis=1)  # (n_lambdas, p)
+    return np.sum(max_abs_per_feature > eps, axis=1).astype(np.int64)
+
+
 def _compute_nll_cox(path_model, time) -> NDArray[np.float64]:
     """Cox PH NLL: `path_model.info_["final_losses"][k]` is already the
     Breslow per-sample partial NLL at λ_k (the same expression
@@ -101,6 +142,8 @@ def _detect_family(path_model) -> str:
     cls = type(path_model).__name__
     if "Cox" in cls:
         return "cox"
+    if "Multinomial" in cls:
+        return "multinomial"
     if "Logistic" in cls:
         return "logistic"
     if "Poisson" in cls:
@@ -199,13 +242,20 @@ def select_by_ic(
             nll = _compute_nll_logistic(path_model, x, y)
         elif family == "poisson":
             nll = _compute_nll_poisson(path_model, x, y)
+        elif family == "multinomial":
+            nll = _compute_nll_multinomial(path_model, x, y)
         else:
             nll = _compute_nll_ls(path_model, x, y)
         n = len(y)
 
     coefs: NDArray[np.float64] = path_model.coefs_
-    p = coefs.shape[1]
-    k = _active_size(coefs, active_eps).astype(np.float64)
+    if family == "multinomial":
+        # coefs_ shape (n_lambdas, K, p); df = active row count.
+        p = coefs.shape[2]
+        k = _multinomial_active_size(coefs, active_eps).astype(np.float64)
+    else:
+        p = coefs.shape[1]
+        k = _active_size(coefs, active_eps).astype(np.float64)
 
     if criterion == "aic":
         scores = 2.0 * k + 2.0 * nll

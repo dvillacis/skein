@@ -10,16 +10,17 @@ worked examples — because the solver code never sees the difference.
 | Axis            | Trait surface             | Concrete types in v0.2                                        | Page                       |
 |-----------------|---------------------------|---------------------------------------------------------------|----------------------------|
 | **Penalty**     | `Penalty`, `GroupPenalty` | MCP, SCAD, elastic net, group lasso, group MCP, group elastic net, sparse-group lasso/MCP | [Penalties](penalties.md)  |
-| **Datafit**     | `Datafit`, `GlmDatafit`   | Least squares, binomial logistic, Poisson, Cox PH (Breslow)   | [Datafits](datafits.md)    |
+| **Datafit**     | `Datafit`, `GlmDatafit`   | Least squares, binomial logistic, Poisson, Cox PH (Breslow), multinomial / softmax | [Datafits](datafits.md)    |
 | **Weights**     | (per-axis on each trait)  | per-sample, per-feature, per-group                            | [Weights](weights.md)      |
 | **Backend**     | `DesignMatrix`            | dense, sparse CSC, mmap (f64 + f32), chunked, augmented, standardized, multi-task | [Backends](backends.md) |
 
 A fifth axis, **response shape**, sits orthogonal to these four:
 single-output `y ∈ ℝ^n` (the default everywhere on this site) vs.
-multi-response `Y ∈ ℝ^(n×K)` (multi-task LS). Multi-task reduces
+multi-response `Y ∈ ℝ^(n×K)` (multi-task LS) vs. multinomial /
+softmax classification (K class labels). All three reduce
 algebraically to a group-lasso problem on a virtual block-replicated
-design, so it reuses the rest of the stack unchanged. See
-[Multi-task](multitask.md).
+design, so they reuse the rest of the stack unchanged. See
+[Multi-task](multitask.md) and [Multinomial](multinomial.md).
 
 Every estimator class in `skein_glm.*` is a packaging of one
 `(datafit, penalty)` pair with optional weights, behind a single

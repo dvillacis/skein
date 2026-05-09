@@ -108,6 +108,30 @@ for the data shape and convention notes.
    :members:
 ```
 
+## Multinomial family
+
+K-fold CV scoring by mean multinomial deviance. Default splitter is
+`StratifiedKFold` so heavy class imbalance doesn't produce class-empty
+train folds; folds with fewer than `K` distinct training classes are
+defensively skipped (their per-λ scores become NaN and `np.nanmean`
+aggregation handles it). See the
+[multinomial concept page](../concepts/multinomial.md) for the
+symmetric softmax parameterization.
+
+```{eval-rst}
+.. autoclass:: skein_glm.multinomial.MultinomialLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.multinomial.MultinomialMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.multinomial.MultinomialSCADPathCV
+   :members:
+
+.. autoclass:: skein_glm.multinomial.MultinomialElasticNetPathCV
+   :members:
+```
+
 ## Cox family
 
 Cox CV uses `StratifiedKFold` by event indicator (so heavy

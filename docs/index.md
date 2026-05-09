@@ -36,11 +36,12 @@ When someone asks "why not just `skglm`, `glmnet`, or `ncvreg`?":
 | Gaussian     | Least squares                     | MCP, SCAD, **elastic net**, group lasso, group MCP, **group elastic net**, sparse-group lasso, sparse-group MCP | 14 sklearn classes |
 | Multi-task   | Multi-response least squares      | Multi-task lasso / MCP / SCAD / elastic net (row-grouped, dense + sparse, ±standardize) | 8 sklearn classes |
 | Binomial     | Logistic (with prox-Newton)       | MCP, SCAD, group lasso, group MCP, sparse-group lasso, sparse-group MCP | 12 sklearn classes   |
+| Multinomial  | **Softmax (K classes, prox-Newton + Böhning bound)** | Row-grouped lasso / MCP / SCAD / elastic net (dense + sparse, ±standardize) | 12 sklearn classes |
 | Poisson      | Log-link                          | Same as binomial                                   | 12 sklearn classes   |
 | Cox PH       | Breslow ties                      | Same as binomial                                   | 12 sklearn classes   |
 
-58 estimators total. Plus 28 `*PathCV` cross-validation wrappers, plus
-`select_by_ic` for AIC/BIC/EBIC across all four GLM families.
+70 estimators total. Plus 32 `*PathCV` cross-validation wrappers, plus
+`select_by_ic` for AIC/BIC/EBIC across all five GLM families.
 
 ## Quick taste
 
@@ -85,7 +86,7 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Status
 
-v0.2 is a complete, tested implementation: **241 cargo + 184 pytest
+v0.2 is a complete, tested implementation: **254 cargo + 197 pytest
 tests, all green** at last snapshot. Sparse + dense + mmap + chunked
 + multi-task backends all interoperate; every datafit × penalty
 combination is wired end-to-end with sklearn-style `fit` / `predict` /
@@ -93,9 +94,9 @@ combination is wired end-to-end with sklearn-style `fit` / `predict` /
 Linux (x86_64 + aarch64), macOS (x86_64 + arm64), and Windows
 (AMD64).
 
-What's not yet in: multinomial logit (M3.6), multi-response GLMs
-(M7.3), and comparison benchmarks vs `glmnet`/`ncvreg`/`grpreg`/`skglm`
-(M8). See the [roadmap](roadmap.md) for the full picture.
+What's not yet in: multi-response GLMs for Poisson / Cox (M7.3) and
+comparison benchmarks vs `glmnet`/`ncvreg`/`grpreg`/`skglm` (M8).
+See the [roadmap](roadmap.md) for the full picture.
 
 ```{toctree}
 :hidden:
@@ -115,6 +116,7 @@ concepts/datafits
 concepts/weights
 concepts/backends
 concepts/multitask
+concepts/multinomial
 ```
 
 ```{toctree}
@@ -153,6 +155,7 @@ api/index
 api/estimators-ls
 api/estimators-multitask
 api/estimators-logistic
+api/estimators-multinomial
 api/estimators-poisson
 api/estimators-cox
 api/cv
