@@ -29,7 +29,7 @@ When someone asks "why not just `skglm`, `glmnet`, or `ncvreg`?":
    against the same ABCs the Rust traits mirror, then port hot ones
    to Rust without re-architecting.
 
-## What's in v0.2
+## What's in v0.3
 
 | Family       | Datafits                          | Penalties                                          | Estimators           |
 |--------------|-----------------------------------|----------------------------------------------------|----------------------|
@@ -88,7 +88,7 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Status
 
-v0.2 is a complete, tested implementation: **265 cargo + 261 pytest
+v0.3 is a complete, tested implementation: **265 cargo + 261 pytest
 tests, all green** at last snapshot. Sparse + dense + mmap + chunked
 + multi-task backends all interoperate; every datafit × penalty
 combination is wired end-to-end with sklearn-style `fit` / `predict` /
