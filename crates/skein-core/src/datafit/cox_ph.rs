@@ -539,11 +539,7 @@ mod tests {
         let event = array![1.0, 1.0, 0.0];
         let design = DenseMatrix::new(x);
 
-        let breslow = CoxPH::with_ties(
-            time.clone(),
-            event.clone(),
-            TieHandling::Breslow,
-        );
+        let breslow = CoxPH::with_ties(time.clone(), event.clone(), TieHandling::Breslow);
         let efron = CoxPH::with_ties(time, event, TieHandling::Efron);
         let beta = Array1::<f64>::zeros(1);
         let n_f = 3.0_f64;

@@ -126,11 +126,7 @@ impl MultinomialLogit {
                 inner += self.y[[i, kk]] * eta[[i, kk]];
             }
             let term = lse[i] - inner;
-            let w = self
-                .sample_weights
-                .as_ref()
-                .map(|w| w[i])
-                .unwrap_or(1.0);
+            let w = self.sample_weights.as_ref().map(|w| w[i]).unwrap_or(1.0);
             total += w * term;
         }
         total / (n as f64)
@@ -163,11 +159,7 @@ impl MultinomialLogit {
             for i in 0..n {
                 let g = p[[i, task]] - self.y[[i, task]];
                 let zi = eta[[i, task]] - 2.0 * g;
-                let scale = self
-                    .sample_weights
-                    .as_ref()
-                    .map(|sw| sw[i])
-                    .unwrap_or(1.0);
+                let scale = self.sample_weights.as_ref().map(|sw| sw[i]).unwrap_or(1.0);
                 let idx = task * n + i;
                 z[idx] = zi;
                 w[idx] = 0.5 * scale;
@@ -386,15 +378,16 @@ mod tests {
 
     /// Row-group L2 norm of a row-major-flattened B at feature j.
     fn row_norm(beta: &Array1<f64>, j: usize, k: usize) -> f64 {
-        (0..k).map(|kk| beta[j * k + kk].powi(2)).sum::<f64>().sqrt()
+        (0..k)
+            .map(|kk| beta[j * k + kk].powi(2))
+            .sum::<f64>()
+            .sqrt()
     }
 
     #[test]
     fn multinomial_lasso_path_at_lambda_max_returns_zero() {
         use crate::penalty::{GroupLasso, GroupPenalty};
-        use crate::solver::{
-            block_lambda_max, prox_newton_block_solve_path, CdConfig,
-        };
+        use crate::solver::{block_lambda_max, prox_newton_block_solve_path, CdConfig};
         let n = 80;
         let p = 5;
         let k = 3;
@@ -495,9 +488,7 @@ mod tests {
     #[test]
     fn multinomial_mcp_via_lla_recovers_active_features() {
         use crate::penalty::{GroupLasso, GroupPenalty};
-        use crate::solver::{
-            prox_newton_block_solve_path, surrogate_weights_group_mcp, CdConfig,
-        };
+        use crate::solver::{prox_newton_block_solve_path, surrogate_weights_group_mcp, CdConfig};
         let n = 120;
         let p = 6;
         let k = 3;
@@ -739,9 +730,7 @@ mod tests {
             [-0.5, -0.8],
         ];
         // Class 0: x in upper-right; class 1: x in upper-left; class 2: lower-left.
-        let labels = array![
-            0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0
-        ];
+        let labels = array![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 2.0];
         let glm = MultinomialLogit::from_labels(labels.view(), k);
         let design = MultiTaskDesign::new(DenseMatrix::new(x), k);
         // Strong "true" β: row 0 picks the x-axis, row 1 picks the y-axis,

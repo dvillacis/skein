@@ -99,8 +99,7 @@ where
             outer_iters = outer + 1;
             let pen = make_inner(warm.view(), lam, base_weights.view());
             let beta_old = warm.clone();
-            let (new_beta, inner_report) =
-                cd_solve_warm(warm, design, datafit, &*pen, cd_config);
+            let (new_beta, inner_report) = cd_solve_warm(warm, design, datafit, &*pen, cd_config);
             warm = new_beta;
             total_inner += inner_report.iter;
 
@@ -243,16 +242,7 @@ mod tests {
             acceleration: Some(5),
         };
         let (betas, report) = solve_path_lla(
-            &design,
-            &datafit,
-            base,
-            make_inner,
-            25,
-            1e-3,
-            None,
-            &cd_cfg,
-            10,
-            1e-7,
+            &design, &datafit, base, make_inner, 25, 1e-3, None, &cd_cfg, 10, 1e-7,
         );
         let last = report.lambdas.len() - 1;
         let last_beta = betas.row(last).to_owned();

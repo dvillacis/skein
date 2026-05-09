@@ -84,13 +84,13 @@ impl PoissonLog {
     }
 
     pub fn with_offset(y: Array1<f64>, offset: Array1<f64>) -> Self {
-        assert_eq!(
-            y.len(),
-            offset.len(),
-            "offset length must equal y length"
-        );
+        assert_eq!(y.len(), offset.len(), "offset length must equal y length");
         for &v in offset.iter() {
-            assert!(v.is_finite(), "PoissonLog offset must be finite (got {})", v);
+            assert!(
+                v.is_finite(),
+                "PoissonLog offset must be finite (got {})",
+                v
+            );
         }
         validate_y_nonneg(y.view());
         Self {
@@ -119,10 +119,18 @@ impl PoissonLog {
         w: Array1<f64>,
         offset: Array1<f64>,
     ) -> Self {
-        assert_eq!(y.len(), w.len(), "sample_weights length must equal y length");
+        assert_eq!(
+            y.len(),
+            w.len(),
+            "sample_weights length must equal y length"
+        );
         assert_eq!(y.len(), offset.len(), "offset length must equal y length");
         for &v in offset.iter() {
-            assert!(v.is_finite(), "PoissonLog offset must be finite (got {})", v);
+            assert!(
+                v.is_finite(),
+                "PoissonLog offset must be finite (got {})",
+                v
+            );
         }
         validate_y_nonneg(y.view());
         Self {
@@ -298,7 +306,10 @@ mod tests {
         let glm = PoissonLog::with_offset(y.clone(), offset.clone());
         let beta = Array1::<f64>::zeros(2);
         let loss = glm.loss(&design, beta.view());
-        let expected: f64 = (0..3).map(|i| offset[i].exp() - y[i] * offset[i]).sum::<f64>() / 3.0;
+        let expected: f64 = (0..3)
+            .map(|i| offset[i].exp() - y[i] * offset[i])
+            .sum::<f64>()
+            / 3.0;
         assert_abs_diff_eq!(loss, expected, epsilon = 1e-12);
     }
 

@@ -2000,9 +2000,7 @@ fn poisson_glm_factory(
             }
             for &v in arr.iter() {
                 if !v.is_finite() {
-                    return Err(PyValueError::new_err(
-                        "Poisson offset must be finite",
-                    ));
+                    return Err(PyValueError::new_err("Poisson offset must be finite"));
                 }
             }
             Some(arr)
@@ -3951,15 +3949,8 @@ fn solve_cox_sparse_group_scad_path<'py>(
         outer_tol,
         ties,
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_scad(
-                beta,
-                g,
-                lam,
-                a,
-                alpha,
-                group_w.view(),
-                coord_w.view(),
-            );
+            let (gw, cw) =
+                surrogate_sparse_group_scad(beta, g, lam, a, alpha, group_w.view(), coord_w.view());
             Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
         },
     )
@@ -8756,15 +8747,8 @@ fn solve_cox_sparse_group_scad_path_sparse<'py>(
         outer_tol,
         ties,
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_scad(
-                beta,
-                g,
-                lam,
-                a,
-                alpha,
-                group_w.view(),
-                coord_w.view(),
-            );
+            let (gw, cw) =
+                surrogate_sparse_group_scad(beta, g, lam, a, alpha, group_w.view(), coord_w.view());
             Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
         },
     )
@@ -9662,7 +9646,10 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         m
     )?)?;
     m.add_function(wrap_pyfunction!(solve_cox_sparse_group_mcp_path_sparse, m)?)?;
-    m.add_function(wrap_pyfunction!(solve_cox_sparse_group_scad_path_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        solve_cox_sparse_group_scad_path_sparse,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(solve_mcp_ls_path_mmap, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_mcp_path_mmap, m)?)?;
     m.add_function(wrap_pyfunction!(solve_mcp_ls_path_mmap_f32, m)?)?;
