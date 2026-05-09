@@ -4,6 +4,68 @@ All notable changes to `skein-glm` are recorded here. The project follows
 semantic versioning, with the pre-1.0 minor-bump-on-feature policy
 documented in `docs/extending/rust-api.md`.
 
+## [0.4.0] — 2026-05-09
+
+Closes the **M5.x headline differentiator** (stability selection — no
+clean equivalent in glmnet / skglm / grpreg) and rounds out the M6.x
+adaptive family (plain `GroupSCAD` + `AdaptiveGroupSCAD`). Plus the
+post-v0.3.0 CI fixes that improve developer experience.
+
+### Added
+
+- **Stability selection (M5.x).** New `StabilitySelection` meta-
+  estimator (`python/skein_glm/stability.py`) wraps any skein
+  `*PathRegressor` in a Meinshausen-Bühlmann (2010) subsample-
+  bootstrap loop. Outputs per-(feature, λ) selection probabilities;
+  the stable set is `{j : max_k Π_j(λ_k) ≥ threshold}`. Auto-
+  dispatches across scalar / GLM / Cox / grouped / multi-task /
+  multinomial path estimators (Cox detected by `ties` attr; grouped
+  by `groups` attr; multi-task / multinomial 3D `coefs_` collapse
+  via "any-class active"). Bootstrap loop parallelized via `joblib`
+  (`n_jobs=-1`); deterministic for fixed `random_state` regardless
+  of `n_jobs`. 11 pytest covering signal recovery, threshold
+  monotonicity, reproducibility, validation, and dispatch.
+- **Plain `GroupSCAD` (M6.x).** Wires the M2.8 `surrogate_weights_
+  group_scad` helper through to PyO3 entries
+  (`solve_group_scad_ls_path[_sparse]`) and 3 sklearn classes
+  (`GroupSCADRegressor`, `GroupSCADPathRegressor`,
+  `GroupSCADPathCV`). Validates `a > 2`. Closes the dangling
+  prerequisite from the M6.x adaptive group commit in v0.3.0.
+- **Adaptive group SCAD (M6.x).** Completes the M6.x adaptive group
+  family with `AdaptiveGroupSCAD{PathRegressor, PathCV}`. The
+  full adaptive family is now symmetric: 6 LS scalar + 6 LS group
+  (Lasso/MCP/SCAD × Path/PathCV) + 18 GLM = 30 adaptive
+  estimators.
+
+### Fixed
+
+- **CI hygiene** for the v0.3.0 cycle: dropped dead Python imports
+  flagged by ruff, applied `cargo fmt` across recent feature
+  commits, silenced clippy `needless_range_loop` on parallel-array
+  Cox loops with a localized `#[allow]`, added 18 missing PyO3
+  function stubs in `_core.pyi` for mypy.
+- Two `dict[str, Any]` annotations on Bridge estimator's `common`
+  dict to satisfy mypy's `**kwargs` splat type-checking.
+- Landing page heading bumped from "What's in v0.2" to "v0.3" (now
+  v0.4 in this release).
+
+### Estimator counts (cumulative)
+
+136 estimators in v0.3.0 → **141 estimators in v0.4.0** (5 new:
+GroupSCAD × 3 + AdaptiveGroupSCAD × 2). Plus the
+`StabilitySelection` meta-estimator (the first non-`*PathCV` /
+`select_by_ic` model-selection wrapper).
+
+### Tests
+
+**265 cargo + 279 pytest, all green.**
+- v0.3.0 baseline: 265 cargo + 261 pytest.
+- New tests this release: +18 pytest (7 GroupSCAD + 11 stability).
+
+### Deprecation / breaking
+
+None. v0.4.0 is fully backward-compatible with v0.3.0.
+
 ## [0.3.0] — 2026-05-09
 
 Adds a new GLM family (multinomial / softmax), a new penalty (bridge
