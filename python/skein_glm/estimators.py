@@ -447,7 +447,7 @@ class BridgeRegressor(_NonconvexRegressorBase):
             if self.weights is not None
             else None
         )
-        common = dict(
+        common: dict[str, Any] = dict(
             q=self.q,
             eps=self.eps,
             lambdas=np.array([self.lambda_], dtype=np.float64),
@@ -1038,7 +1038,7 @@ class BridgePathRegressor(_PathRegressorBase):
             if self.weights is not None
             else None
         )
-        common = dict(
+        common: dict[str, Any] = dict(
             q=self.q,
             eps=self.eps,
             lambdas=lams,
