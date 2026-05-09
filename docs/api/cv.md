@@ -11,8 +11,9 @@ Two flavors of selection:
 The metric is auto-selected by family. After fitting, a final refit
 on the full data at λ_best is stored on `coef_` / `intercept_`.
 
-24 estimators total — six penalty types × four families. They all
-share the same fit/predict surface as their non-CV counterparts.
+25+ estimators total — across the LS, logistic, Poisson, Cox, and
+multi-task families. They all share the same fit/predict surface as
+their non-CV counterparts.
 
 ## LS family
 
@@ -32,10 +33,34 @@ share the same fit/predict surface as their non-CV counterparts.
 .. autoclass:: skein_glm.cv.GroupMCPPathCV
    :members:
 
+.. autoclass:: skein_glm.cv.GroupElasticNetPathCV
+   :members:
+
 .. autoclass:: skein_glm.cv.SparseGroupLassoPathCV
    :members:
 
 .. autoclass:: skein_glm.cv.SparseGroupMCPPathCV
+   :members:
+```
+
+## Multi-task LS family
+
+K-fold CV scoring by mean MSE averaged across tasks. Multi-task
+estimators take 2D `Y ∈ ℝ^(n, K)` and produce `coef_` of shape
+`(K, p)`. See the [multi-task concept page](../concepts/multitask.md)
+for the data shape and convention notes.
+
+```{eval-rst}
+.. autoclass:: skein_glm.multitask.MultiTaskLassoPathCV
+   :members:
+
+.. autoclass:: skein_glm.multitask.MultiTaskMCPPathCV
+   :members:
+
+.. autoclass:: skein_glm.multitask.MultiTaskSCADPathCV
+   :members:
+
+.. autoclass:: skein_glm.multitask.MultiTaskElasticNetPathCV
    :members:
 ```
 

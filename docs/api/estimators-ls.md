@@ -1,14 +1,19 @@
 # LS estimators (Gaussian)
 
-Least-squares datafit with the six skein penalty families. All 12
+Least-squares datafit with the seven skein penalty families. All 14
 classes follow the same shape:
 
-- **Scalar penalty + single λ**: `MCPRegressor`, `SCADRegressor`.
-- **Scalar penalty + path**: `MCPPathRegressor`, `SCADPathRegressor`.
+- **Scalar penalty + single λ**: `MCPRegressor`, `SCADRegressor`,
+  `ElasticNetRegressor`.
+- **Scalar penalty + path**: `MCPPathRegressor`, `SCADPathRegressor`,
+  `ElasticNetPathRegressor`.
 - **Group penalty + single λ**: `GroupLassoRegressor`,
-  `GroupMCPRegressor`, `SparseGroupLassoRegressor`,
-  `SparseGroupMCPRegressor`.
+  `GroupMCPRegressor`, `GroupElasticNetRegressor`,
+  `SparseGroupLassoRegressor`, `SparseGroupMCPRegressor`.
 - **Group penalty + path**: their `*PathRegressor` siblings.
+
+For multi-response Y (shape `(n, K)`) with joint feature selection,
+see [Multi-task estimators](estimators-multitask.md).
 
 Single-λ classes are useful when you've already chosen λ (via CV
 externally, prior knowledge, etc.); path classes are the workhorse
@@ -49,6 +54,9 @@ for any analysis that picks λ post-hoc.
 .. autoclass:: skein_glm.estimators.GroupMCPRegressor
    :members:
 
+.. autoclass:: skein_glm.estimators.GroupElasticNetRegressor
+   :members:
+
 .. autoclass:: skein_glm.estimators.SparseGroupLassoRegressor
    :members:
 
@@ -63,6 +71,9 @@ for any analysis that picks λ post-hoc.
    :members:
 
 .. autoclass:: skein_glm.estimators.GroupMCPPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.GroupElasticNetPathRegressor
    :members:
 
 .. autoclass:: skein_glm.estimators.SparseGroupLassoPathRegressor

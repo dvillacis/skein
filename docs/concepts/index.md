@@ -7,18 +7,25 @@ worked examples — because the solver code never sees the difference.
 
 ## The four axes
 
-| Axis            | Trait surface             | Concrete types in v0.1                                        | Page                       |
+| Axis            | Trait surface             | Concrete types in v0.2                                        | Page                       |
 |-----------------|---------------------------|---------------------------------------------------------------|----------------------------|
-| **Penalty**     | `Penalty`, `GroupPenalty` | MCP, SCAD, group lasso, group MCP, sparse-group lasso/MCP     | [Penalties](penalties.md)  |
+| **Penalty**     | `Penalty`, `GroupPenalty` | MCP, SCAD, elastic net, group lasso, group MCP, group elastic net, sparse-group lasso/MCP | [Penalties](penalties.md)  |
 | **Datafit**     | `Datafit`, `GlmDatafit`   | Least squares, binomial logistic, Poisson, Cox PH (Breslow)   | [Datafits](datafits.md)    |
 | **Weights**     | (per-axis on each trait)  | per-sample, per-feature, per-group                            | [Weights](weights.md)      |
-| **Backend**     | `DesignMatrix`            | dense, sparse CSC, mmap (f64 + f32), chunked, augmented, standardized | [Backends](backends.md) |
+| **Backend**     | `DesignMatrix`            | dense, sparse CSC, mmap (f64 + f32), chunked, augmented, standardized, multi-task | [Backends](backends.md) |
 
-Every estimator class in `skein.*` is a packaging of one
+A fifth axis, **response shape**, sits orthogonal to these four:
+single-output `y ∈ ℝ^n` (the default everywhere on this site) vs.
+multi-response `Y ∈ ℝ^(n×K)` (multi-task LS). Multi-task reduces
+algebraically to a group-lasso problem on a virtual block-replicated
+design, so it reuses the rest of the stack unchanged. See
+[Multi-task](multitask.md).
+
+Every estimator class in `skein_glm.*` is a packaging of one
 `(datafit, penalty)` pair with optional weights, behind a single
 sklearn-compatible `fit` / `predict` interface. The path variants
 add warm-starting across a λ-grid; the CV variants wrap a path
-in K-fold cross-validation. You don't need to learn 48 separate
+in K-fold cross-validation. You don't need to learn 60+ separate
 classes — they're all the same machinery with different
 `(datafit, penalty)` instantiations.
 

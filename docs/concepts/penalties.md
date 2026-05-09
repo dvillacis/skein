@@ -191,6 +191,37 @@ This is the headline algorithm: solved via Local Linear Approximation
 (LLA) outer iterations around a group block-CD inner solver, with
 chunks of work parallelized across Rayon threads at the group level.
 
+### Group elastic net
+
+Convex group analog of the scalar elastic net: each group's
+coefficients have both their L2 norm and squared L2 norm penalized.
+
+$$
+P_\lambda(\beta) \;=\; \lambda \sum_{g=1}^G w_g \left[ \alpha \, \|\beta_g\|_2 + \frac{(1-\alpha)}{2} \, \|\beta_g\|_2^2 \right]
+$$
+
+The parameter $\alpha \in [0, 1]$ trades between **all-or-nothing
+group selection** ($\alpha = 1$, recovers plain group lasso) and
+**per-block ridge shrinkage** ($\alpha = 0$, no group sparsity at
+all). In between, the ridge term smooths the L2-norm prox so that
+correlated groups don't get arbitrarily picked one-out-of-many the
+way pure group lasso can.
+
+The block prox is closed-form (rotationally symmetric in $x$ along
+the ray from the origin through $z$): block soft-threshold by the
+L1 component, then divide by the per-block ridge shrinkage factor
+$1 + (1-\alpha)\lambda \cdot \text{step}$.
+
+```python
+skein_glm.GroupElasticNetRegressor(groups=groups, lambda_=0.1, alpha=0.5)
+skein_glm.GroupElasticNetPathRegressor(groups=groups, alpha=0.5, n_lambdas=50)
+skein_glm.GroupElasticNetPathCV(groups=groups, alpha=0.5, cv=10)
+```
+
+Convex penalty, so block coordinate descent converges to the global
+optimum at every λ. Per-group weights $w_g$ apply to **both** the
+L2 and L2² components.
+
 ### Sparse-group lasso (Simon et al. 2013)
 
 Both **across-group** and **within-group** sparsity. The penalty is

@@ -9,17 +9,20 @@ a linear scan through 80 classes.
 
 | Family   | Page                                          |
 |----------|-----------------------------------------------|
-| Gaussian (LS) — scalar penalties (MCP, SCAD)  | [LS](estimators-ls.md)        |
-| Gaussian (LS) — group penalties               | [LS](estimators-ls.md)        |
+| Gaussian (LS) — scalar penalties (MCP, SCAD, ElasticNet)  | [LS](estimators-ls.md)        |
+| Gaussian (LS) — group penalties (incl. GroupElasticNet)   | [LS](estimators-ls.md)        |
+| Multi-task LS — 2D `Y`, joint feature selection           | [Multi-task](estimators-multitask.md) |
 | Binomial logistic                             | [Logistic](estimators-logistic.md) |
 | Poisson                                       | [Poisson](estimators-poisson.md)   |
 | Cox proportional hazards                      | [Cox](estimators-cox.md)           |
 
-Every family has the same pattern: scalar (`MCP`, `SCAD`) and group
-(`GroupLasso`, `GroupMCP`, `SparseGroupLasso`, `SparseGroupMCP`)
-penalties; each penalty has a single-λ `Regressor` and a full-path
-`PathRegressor`. 12 estimators per non-Cox family × 4 families = 48
-estimators total. Cox has 12 (no SCAD distinction at single-λ).
+Every GLM family follows the same pattern: scalar (`MCP`, `SCAD`)
+and group (`GroupLasso`, `GroupMCP`, `SparseGroupLasso`,
+`SparseGroupMCP`) penalties; each penalty has a single-λ `Regressor`
+and a full-path `PathRegressor`. The Gaussian LS family also adds
+`ElasticNet` (scalar) and `GroupElasticNet` (group). The multi-task
+LS family adds 8 more (`MultiTaskLasso/MCP/SCAD/ElasticNet ×
+{single-λ, Path}`).
 
 ## Cross-validation and IC selection
 

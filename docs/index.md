@@ -29,16 +29,17 @@ When someone asks "why not just `skglm`, `glmnet`, or `ncvreg`?":
    against the same ABCs the Rust traits mirror, then port hot ones
    to Rust without re-architecting.
 
-## What's in v0.1
+## What's in v0.2
 
-| Family    | Datafits                          | Penalties                                          | Estimators           |
-|-----------|-----------------------------------|----------------------------------------------------|----------------------|
-| Gaussian  | Least squares                     | MCP, SCAD, group lasso, group MCP,<br>sparse-group lasso, sparse-group MCP | 12 sklearn classes |
-| Binomial  | Logistic (with prox-Newton)       | Same as above                                      | 12 sklearn classes   |
-| Poisson   | Log-link                          | Same as above                                      | 12 sklearn classes   |
-| Cox PH    | Breslow ties                      | Same as above                                      | 12 sklearn classes   |
+| Family       | Datafits                          | Penalties                                          | Estimators           |
+|--------------|-----------------------------------|----------------------------------------------------|----------------------|
+| Gaussian     | Least squares                     | MCP, SCAD, **elastic net**, group lasso, group MCP, **group elastic net**, sparse-group lasso, sparse-group MCP | 14 sklearn classes |
+| Multi-task   | Multi-response least squares      | Multi-task lasso / MCP / SCAD / elastic net (row-grouped, dense + sparse, ±standardize) | 8 sklearn classes |
+| Binomial     | Logistic (with prox-Newton)       | MCP, SCAD, group lasso, group MCP, sparse-group lasso, sparse-group MCP | 12 sklearn classes   |
+| Poisson      | Log-link                          | Same as binomial                                   | 12 sklearn classes   |
+| Cox PH       | Breslow ties                      | Same as binomial                                   | 12 sklearn classes   |
 
-48 estimators total. Plus 24 `*PathCV` cross-validation wrappers, plus
+58 estimators total. Plus 28 `*PathCV` cross-validation wrappers, plus
 `select_by_ic` for AIC/BIC/EBIC across all four GLM families.
 
 ## Quick taste
@@ -84,17 +85,17 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Status
 
-v0.1 is a complete, tested implementation: **199 cargo + 138 pytest
+v0.2 is a complete, tested implementation: **241 cargo + 184 pytest
 tests, all green** at last snapshot. Sparse + dense + mmap + chunked
-backends all interoperate; every datafit × penalty combination is
-wired end-to-end with sklearn-style `fit` / `predict` /
++ multi-task backends all interoperate; every datafit × penalty
+combination is wired end-to-end with sklearn-style `fit` / `predict` /
 `predict_proba` / `score`. Wheels are built via `cibuildwheel` for
 Linux (x86_64 + aarch64), macOS (x86_64 + arm64), and Windows
 (AMD64).
 
-What's not yet in: multinomial / multi-task (M3.6, M7),
-comparison benchmarks vs `glmnet`/`ncvreg`/`grpreg`/`skglm` (M8).
-See the [roadmap](roadmap.md) for the full picture.
+What's not yet in: multinomial logit (M3.6), multi-response GLMs
+(M7.3), and comparison benchmarks vs `glmnet`/`ncvreg`/`grpreg`/`skglm`
+(M8). See the [roadmap](roadmap.md) for the full picture.
 
 ```{toctree}
 :hidden:
@@ -113,6 +114,7 @@ concepts/penalties
 concepts/datafits
 concepts/weights
 concepts/backends
+concepts/multitask
 ```
 
 ```{toctree}
@@ -149,6 +151,7 @@ examples/survival
 
 api/index
 api/estimators-ls
+api/estimators-multitask
 api/estimators-logistic
 api/estimators-poisson
 api/estimators-cox

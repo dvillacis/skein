@@ -285,4 +285,4 @@ __all__ = [
     "Datafit",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
