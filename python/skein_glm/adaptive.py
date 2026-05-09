@@ -34,7 +34,6 @@ from numpy.typing import NDArray
 from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
 from sklearn.model_selection import KFold
 
-from skein_glm import _core
 from skein_glm.cv import (
     _CoxPathCVMixin,
     _LogisticPathCVMixin,

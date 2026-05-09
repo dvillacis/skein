@@ -27,7 +27,6 @@ def _problem_no_ties(seed: int = 0, n: int = 100, p: int = 5):
     coincide."""
     rng = np.random.default_rng(seed)
     x = rng.standard_normal((n, p))
-    eta = 0.5 * x[:, 0]
     time = np.sort(rng.exponential(1.0, n)) + np.linspace(0, 1e-6, n)
     event = (rng.uniform(size=n) < 0.7).astype(np.float64)
     if event.sum() == 0:
