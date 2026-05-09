@@ -11,6 +11,7 @@ mod block_path_lla;
 mod cd;
 mod lla;
 mod path;
+mod path_lla;
 mod prox_newton;
 mod prox_newton_block;
 
@@ -20,9 +21,11 @@ pub use block_path_lla::{solve_block_path_lla, BlockPathLLAReport};
 pub use cd::{cd_solve, cd_solve_subset, cd_solve_warm, CdConfig, CdReport};
 pub use lla::{
     lla_solve, surrogate_sparse_group_mcp, surrogate_sparse_group_scad,
-    surrogate_weights_group_mcp, surrogate_weights_group_scad, LLAReport,
+    surrogate_weights_bridge, surrogate_weights_group_mcp, surrogate_weights_group_scad,
+    LLAReport,
 };
 pub use path::{lambda_grid, lambda_max, solve_path, PathConfig, PathReport, Screening};
+pub use path_lla::{solve_path_lla, PathLLAReport};
 pub use prox_newton::{
     prox_newton_solve, prox_newton_solve_path, ProxNewtonPathReport, ProxNewtonReport,
 };

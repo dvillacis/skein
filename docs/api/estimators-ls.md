@@ -4,9 +4,9 @@ Least-squares datafit with the seven skein penalty families. All 14
 classes follow the same shape:
 
 - **Scalar penalty + single λ**: `MCPRegressor`, `SCADRegressor`,
-  `ElasticNetRegressor`.
+  `ElasticNetRegressor`, `BridgeRegressor`.
 - **Scalar penalty + path**: `MCPPathRegressor`, `SCADPathRegressor`,
-  `ElasticNetPathRegressor`.
+  `ElasticNetPathRegressor`, `BridgePathRegressor`.
 - **Group penalty + single λ**: `GroupLassoRegressor`,
   `GroupMCPRegressor`, `GroupElasticNetRegressor`,
   `SparseGroupLassoRegressor`, `SparseGroupMCPRegressor`,
@@ -31,6 +31,9 @@ for any analysis that picks λ post-hoc.
 
 .. autoclass:: skein_glm.estimators.ElasticNetRegressor
    :members:
+
+.. autoclass:: skein_glm.estimators.BridgeRegressor
+   :members:
 ```
 
 ## Scalar — path
@@ -43,6 +46,9 @@ for any analysis that picks λ post-hoc.
    :members:
 
 .. autoclass:: skein_glm.estimators.ElasticNetPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.BridgePathRegressor
    :members:
 ```
 

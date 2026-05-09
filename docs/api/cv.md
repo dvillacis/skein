@@ -27,6 +27,9 @@ their non-CV counterparts.
 .. autoclass:: skein_glm.cv.ElasticNetPathCV
    :members:
 
+.. autoclass:: skein_glm.cv.BridgePathCV
+   :members:
+
 .. autoclass:: skein_glm.cv.GroupLassoPathCV
    :members:
 

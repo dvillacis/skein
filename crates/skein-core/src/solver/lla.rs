@@ -277,6 +277,36 @@ pub fn surrogate_sparse_group_scad(
     (group_w, coord_w)
 }
 
+/// LLA surrogate weights for the **bridge** (a.k.a. ℓ_q) penalty
+/// `λ · Σ_j w_j |β_j|^q`, with `q ∈ (0, 1]`. The derivative of `|β|^q`
+/// at `|β| > 0` is `q · sign(β) · |β|^(q-1)`, so the LLA inner per-
+/// coordinate weight is `q · |β_old|^(q-1) · w_j_base`. At β = 0 this is
+/// infinite — we add an `eps` floor to the magnitude before exponentiation
+/// so the inner weight stays finite. `eps = 1e-6` works well in practice;
+/// smaller `eps` produces sharper sparsification but more outer LLA
+/// iterations.
+///
+/// Pair with [`crate::penalty::ElasticNet::with_weights`] at `α = 1` (i.e.
+/// weighted lasso) as the inner penalty inside `solve_path_lla`'s closure.
+pub fn surrogate_weights_bridge(
+    beta: ArrayView1<f64>,
+    q: f64,
+    eps: f64,
+    base_weights: ArrayView1<f64>,
+) -> Array1<f64> {
+    assert!(
+        q > 0.0 && q <= 1.0,
+        "bridge q must be in (0, 1] (got {})",
+        q
+    );
+    assert!(eps > 0.0, "bridge eps must be > 0 (got {})", eps);
+    debug_assert_eq!(beta.len(), base_weights.len());
+    Array1::from_iter((0..beta.len()).map(|j| {
+        let m = beta[j].abs() + eps;
+        q * m.powf(q - 1.0) * base_weights[j]
+    }))
+}
+
 /// Per-group surrogate weights for group MCP:
 ///   `w_g_lla = max(0, w_g_base − ‖β_g‖₂ / (λ · γ))`.
 ///

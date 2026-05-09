@@ -19,11 +19,11 @@ load-bearing piece; everything after stacks on top of it.
 | M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + M3.5 Cox PH Breslow + M3.6 multinomial (Rust + PyO3 + estimators) done; Efron ties + opportunistic GLMs (M3.7) pending |
 | M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
-| M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; bridge + overlapping group + fused + constrained variants pending |
+| M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; **bridge `\|β\|^q` (LS, scalar LLA path) done**; overlapping group + fused + adaptive + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **254 cargo + 208 pytest, all green.**
+Test count at this snapshot: **257 cargo + 218 pytest, all green.**
 
 ---
 
@@ -749,13 +749,24 @@ ordered by user demand and by what differentiates us.
   `a > 2`. 11 pytest tests cover path shape, signal recovery,
   dense↔sparse equivalence, large-`a` parity with `SparseGroupLasso`,
   Cox/Poisson/Logistic smoke, and `a > 2` rejection across families.
+- ✅ **Bridge / ℓ_q penalty** `λ · Σ_j w_j |β_j|^q` (LS, scalar): new
+  `solve_path_lla` scalar outer-LLA path solver in
+  `solver/path_lla.rs` (mirrors `solve_block_path_lla`); new
+  `surrogate_weights_bridge` helper. Inner is weighted lasso
+  (`ElasticNet::with_weights(λ, 1.0, w)`). PyO3 entries
+  `solve_bridge_ls_path[_sparse]`. 3 sklearn estimators
+  (`BridgeRegressor`, `BridgePathRegressor`, `BridgePathCV`). 3 cargo
+  tests (q=1 ↔ lasso path, q=0.5 signal recovery, λ_max ⇒ zero) +
+  10 pytest (q=1 ↔ MCP-high-γ parity, q=0.7 signal recovery via
+  warm-started path, dense↔sparse, dense↔sparse + standardize, CV
+  picks active features, smaller-q sparsifies more, q∈(0,1] + ε>0
+  validation, predict shape).
 - **Overlapping group lasso / latent group lasso** via duplication
   trick; surface a friendly group-construction API.
 - **Fused lasso / generalized lasso**: 1D and graph-structured
   fusion. Solved via specialized prox (taut-string for 1D, ADMM for
   general). Lives behind `solver::fused`.
 - **Adaptive group MCP / SCAD** with weights from a pilot fit.
-- **Bridge penalty** (`|β|^q`, q < 1) — closes parity with `grpreg`.
 - **Constrained variants**: nonneg lasso, box constraints. Implemented
   by post-prox projection.
 

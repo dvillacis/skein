@@ -376,6 +376,113 @@ class ElasticNetRegressor(_NonconvexRegressorBase):
         return self
 
 
+class BridgeRegressor(_NonconvexRegressorBase):
+    """Bridge (ℓ_q) regression at a single λ via outer LLA.
+
+    Penalty `λ · Σ_j w_j |β_j|^q` with `q ∈ (0, 1]`. At ``q = 1`` this
+    is plain weighted lasso; for ``q < 1`` the penalty is concave and
+    sparsifies more aggressively than lasso (closes parity with
+    ``grpreg``'s ``family="gaussian"`` + bridge alternative). The
+    inner LLA surrogate is weighted lasso with per-coordinate weights
+    `q · (|β_old| + ε)^(q-1) · w_base`.
+
+    Parameters
+    ----------
+    lambda_ : float, default 0.1
+    q : float, default 0.5
+        Bridge exponent in (0, 1]. q = 0.5 is the canonical bridge
+        choice in the literature.
+    eps : float, default 1e-6
+        Floor on `|β_j|` inside the LLA weight to keep the surrogate
+        weight finite at β = 0. Smaller eps sharpens sparsification
+        but increases outer LLA iterations.
+    weights : array-like of shape (n_features,) or None
+    max_iter : int, default 100
+        Inner CD iterations per outer LLA step.
+    tol : float, default 1e-6
+    max_outer : int, default 10
+        Maximum LLA outer iterations.
+    outer_tol : float, default 1e-6
+        Stop the LLA loop when `max_j |β_new − β_old| < outer_tol`.
+    fit_intercept : bool, default True
+    standardize : bool, default False
+    acceleration : int or None, default 5
+
+    See Also
+    --------
+    skein_glm.BridgePathRegressor : Full λ-path with warm starts.
+    skein_glm.MCPRegressor : Closed-form-prox nonconvex alternative.
+    """
+
+    def __init__(
+        self,
+        lambda_: float = 0.1,
+        q: float = 0.5,
+        *,
+        eps: float = 1e-6,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.lambda_ = lambda_
+        self.q = q
+        self.eps = eps
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def fit(self, x, y: NDArray[np.float64]) -> "BridgeRegressor":
+        w = (
+            np.ascontiguousarray(self.weights, dtype=np.float64)
+            if self.weights is not None
+            else None
+        )
+        common = dict(
+            q=self.q,
+            eps=self.eps,
+            lambdas=np.array([self.lambda_], dtype=np.float64),
+            weights=w,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            acceleration=self.acceleration,
+            fit_intercept=self.fit_intercept,
+            standardize_x=self.standardize,
+            max_outer=self.max_outer,
+            outer_tol=self.outer_tol,
+        )
+        if _is_sparse(x):
+            y = np.ascontiguousarray(y, dtype=np.float64)
+            data, indices, indptr, n_rows, n_cols = _as_csc_arrays(x)
+            if y.ndim != 1 or y.shape[0] != n_rows:
+                raise ValueError(
+                    f"y must be 1D with length {n_rows}, got shape {y.shape}"
+                )
+            coefs, intercepts, _, info = _core.solve_bridge_ls_path_sparse(
+                data, indices, indptr, n_rows, n_cols, y, **common,
+            )
+            self.n_features_in_ = n_cols
+        else:
+            x, y = self._validate_xy(x, y)
+            coefs, intercepts, _, info = _core.solve_bridge_ls_path(
+                x, y, **common,
+            )
+            self.n_features_in_ = x.shape[1]
+        self.coef_ = coefs[0]
+        self.intercept_ = float(intercepts[0])
+        self.info_ = info
+        return self
+
+
 class _PathRegressorBase(BaseEstimator):
     """Common attributes for the path estimators."""
 
@@ -837,6 +944,129 @@ class ElasticNetPathRegressor(_PathRegressorBase):
                 acceleration=self.acceleration,
                 fit_intercept=self.fit_intercept,
                 standardize_x=self.standardize,
+            )
+            self.n_features_in_ = x.shape[1]
+        self.coefs_ = coefs
+        self.intercepts_ = intercepts
+        self.lambdas_ = lambdas_used
+        self.info_ = info
+        return self
+
+
+class BridgePathRegressor(_PathRegressorBase):
+    """Bridge (ℓ_q) regression along a λ-path with warm starts.
+
+    Penalty `λ · Σ_j w_j |β_j|^q` with `q ∈ (0, 1]`, fit via outer LLA
+    wrapping a weighted-lasso inner. Warm-starts β across decreasing λ;
+    a fresh LLA outer loop runs at each λ.
+
+    Parameters
+    ----------
+    q : float, default 0.5
+        Bridge exponent in (0, 1]. ``q = 1`` is plain weighted lasso;
+        smaller q sparsifies more aggressively but the loss surface
+        becomes more non-convex.
+    eps : float, default 1e-6
+    lambdas : array-like or None, default None
+    n_lambdas : int, default 100
+    lambda_min_ratio : float, default 1e-3
+    weights : array-like of shape (n_features,) or None
+    max_iter : int, default 100
+    tol : float, default 1e-6
+    max_outer : int, default 10
+    outer_tol : float, default 1e-6
+    fit_intercept : bool, default True
+    standardize : bool, default False
+    acceleration : int or None, default 5
+
+    Attributes
+    ----------
+    coefs_ : ndarray of shape (n_lambdas, n_features)
+    intercepts_ : ndarray of shape (n_lambdas,)
+    lambdas_ : ndarray of shape (n_lambdas,)
+    info_ : dict
+        ``outer_iters``, ``outer_converged``, ``inner_iters``,
+        ``final_objs``.
+    n_features_in_ : int
+
+    See Also
+    --------
+    skein_glm.BridgeRegressor : Single-λ version.
+    skein_glm.BridgePathCV : K-fold cross-validated path.
+    """
+
+    def __init__(
+        self,
+        q: float = 0.5,
+        *,
+        eps: float = 1e-6,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.q = q
+        self.eps = eps
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def fit(self, x, y: NDArray[np.float64]) -> "BridgePathRegressor":
+        y = np.ascontiguousarray(y, dtype=np.float64)
+        lams = (
+            np.ascontiguousarray(self.lambdas, dtype=np.float64)
+            if self.lambdas is not None
+            else None
+        )
+        w = (
+            np.ascontiguousarray(self.weights, dtype=np.float64)
+            if self.weights is not None
+            else None
+        )
+        common = dict(
+            q=self.q,
+            eps=self.eps,
+            lambdas=lams,
+            n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio,
+            weights=w,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            acceleration=self.acceleration,
+            fit_intercept=self.fit_intercept,
+            standardize_x=self.standardize,
+            max_outer=self.max_outer,
+            outer_tol=self.outer_tol,
+        )
+        if _is_sparse(x):
+            data, indices, indptr, n_rows, n_cols = _as_csc_arrays(x)
+            if y.ndim != 1 or y.shape[0] != n_rows:
+                raise ValueError(
+                    f"y must be 1D with length {n_rows}, got shape {y.shape}"
+                )
+            coefs, intercepts, lambdas_used, info = _core.solve_bridge_ls_path_sparse(
+                data, indices, indptr, n_rows, n_cols, y, **common,
+            )
+            self.n_features_in_ = n_cols
+        else:
+            x = np.ascontiguousarray(x, dtype=np.float64)
+            coefs, intercepts, lambdas_used, info = _core.solve_bridge_ls_path(
+                x, y, **common,
             )
             self.n_features_in_ = x.shape[1]
         self.coefs_ = coefs

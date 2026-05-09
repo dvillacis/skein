@@ -28,6 +28,7 @@ from skein_glm.estimators import (
     CoxSparseGroupLassoPathRegressor,
     CoxSparseGroupMCPPathRegressor,
     CoxSparseGroupSCADPathRegressor,
+    BridgePathRegressor,
     ElasticNetPathRegressor,
     GroupElasticNetPathRegressor,
     GroupLassoPathRegressor,
@@ -334,6 +335,68 @@ class ElasticNetPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         )
         kw.update(overrides)
         return ElasticNetPathRegressor(**kw)
+
+
+class BridgePathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
+    """K-fold cross-validated bridge (ℓ_q) path. Picks the λ minimizing
+    mean test MSE on the supplied folds. The non-convex inner objective
+    means the chosen λ is a local-min selection — initialization
+    (warm-starting from large λ down) makes this stable in practice
+    but not guaranteed to be the global optimum at any λ."""
+
+    def __init__(
+        self,
+        q: float = 0.5,
+        *,
+        eps: float = 1e-6,
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+    ) -> None:
+        self.q = q
+        self.eps = eps
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+
+    def _make_base_path(self, **overrides) -> BridgePathRegressor:
+        kw: dict[str, Any] = dict(
+            q=self.q,
+            eps=self.eps,
+            lambdas=self.lambdas,
+            n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio,
+            weights=self.weights,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            max_outer=self.max_outer,
+            outer_tol=self.outer_tol,
+            fit_intercept=self.fit_intercept,
+            standardize=self.standardize,
+            acceleration=self.acceleration,
+        )
+        kw.update(overrides)
+        return BridgePathRegressor(**kw)
 
 
 # =====================================================================

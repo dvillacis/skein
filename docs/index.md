@@ -33,14 +33,14 @@ When someone asks "why not just `skglm`, `glmnet`, or `ncvreg`?":
 
 | Family       | Datafits                          | Penalties                                          | Estimators           |
 |--------------|-----------------------------------|----------------------------------------------------|----------------------|
-| Gaussian     | Least squares                     | MCP, SCAD, **elastic net**, group lasso, group MCP, **group elastic net**, sparse-group lasso, sparse-group MCP, **sparse-group SCAD** | 16 sklearn classes |
+| Gaussian     | Least squares                     | MCP, SCAD, **elastic net**, **bridge `\|β\|^q`**, group lasso, group MCP, **group elastic net**, sparse-group lasso, sparse-group MCP, **sparse-group SCAD** | 18 sklearn classes |
 | Multi-task   | Multi-response least squares      | Multi-task lasso / MCP / SCAD / elastic net (row-grouped, dense + sparse, ±standardize) | 8 sklearn classes |
 | Binomial     | Logistic (with prox-Newton)       | MCP, SCAD, group lasso, group MCP, sparse-group lasso, sparse-group MCP, **sparse-group SCAD** | 14 sklearn classes   |
 | Multinomial  | Softmax (K classes, prox-Newton + Böhning bound) | Row-grouped lasso / MCP / SCAD / elastic net (dense + sparse, ±standardize) | 12 sklearn classes |
 | Poisson      | Log-link                          | Same as binomial                                   | 14 sklearn classes   |
 | Cox PH       | Breslow ties                      | Same as binomial                                   | 14 sklearn classes   |
 
-78 estimators total. Plus 36 `*PathCV` cross-validation wrappers, plus
+80 estimators total. Plus 37 `*PathCV` cross-validation wrappers, plus
 `select_by_ic` for AIC/BIC/EBIC across all five GLM families.
 
 ## Quick taste
@@ -86,7 +86,7 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Status
 
-v0.2 is a complete, tested implementation: **254 cargo + 208 pytest
+v0.2 is a complete, tested implementation: **257 cargo + 218 pytest
 tests, all green** at last snapshot. Sparse + dense + mmap + chunked
 + multi-task backends all interoperate; every datafit × penalty
 combination is wired end-to-end with sklearn-style `fit` / `predict` /

@@ -34,9 +34,9 @@ use skein_core::{
     penalty::{ElasticNet, GroupElasticNet, GroupLasso, GroupPenalty, Mcp, Scad, SparseGroupLasso},
     solver::{
         cd_solve, prox_newton_block_solve_path, prox_newton_solve_path, solve_block_path,
-        solve_block_path_lla, solve_path, surrogate_sparse_group_mcp, surrogate_sparse_group_scad,
-        surrogate_weights_group_mcp, surrogate_weights_group_scad, BlockPathConfig, CdConfig,
-        PathConfig, Screening,
+        solve_block_path_lla, solve_path, solve_path_lla, surrogate_sparse_group_mcp,
+        surrogate_sparse_group_scad, surrogate_weights_bridge, surrogate_weights_group_mcp,
+        surrogate_weights_group_scad, BlockPathConfig, CdConfig, PathConfig, Screening,
     },
     standardize::{
         destandardize_path, rescale_weights_for_standardize, standardize, StandardizeConfig,
@@ -369,6 +369,279 @@ fn solve_elastic_net_ls_path<'py>(
         standardize_x,
         move |lam, w| Box::new(ElasticNet::with_weights(lam, alpha, w)),
     )
+}
+
+// ---------------------------------------------------------------------
+// Bridge / ℓ_q penalty: `λ · Σ_j w_j |β_j|^q` with `q ∈ (0, 1]`.
+// Convex at q = 1 (plain weighted lasso); concave/non-convex for q < 1
+// (bridge a.k.a. ℓ_q regression). Solved via outer LLA (the M3/M2.3
+// scalar analog) wrapping a weighted-lasso inner.
+// ---------------------------------------------------------------------
+
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, *, q=0.5, eps=1e-6,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false,
+    max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_bridge_ls_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray1<f64>,
+    q: f64,
+    eps: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if !(0.0 < q && q <= 1.0) {
+        return Err(PyValueError::new_err(format!(
+            "bridge q must be in (0, 1]; got {q}"
+        )));
+    }
+    if eps <= 0.0 {
+        return Err(PyValueError::new_err(format!(
+            "bridge eps must be > 0; got {eps}"
+        )));
+    }
+    let x_arr = x.as_array().to_owned();
+    let y_arr = y.as_array().to_owned();
+    let p = x_arr.ncols();
+
+    let weights_orig = match weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != p {
+                return Err(PyValueError::new_err(format!(
+                    "weights length {} does not match n_features {}",
+                    arr.len(),
+                    p
+                )));
+            }
+            arr
+        }
+        None => Array1::ones(p),
+    };
+
+    let std_cfg = StandardizeConfig {
+        center_x: fit_intercept,
+        scale_x: standardize_x,
+        fit_intercept,
+    };
+    let (xs, ys, stats) = standardize(x_arr.view(), y_arr.view(), &std_cfg);
+    let weights_std = rescale_weights_for_standardize(weights_orig.view(), &stats);
+
+    let cd_cfg = CdConfig {
+        max_iter,
+        tol,
+        acceleration,
+    };
+    let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
+
+    let design = DenseMatrix::new(xs);
+    let datafit = LeastSquares::new(ys);
+
+    let make_inner = move |beta: ArrayView1<'_, f64>,
+                           lam: f64,
+                           w_base: ArrayView1<'_, f64>|
+          -> Box<dyn Penalty> {
+        let w = surrogate_weights_bridge(beta, q, eps, w_base);
+        Box::new(ElasticNet::with_weights(lam, 1.0, w))
+    };
+    let (betas_std, report) = solve_path_lla(
+        &design,
+        &datafit,
+        weights_std,
+        make_inner,
+        n_lambdas,
+        lambda_min_ratio,
+        lambdas_vec,
+        &cd_cfg,
+        max_outer,
+        outer_tol,
+    );
+    let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
+
+    let info = PyDict::new_bound(py);
+    info.set_item("outer_iters", report.outer_iters)?;
+    info.set_item("outer_converged", report.outer_converged)?;
+    info.set_item("inner_iters", report.inner_iters)?;
+    info.set_item("final_objs", report.final_objs)?;
+
+    Ok((
+        coefs.into_pyarray_bound(py),
+        intercepts.into_pyarray_bound(py),
+        Array1::from(report.lambdas).into_pyarray_bound(py),
+        info,
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, *, q=0.5, eps=1e-6,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false,
+    max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_bridge_ls_path_sparse<'py>(
+    py: Python<'py>,
+    x_data: PyReadonlyArray1<f64>,
+    x_indices: PyReadonlyArray1<i64>,
+    x_indptr: PyReadonlyArray1<i64>,
+    n_rows: usize,
+    n_cols: usize,
+    y: PyReadonlyArray1<f64>,
+    q: f64,
+    eps: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if !(0.0 < q && q <= 1.0) {
+        return Err(PyValueError::new_err(format!(
+            "bridge q must be in (0, 1]; got {q}"
+        )));
+    }
+    if eps <= 0.0 {
+        return Err(PyValueError::new_err(format!(
+            "bridge eps must be > 0; got {eps}"
+        )));
+    }
+    let y_arr = y.as_array().to_owned();
+    if y_arr.len() != n_rows {
+        return Err(PyValueError::new_err(format!(
+            "y length {} does not match n_rows {}",
+            y_arr.len(),
+            n_rows
+        )));
+    }
+
+    let user_weights = match weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != n_cols {
+                return Err(PyValueError::new_err(format!(
+                    "weights length {} does not match n_features {}",
+                    arr.len(),
+                    n_cols
+                )));
+            }
+            Some(arr)
+        }
+        None => None,
+    };
+
+    let csc = read_csc_arrays(n_rows, n_cols, x_data, x_indices, x_indptr)?;
+
+    let scales_user: Option<Array1<f64>> = if standardize_x {
+        Some(compute_csc_glmnet_scales(&csc))
+    } else {
+        None
+    };
+    let csc_eff = if fit_intercept {
+        append_intercept_to_csc(csc)
+    } else {
+        csc
+    };
+    let mut pen_weights = build_sparse_penalty_weights(&user_weights, n_cols, fit_intercept);
+    if let Some(scales) = &scales_user {
+        for j in 0..n_cols {
+            pen_weights[j] /= scales[j];
+        }
+    }
+
+    let cd_cfg = CdConfig {
+        max_iter,
+        tol,
+        acceleration,
+    };
+    let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
+    let datafit = LeastSquares::new(y_arr);
+
+    let make_inner = move |beta: ArrayView1<'_, f64>,
+                           lam: f64,
+                           w_base: ArrayView1<'_, f64>|
+          -> Box<dyn Penalty> {
+        let w = surrogate_weights_bridge(beta, q, eps, w_base);
+        Box::new(ElasticNet::with_weights(lam, 1.0, w))
+    };
+
+    let (betas_aug, report) = match scales_user.as_ref() {
+        Some(scales) => {
+            let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
+            for j in 0..n_cols {
+                x_scale_eff[j] = scales[j];
+            }
+            let std_design = Standardized::new(csc_eff, x_scale_eff);
+            solve_path_lla(
+                &std_design,
+                &datafit,
+                pen_weights,
+                make_inner,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
+            )
+        }
+        None => solve_path_lla(
+            &csc_eff,
+            &datafit,
+            pen_weights,
+            make_inner,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
+        ),
+    };
+
+    let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
+    if let Some(scales) = scales_user.as_ref() {
+        for k in 0..coefs.nrows() {
+            for j in 0..coefs.ncols() {
+                coefs[[k, j]] /= scales[j];
+            }
+        }
+    }
+
+    let info = PyDict::new_bound(py);
+    info.set_item("outer_iters", report.outer_iters)?;
+    info.set_item("outer_converged", report.outer_converged)?;
+    info.set_item("inner_iters", report.inner_iters)?;
+    info.set_item("final_objs", report.final_objs)?;
+
+    Ok((
+        coefs.into_pyarray_bound(py),
+        intercepts.into_pyarray_bound(py),
+        Array1::from(report.lambdas).into_pyarray_bound(py),
+        info,
+    ))
 }
 
 // ---------------------------------------------------------------------
@@ -9140,6 +9413,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_mcp_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_scad_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_elastic_net_ls_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_bridge_ls_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_bridge_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_lasso_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_elastic_net_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_group_mcp_ls_path, m)?)?;
