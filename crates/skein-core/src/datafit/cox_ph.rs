@@ -175,6 +175,9 @@ impl CoxPH {
             // per event into the NLL.
             let mut s_d = 0.0_f64;
             let mut events_in_block = 0_usize;
+            // Index `k` is used into three parallel arrays (sort_order,
+            // exp_eta_sorted, event-via-sort_order); zip would obscure that.
+            #[allow(clippy::needless_range_loop)]
             for k in block_start..block_end {
                 let orig = self.sort_order[k];
                 if self.event[orig] > 0.5 {
@@ -292,6 +295,9 @@ impl CoxPH {
 
             let mut events_in_block = 0_usize;
             let mut s_d = 0.0_f64;
+            // See the matching loop in `loss` — `k` indexes both sort_order
+            // (then event) and exp_eta_sorted in parallel.
+            #[allow(clippy::needless_range_loop)]
             for k in block_start..block_end {
                 if self.event[self.sort_order[k]] > 0.5 {
                     events_in_block += 1;
