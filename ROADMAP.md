@@ -20,10 +20,10 @@ load-bearing piece; everything after stacks on top of it.
 | M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; sparse-group SCAD shell + bridge + overlapping group + fused + constrained variants pending |
-| M7 — Multi-task | ⏳ | multi-response GLMs |
+| M7 — Multi-task | ⏳ partial | M7.1 multi-task LS lasso + MCP (lasso convex, MCP via LLA) done via `MultiTaskDesign<D>` virtual design wrapper; sparse / standardize / SCAD / GLM multi-task pending |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **231 cargo + 162 pytest, all green.**
+Test count at this snapshot: **240 cargo + 170 pytest, all green.**
 
 ---
 
@@ -716,12 +716,50 @@ ordered by user demand and by what differentiates us.
 ## M7 — Multi-task / multi-response
 
 `skglm` has multi-task lasso; R has it via custom packages. We wire it
-through the existing trait surface.
+through the existing trait surface — multi-task LS reduces *exactly* to
+group lasso on a virtual block-replicated design, so the M2 block-CD
+machinery handles the headline algorithm unchanged.
 
-- **Block-row coefficient matrix** `B ∈ ℝ^{p × K}`.
-- **MultiTaskLasso / MultiTaskMCP / MultiTaskSCAD**: penalty acts on
-  rows of `B` (so feature j is selected jointly across tasks).
-- **Multi-response least squares + GLMs**.
+### ✅ M7.1 — Multi-task LS lasso + MCP
+
+- ✅ **`MultiTaskDesign<D>` Rust wrapper**: with `B ∈ ℝ^{p×K}` laid
+  out row-major (`bvec[jK+k] = B[j, k]`) and `Y` stacked task-outer
+  (`yvec[k·n+i] = Y[i, k]`), the multi-task LS objective becomes a
+  group-lasso problem on a virtual `(nK × pK)` design where column
+  `jK+k` is `X[:, j]` lifted into row block `k` and zero elsewhere.
+  The wrapper carries no state beyond the inner design + task count;
+  every `DesignMatrix` op is O(n) just like the base. `auto_groups(p,
+  K)` builds the row-grouping `{jK, …, jK+K-1}` for each feature.
+  Composes with `Augmented` and `Standardized` like any other backend.
+  9 cargo tests cover wrapper correctness on a hand-built reference
+  `X̃`, `K=1` identity collapse, and end-to-end solver-path equivalence
+  to a hand-stacked group-lasso fit.
+- ✅ **PyO3**: `solve_multitask_lasso_ls_path` (convex via M2's
+  `solve_block_path` + `GroupLasso`) and `solve_multitask_mcp_ls_path`
+  (non-convex via `solve_block_path_lla` + MCP surrogate). Both take
+  2D `Y`, center per-task to get the no-intercept fit, recover
+  per-task intercepts via `α_k = ȳ_k − Σ_j x̄_j B[j,k]`. Convention is
+  the natural per-sample `(1/(2nK))` data-fidelity factor — sklearn
+  /glmnet's `(1/(2n))` matches at `λ_skein = α_sklearn / K`.
+- ✅ **Python estimators**: `MultiTaskLasso{,Path}Regressor`,
+  `MultiTaskMCP{,Path}Regressor`, plus `MultiTaskLassoPathCV` /
+  `MultiTaskMCPPathCV` (K-fold CV scoring by mean per-task MSE).
+  `coef_` shape `(K, p)` matching sklearn convention; `intercept_`
+  shape `(K,)`; `predict(X) → (n, K)`. 8 pytest tests cover path
+  shapes, joint-support recovery, sklearn-MultiTaskLasso parity at
+  `λ = α/K`, MCP signal recovery on the path, CV picking the active
+  features, 2D-Y validation, and the `standardize_x=True` rejection.
+
+### M7.2 — Pending
+
+- **MultiTaskSCAD** via LLA (needs `surrogate_weights_group_scad`
+  threaded through; mechanical extension of M7.1).
+- **MultiTaskElasticNet** (uses `GroupElasticNet` from M6.2 as inner).
+- **Sparse design support** (`SparseCSC` + `MultiTaskDesign`).
+- **`standardize_x` for multi-task** (lazy `Standardized` wrapper
+  composed with `MultiTaskDesign`).
+- **Multi-response GLMs / multinomial logit** (multinomial reduces to
+  a multi-task logistic with the row-grouped K-class softmax surface).
 - **Shared-support estimators** for the "same active features across
   related outcomes" use case that genomics + finance both want.
 

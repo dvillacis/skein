@@ -2539,6 +2539,132 @@ def test_group_elastic_net_rejects_alpha_out_of_range():
         skein.GroupElasticNetRegressor(groups=groups, lambda_=0.1, alpha=-0.1).fit(X, y)
 
 
+# ====================================================================
+# Multi-task LS (M7.1)
+# ====================================================================
+
+
+def _multitask_problem(seed: int, n: int = 80, p: int = 10, k: int = 4):
+    rng = np.random.default_rng(seed)
+    X = rng.standard_normal((n, p))
+    B = np.zeros((p, k))
+    # First three features active across all tasks (joint support);
+    # task-specific magnitudes drawn fresh so the K=3 vs K=4 cases differ.
+    active_rows = rng.uniform(-1.5, 1.5, size=(3, k))
+    active_rows[np.abs(active_rows) < 0.4] += np.sign(active_rows[np.abs(active_rows) < 0.4]) * 0.5
+    B[:3] = active_rows
+    Y = X @ B + 0.1 * rng.standard_normal((n, k))
+    return X, Y, B
+
+
+def test_multitask_lasso_path_shapes_and_intercept():
+    X, Y, _ = _multitask_problem(seed=101)
+    n, p = X.shape
+    k = Y.shape[1]
+    model = skein.MultiTaskLassoPathRegressor(
+        n_lambdas=12, lambda_min_ratio=1e-2, tol=1e-10, max_iter=10000,
+    ).fit(X, Y)
+    assert model.coefs_.shape == (12, k, p)
+    assert model.intercepts_.shape == (12, k)
+    assert model.lambdas_.shape == (12,)
+    np.testing.assert_allclose(model.coefs_[0], 0.0, atol=1e-6)
+    np.testing.assert_allclose(model.intercepts_[0], Y.mean(axis=0), atol=1e-6)
+
+
+def test_multitask_lasso_path_recovers_joint_support():
+    X, Y, B_true = _multitask_problem(seed=103, n=200, p=15, k=4)
+    model = skein.MultiTaskLassoPathRegressor(
+        n_lambdas=40, lambda_min_ratio=1e-3, tol=1e-10, max_iter=20000,
+    ).fit(X, Y)
+    last = model.coefs_[-1]   # (K, p)
+    for j in range(3):
+        for task in range(B_true.shape[1]):
+            assert abs(last[task, j]) > 0.05, (
+                f"feature {j} task {task} not active: got {last[task, j]}"
+            )
+
+
+def test_multitask_lasso_predict_shape_and_signal():
+    X, Y, _ = _multitask_problem(seed=107, n=100, p=8, k=3)
+    model = skein.MultiTaskLassoRegressor(
+        lambda_=0.005, tol=1e-10, max_iter=10000,
+    ).fit(X, Y)
+    assert model.coef_.shape == (3, 8)
+    assert model.intercept_.shape == (3,)
+    pred = model.predict(X)
+    assert pred.shape == (100, 3)
+    np.testing.assert_allclose(pred, Y, atol=0.5)
+
+
+def test_multitask_lasso_matches_sklearn_with_k_rescale():
+    """sklearn's `MultiTaskLasso(alpha=α)` uses `(1/(2n)) ‖Y-XB‖²_F + α P`;
+    skein's `MultiTaskLassoRegressor(lambda_=λ)` uses the natural
+    stacked `(1/(2nK)) ‖·‖² + λ P`. Same minimizer at `λ = α / K`."""
+    from sklearn.linear_model import MultiTaskLasso
+
+    X, Y, _ = _multitask_problem(seed=109, n=120, p=10, k=3)
+    alpha = 0.05
+    k = Y.shape[1]
+    skl = MultiTaskLasso(alpha=alpha, fit_intercept=True, tol=1e-10, max_iter=20000).fit(X, Y)
+    skein_model = skein.MultiTaskLassoRegressor(
+        lambda_=alpha / k, fit_intercept=True, tol=1e-12, max_iter=20000, screening="off",
+    ).fit(X, Y)
+    np.testing.assert_allclose(skein_model.coef_, skl.coef_, atol=1e-5)
+    np.testing.assert_allclose(skein_model.intercept_, skl.intercept_, atol=1e-5)
+
+
+def test_multitask_mcp_path_recovers_signal():
+    X, Y, B_true = _multitask_problem(seed=113, n=200, p=15, k=4)
+    model = skein.MultiTaskMCPPathRegressor(
+        gamma=3.0, n_lambdas=30, lambda_min_ratio=1e-2,
+        tol=1e-10, max_iter=10000, max_outer=5,
+    ).fit(X, Y)
+    found_clean = False
+    for last in model.coefs_:
+        active_rows = np.where(np.linalg.norm(last, axis=0) > 1e-2)[0].tolist()
+        if all(j in active_rows for j in range(3)) and len(active_rows) <= 5:
+            found_clean = True
+            for j in range(3):
+                for task in range(B_true.shape[1]):
+                    assert np.sign(last[task, j]) == np.sign(B_true[j, task]), (
+                        f"feature {j} task {task} sign mismatch: "
+                        f"{last[task, j]} vs truth {B_true[j, task]}"
+                    )
+            break
+    assert found_clean, "no λ on the path delivered a clean MCP recovery"
+
+
+def test_multitask_lasso_path_cv_picks_reasonable_lambda():
+    X, Y, _ = _multitask_problem(seed=119, n=160, p=12, k=3)
+    cv = skein.MultiTaskLassoPathCV(
+        n_lambdas=25, cv=4, tol=1e-10, max_iter=5000, random_state=0,
+    ).fit(X, Y)
+    assert cv.lambda_best_ > 0
+    assert cv.coef_.shape == (3, 12)
+    assert cv.intercept_.shape == (3,)
+    active = (np.linalg.norm(cv.coef_, axis=0) > 1e-2).nonzero()[0].tolist()
+    for j in range(3):
+        assert j in active, f"truly active feature {j} not selected: {active}"
+
+
+def test_multitask_rejects_1d_y():
+    X = np.zeros((10, 3))
+    y_1d = np.zeros(10)
+    with pytest.raises(ValueError, match="Y must be 2D"):
+        skein.MultiTaskLassoRegressor().fit(X, y_1d)
+
+
+def test_multitask_rejects_standardize_x():
+    """v1 doesn't thread standardize_x through. The Python estimators
+    don't expose it, but the underlying `_core` entry returns a clear
+    error if requested directly."""
+    from skein_glm import _core
+    X = np.zeros((10, 3))
+    Y = np.zeros((10, 2))
+    with pytest.raises(ValueError, match="standardize_x is not supported"):
+        _core.solve_multitask_lasso_ls_path(X, Y, standardize_x=True)
+
+
 def _split_into_chunks(x: np.ndarray, n_chunks: int):
     """Yield (start, end) row-index pairs for `n_chunks` roughly
     equal-sized splits."""

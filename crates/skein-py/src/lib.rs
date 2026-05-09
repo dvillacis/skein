@@ -27,8 +27,8 @@ use ndarray::{Array2, ArrayView1};
 use skein_core::{
     datafit::{BinomialLogit, CoxPH, GlmDatafit, LeastSquares, PoissonLog},
     design::{
-        Augmented, Chunked, DenseMatrix, DesignMatrix, MmapMatrix, MmapMatrixF32, SparseCSC,
-        Standardized,
+        Augmented, Chunked, DenseMatrix, DesignMatrix, MmapMatrix, MmapMatrixF32, MultiTaskDesign,
+        SparseCSC, Standardized,
     },
     groups::Groups,
     penalty::{ElasticNet, GroupElasticNet, GroupLasso, GroupPenalty, Mcp, Scad, SparseGroupLasso},
@@ -891,6 +891,425 @@ fn solve_sparse_group_mcp_ls_path<'py>(
         x,
         y,
         groups,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        make_inner,
+    )
+}
+
+// ---------------------------------------------------------------------
+// Multi-task LS (M7.1)
+//
+// Multi-task LS with response Y ∈ ℝ^(n×K) and coefficient matrix
+// B ∈ ℝ^(p×K) reduces to a single group-lasso problem on a virtual
+// (nK × pK) design via `MultiTaskDesign<DenseMatrix>` with row-major
+// bvec layout `bvec[jK+k] = B[j,k]` and groups `{jK, …, jK+K-1}` per
+// feature. Centering is per-task on Y plus shared on X (X is the same
+// across tasks); the no-intercept fit's coefficients yield the
+// per-task intercept via `α_k = ȳ_k − Σ_j x̄_j B[j,k]`. v1 does not
+// thread `standardize_x` through — request it and we return an error.
+// ---------------------------------------------------------------------
+
+type MultiTaskPathOutput<'py> = (
+    Bound<'py, PyArray2<f64>>, // coefs: (n_lambdas, p*K), row-major bvec layout
+    Bound<'py, PyArray2<f64>>, // intercepts: (n_lambdas, K)
+    Bound<'py, PyArray1<f64>>, // lambdas
+    Bound<'py, PyDict>,
+);
+
+/// Center `X` by column means (shared across tasks) and `Y` by per-task
+/// column means. Returns `(x_centered, y_stacked, x_means, y_means)`
+/// where `y_stacked[task*n + i] = Y_centered[i, task]` (task-outer).
+/// If `fit_intercept` is `false`, returns `X` and `Y` untouched and
+/// zero-vectors for the means.
+fn multitask_center(
+    x: &Array2<f64>,
+    y: &Array2<f64>,
+    fit_intercept: bool,
+) -> (
+    Array2<f64>,
+    ndarray::Array1<f64>,
+    ndarray::Array1<f64>,
+    ndarray::Array1<f64>,
+) {
+    let n = x.nrows();
+    let p = x.ncols();
+    let k = y.ncols();
+    debug_assert_eq!(y.nrows(), n);
+
+    let mut x_means = ndarray::Array1::<f64>::zeros(p);
+    let mut y_means = ndarray::Array1::<f64>::zeros(k);
+    if fit_intercept {
+        for j in 0..p {
+            x_means[j] = x.column(j).sum() / (n as f64);
+        }
+        for task in 0..k {
+            y_means[task] = y.column(task).sum() / (n as f64);
+        }
+    }
+
+    let mut x_c = Array2::<f64>::zeros((n, p));
+    if fit_intercept {
+        for j in 0..p {
+            let mu = x_means[j];
+            for i in 0..n {
+                x_c[[i, j]] = x[[i, j]] - mu;
+            }
+        }
+    } else {
+        x_c.assign(x);
+    }
+
+    let mut y_stacked = ndarray::Array1::<f64>::zeros(n * k);
+    if fit_intercept {
+        for task in 0..k {
+            let mu = y_means[task];
+            for i in 0..n {
+                y_stacked[task * n + i] = y[[i, task]] - mu;
+            }
+        }
+    } else {
+        for task in 0..k {
+            for i in 0..n {
+                y_stacked[task * n + i] = y[[i, task]];
+            }
+        }
+    }
+    (x_c, y_stacked, x_means, y_means)
+}
+
+/// Recover per-task intercept from the (centered-fit) coefficients:
+/// `α_k = ȳ_k − Σ_j x̄_j B[j,k]`, where `B[j,k] = bvec[jK+k]`.
+fn multitask_recover_intercepts(
+    betas: &Array2<f64>, // (n_lambdas, p*K) row-major bvec
+    x_means: &ndarray::Array1<f64>,
+    y_means: &ndarray::Array1<f64>,
+    n_features: usize,
+    n_tasks: usize,
+    fit_intercept: bool,
+) -> Array2<f64> {
+    let n_lambdas = betas.nrows();
+    let mut out = Array2::<f64>::zeros((n_lambdas, n_tasks));
+    if !fit_intercept {
+        return out;
+    }
+    for lam_idx in 0..n_lambdas {
+        for task in 0..n_tasks {
+            let mut shift = 0.0;
+            for j in 0..n_features {
+                shift += x_means[j] * betas[[lam_idx, j * n_tasks + task]];
+            }
+            out[[lam_idx, task]] = y_means[task] - shift;
+        }
+    }
+    out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_multitask_path_outputs<'py, F>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray2<f64>,
+    weights: Option<PyReadonlyArray1<f64>>,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    screening: &str,
+    parallel: bool,
+    fit_intercept: bool,
+    standardize_x: bool,
+    make_inner: F,
+) -> PyResult<MultiTaskPathOutput<'py>>
+where
+    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn GroupPenalty>,
+{
+    if standardize_x {
+        return Err(PyValueError::new_err(
+            "standardize_x is not supported for multi-task v1; \
+             standardize X yourself before fit",
+        ));
+    }
+    let x_arr = x.as_array().to_owned();
+    let y_arr = y.as_array().to_owned();
+    let n = x_arr.nrows();
+    let p = x_arr.ncols();
+    if y_arr.nrows() != n {
+        return Err(PyValueError::new_err(format!(
+            "Y must have {} rows (matching X), got {}",
+            n,
+            y_arr.nrows()
+        )));
+    }
+    let k = y_arr.ncols();
+    if k < 1 {
+        return Err(PyValueError::new_err("Y must have at least one task"));
+    }
+
+    let weights_orig = match weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != p {
+                return Err(PyValueError::new_err(format!(
+                    "weights length {} does not match n_features {}",
+                    arr.len(),
+                    p
+                )));
+            }
+            arr
+        }
+        None => ndarray::Array1::ones(p),
+    };
+
+    let (x_c, y_stacked, x_means, y_means) = multitask_center(&x_arr, &y_arr, fit_intercept);
+
+    // skein uses the natural per-sample objective `(1/(2nK)) ‖Ỹ-X̃β‖² +
+    // λ P(β)` from the stacked formulation. sklearn / glmnet use
+    // `(1/(2n)) ‖Y-XB‖²_F + α P(B)`; the same minimizer is reached at
+    // `λ_skein = α_sklearn / K`.
+    let block_cfg = BlockPathConfig {
+        n_lambdas,
+        lambda_min_ratio,
+        lambdas: lambdas.map(|a| a.as_array().to_vec()),
+        cd: CdConfig {
+            max_iter,
+            tol,
+            acceleration,
+        },
+        screening: parse_screening(screening)?,
+        parallel,
+    };
+
+    let design = MultiTaskDesign::new(DenseMatrix::new(x_c), k);
+    let datafit = LeastSquares::new(y_stacked);
+    let groups = MultiTaskDesign::<DenseMatrix>::auto_groups(p, k);
+    let make_pen =
+        move |lam: f64| -> Box<dyn GroupPenalty> { make_inner(lam, weights_orig.clone()) };
+    let (betas, report) = solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg);
+    let intercepts = multitask_recover_intercepts(&betas, &x_means, &y_means, p, k, fit_intercept);
+
+    let info = PyDict::new_bound(py);
+    info.set_item("iters", report.iters)?;
+    info.set_item("converged", report.converged)?;
+    info.set_item("final_objs", report.final_objs)?;
+    info.set_item("working_set_sizes", report.working_set_sizes)?;
+    info.set_item("kkt_passes", report.kkt_passes)?;
+    info.set_item("n_tasks", k)?;
+    info.set_item("n_features", p)?;
+
+    Ok((
+        betas.into_pyarray_bound(py),
+        intercepts.into_pyarray_bound(py),
+        ndarray::Array1::from(report.lambdas).into_pyarray_bound(py),
+        info,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_multitask_path_lla_outputs<'py, F>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray2<f64>,
+    weights: Option<PyReadonlyArray1<f64>>,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    screening: &str,
+    parallel: bool,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+    make_inner: F,
+) -> PyResult<MultiTaskPathOutput<'py>>
+where
+    F: Fn(ArrayView1<f64>, &Groups, f64) -> Box<dyn GroupPenalty>,
+{
+    if standardize_x {
+        return Err(PyValueError::new_err(
+            "standardize_x is not supported for multi-task v1; \
+             standardize X yourself before fit",
+        ));
+    }
+    let x_arr = x.as_array().to_owned();
+    let y_arr = y.as_array().to_owned();
+    let n = x_arr.nrows();
+    let p = x_arr.ncols();
+    if y_arr.nrows() != n {
+        return Err(PyValueError::new_err(format!(
+            "Y must have {} rows (matching X), got {}",
+            n,
+            y_arr.nrows()
+        )));
+    }
+    let k = y_arr.ncols();
+    if k < 1 {
+        return Err(PyValueError::new_err("Y must have at least one task"));
+    }
+
+    let weights_orig = match weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != p {
+                return Err(PyValueError::new_err(format!(
+                    "weights length {} does not match n_features {}",
+                    arr.len(),
+                    p
+                )));
+            }
+            arr
+        }
+        None => ndarray::Array1::ones(p),
+    };
+
+    let (x_c, y_stacked, x_means, y_means) = multitask_center(&x_arr, &y_arr, fit_intercept);
+
+    let block_cfg = BlockPathConfig {
+        n_lambdas,
+        lambda_min_ratio,
+        lambdas: lambdas.map(|a| a.as_array().to_vec()),
+        cd: CdConfig {
+            max_iter,
+            tol,
+            acceleration,
+        },
+        screening: parse_screening(screening)?,
+        parallel,
+    };
+
+    let design = MultiTaskDesign::new(DenseMatrix::new(x_c), k);
+    let datafit = LeastSquares::new(y_stacked);
+    let groups = MultiTaskDesign::<DenseMatrix>::auto_groups(p, k);
+    let (betas, report) = solve_block_path_lla(
+        &design,
+        &datafit,
+        weights_orig,
+        make_inner,
+        &groups,
+        &block_cfg,
+        max_outer,
+        outer_tol,
+    );
+    let intercepts = multitask_recover_intercepts(&betas, &x_means, &y_means, p, k, fit_intercept);
+
+    let info = PyDict::new_bound(py);
+    info.set_item("inner_iters", report.inner_iters)?;
+    info.set_item("outer_iters", report.outer_iters)?;
+    info.set_item("outer_converged", report.outer_converged)?;
+    info.set_item("final_objs", report.final_objs)?;
+    info.set_item("working_set_sizes", report.working_set_sizes)?;
+    info.set_item("kkt_passes", report.kkt_passes)?;
+    info.set_item("n_tasks", k)?;
+    info.set_item("n_features", p)?;
+
+    Ok((
+        betas.into_pyarray_bound(py),
+        intercepts.into_pyarray_bound(py),
+        ndarray::Array1::from(report.lambdas).into_pyarray_bound(py),
+        info,
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, *,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, screening="strong", acceleration=Some(5),
+    parallel=false, fit_intercept=true, standardize_x=false,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_multitask_lasso_ls_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray2<f64>,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    screening: &str,
+    acceleration: Option<usize>,
+    parallel: bool,
+    fit_intercept: bool,
+    standardize_x: bool,
+) -> PyResult<MultiTaskPathOutput<'py>> {
+    build_multitask_path_outputs(
+        py,
+        x,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        screening,
+        parallel,
+        fit_intercept,
+        standardize_x,
+        move |lam, w| Box::new(GroupLasso::with_weights(lam, w)),
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, *, gamma=3.0,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, screening="strong", acceleration=Some(5),
+    parallel=false, fit_intercept=true, standardize_x=false,
+    max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_multitask_mcp_ls_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray2<f64>,
+    gamma: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    screening: &str,
+    acceleration: Option<usize>,
+    parallel: bool,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<MultiTaskPathOutput<'py>> {
+    let p = x.as_array().ncols();
+    let base_weights = match &weights {
+        Some(w) => w.as_array().to_owned(),
+        None => ndarray::Array1::ones(p),
+    };
+    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+        let w = surrogate_weights_group_mcp(beta, g, lam, gamma, base_weights.view());
+        Box::new(GroupLasso::with_weights(lam, w))
+    };
+    build_multitask_path_lla_outputs(
+        py,
+        x,
+        y,
         weights,
         lambdas,
         n_lambdas,
@@ -6239,6 +6658,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_group_mcp_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_sparse_group_lasso_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_sparse_group_mcp_ls_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_multitask_lasso_ls_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_multitask_mcp_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_scad_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_group_lasso_path, m)?)?;

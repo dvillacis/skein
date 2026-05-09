@@ -21,6 +21,8 @@ from skein_glm._core import (
     solve_logistic_sparse_group_mcp_path,
     solve_mcp_ls,
     solve_mcp_ls_path,
+    solve_multitask_lasso_ls_path,
+    solve_multitask_mcp_ls_path,
     solve_poisson_group_lasso_path,
     solve_poisson_group_mcp_path,
     solve_poisson_mcp_path,
@@ -115,6 +117,14 @@ from skein_glm.cv import (
     SparseGroupMCPPathCV,
 )
 from skein_glm.ic import select_by_ic
+from skein_glm.multitask import (
+    MultiTaskLassoPathCV,
+    MultiTaskLassoPathRegressor,
+    MultiTaskLassoRegressor,
+    MultiTaskMCPPathCV,
+    MultiTaskMCPPathRegressor,
+    MultiTaskMCPRegressor,
+)
 from skein_glm.mmap import (
     ChunkedDesignF32,
     ChunkedDesignF64,
@@ -127,6 +137,8 @@ from skein_glm.datafits import Datafit
 __all__ = [
     "solve_mcp_ls",
     "solve_mcp_ls_path",
+    "solve_multitask_lasso_ls_path",
+    "solve_multitask_mcp_ls_path",
     "solve_scad_ls",
     "solve_scad_ls_path",
     "solve_elastic_net_ls_path",
@@ -207,6 +219,12 @@ __all__ = [
     "CoxSparseGroupLassoPathRegressor",
     "CoxSparseGroupMCPRegressor",
     "CoxSparseGroupMCPPathRegressor",
+    "MultiTaskLassoRegressor",
+    "MultiTaskLassoPathRegressor",
+    "MultiTaskLassoPathCV",
+    "MultiTaskMCPRegressor",
+    "MultiTaskMCPPathRegressor",
+    "MultiTaskMCPPathCV",
     "MCPPathCV",
     "SCADPathCV",
     "ElasticNetPathCV",
