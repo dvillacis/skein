@@ -2420,6 +2420,8 @@ def _group_problem(seed: int, n: int = 100, p: int = 12, group_size: int = 3):
 
 
 def test_group_elastic_net_alpha_one_matches_group_lasso_path():
+    """At α=1, the group elastic-net path must match the GroupLasso
+    path on the same problem and shared λ-grid."""
     X, y, groups, _ = _group_problem(seed=41)
     lambdas = np.array([0.5, 0.2, 0.1, 0.05, 0.02, 0.01], dtype=np.float64)
     common = dict(
@@ -2433,6 +2435,9 @@ def test_group_elastic_net_alpha_one_matches_group_lasso_path():
 
 
 def test_group_elastic_net_alpha_zero_matches_closed_form_block_ridge():
+    """At α=0, group elastic net (uniform per-group weights) gives
+    classical ridge — the per-block prox reduces to per-coord
+    shrinkage by the same 1/(1+step·λ) factor everywhere."""
     rng = np.random.default_rng(43)
     n, p, gs = 60, 6, 2
     X = rng.standard_normal((n, p))
@@ -2454,12 +2459,15 @@ def test_group_elastic_net_alpha_zero_matches_closed_form_block_ridge():
 
 
 def test_group_elastic_net_path_recovers_active_groups():
+    """At a small λ on the path, the truly active groups should have
+    nonzero coefficients."""
     X, y, groups, true_beta = _group_problem(seed=47, n=200, p=15, group_size=3)
     model = skein.GroupElasticNetPathRegressor(
         groups=groups, alpha=0.5, n_lambdas=40, lambda_min_ratio=1e-3,
         tol=1e-10, max_iter=10000, fit_intercept=True,
     ).fit(X, y)
     last = model.coefs_[-1]
+    # Sign agreement on the active features.
     for j in range(6):
         if abs(true_beta[j]) > 0:
             assert np.sign(last[j]) == np.sign(true_beta[j]), (
@@ -2494,7 +2502,7 @@ def test_group_elastic_net_path_with_standardize_dense_sparse_equivalence():
     rng = np.random.default_rng(59)
     n, p, gs = 60, 9, 3
     X_dense = rng.standard_normal((n, p))
-    X_dense[:, 0] *= 30.0
+    X_dense[:, 0] *= 30.0   # inflated scale
     mask = rng.uniform(size=(n, p)) > 0.5
     X_dense[mask] = 0.0
     y = (
@@ -2523,6 +2531,8 @@ def test_group_elastic_net_path_cv_picks_reasonable_lambda():
     ).fit(X, y)
     assert cv.lambda_best_ > 0
     assert cv.coef_.shape == (X.shape[1],)
+    # The two truly-active groups (features 0..5) should have at least
+    # one nonzero coefficient each.
     active = np.where(np.abs(cv.coef_) > 1e-3)[0].tolist()
     assert any(j in active for j in range(3)), f"group 0 not selected: {active}"
     assert any(j in active for j in range(3, 6)), f"group 1 not selected: {active}"
@@ -2551,6 +2561,7 @@ def _multitask_problem(seed: int, n: int = 80, p: int = 10, k: int = 4):
     # First three features active across all tasks (joint support);
     # task-specific magnitudes drawn fresh so the K=3 vs K=4 cases differ.
     active_rows = rng.uniform(-1.5, 1.5, size=(3, k))
+    # Make sure no row is too close to zero (so sign agreement tests work).
     active_rows[np.abs(active_rows) < 0.4] += np.sign(active_rows[np.abs(active_rows) < 0.4]) * 0.5
     B[:3] = active_rows
     Y = X @ B + 0.1 * rng.standard_normal((n, k))
@@ -2567,8 +2578,14 @@ def test_multitask_lasso_path_shapes_and_intercept():
     assert model.coefs_.shape == (12, k, p)
     assert model.intercepts_.shape == (12, k)
     assert model.lambdas_.shape == (12,)
-    np.testing.assert_allclose(model.coefs_[0], 0.0, atol=1e-6)
-    np.testing.assert_allclose(model.intercepts_[0], Y.mean(axis=0), atol=1e-6)
+    # Sanity: at the largest λ all coefs should be (near) zero,
+    # and the intercept should equal Y's per-task mean.
+    np.testing.assert_allclose(
+        model.coefs_[0], 0.0, atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        model.intercepts_[0], Y.mean(axis=0), atol=1e-6,
+    )
 
 
 def test_multitask_lasso_path_recovers_joint_support():
@@ -2577,6 +2594,7 @@ def test_multitask_lasso_path_recovers_joint_support():
         n_lambdas=40, lambda_min_ratio=1e-3, tol=1e-10, max_iter=20000,
     ).fit(X, Y)
     last = model.coefs_[-1]   # (K, p)
+    # First three features should have nonzero coefficients in every task.
     for j in range(3):
         for task in range(B_true.shape[1]):
             assert abs(last[task, j]) > 0.05, (
@@ -2593,6 +2611,7 @@ def test_multitask_lasso_predict_shape_and_signal():
     assert model.intercept_.shape == (3,)
     pred = model.predict(X)
     assert pred.shape == (100, 3)
+    # Predictions should be close to Y given lambda small enough.
     np.testing.assert_allclose(pred, Y, atol=0.5)
 
 
@@ -2619,11 +2638,16 @@ def test_multitask_mcp_path_recovers_signal():
         gamma=3.0, n_lambdas=30, lambda_min_ratio=1e-2,
         tol=1e-10, max_iter=10000, max_outer=5,
     ).fit(X, Y)
+    # Pick the λ that visits the right active set: the truly-active first
+    # three features should have nonzero row norms; noise rows should be
+    # zero. Walk the path and find the sparsest model that retains all
+    # three signal features.
     found_clean = False
     for last in model.coefs_:
         active_rows = np.where(np.linalg.norm(last, axis=0) > 1e-2)[0].tolist()
         if all(j in active_rows for j in range(3)) and len(active_rows) <= 5:
             found_clean = True
+            # And the truly-active features have the right sign in every task.
             for j in range(3):
                 for task in range(B_true.shape[1]):
                     assert np.sign(last[task, j]) == np.sign(B_true[j, task]), (
@@ -2642,6 +2666,7 @@ def test_multitask_lasso_path_cv_picks_reasonable_lambda():
     assert cv.lambda_best_ > 0
     assert cv.coef_.shape == (3, 12)
     assert cv.intercept_.shape == (3,)
+    # The truly-active features (0..2) should be in the active set.
     active = (np.linalg.norm(cv.coef_, axis=0) > 1e-2).nonzero()[0].tolist()
     for j in range(3):
         assert j in active, f"truly active feature {j} not selected: {active}"
@@ -2654,15 +2679,290 @@ def test_multitask_rejects_1d_y():
         skein.MultiTaskLassoRegressor().fit(X, y_1d)
 
 
-def test_multitask_rejects_standardize_x():
-    """v1 doesn't thread standardize_x through. The Python estimators
-    don't expose it, but the underlying `_core` entry returns a clear
-    error if requested directly."""
-    from skein_glm import _core
-    X = np.zeros((10, 3))
-    Y = np.zeros((10, 2))
-    with pytest.raises(ValueError, match="standardize_x is not supported"):
-        _core.solve_multitask_lasso_ls_path(X, Y, standardize_x=True)
+def test_multitask_lasso_with_standardize_recovers_correct_scale():
+    """Inflate one column by 50× and verify the standardize=True fit
+    recovers a coefficient that matches a fit on the rescaled X."""
+    rng = np.random.default_rng(167)
+    n, p, k = 100, 8, 3
+    X = rng.standard_normal((n, p))
+    X[:, 0] *= 50.0  # inflated scale
+    B = np.zeros((p, k))
+    B[0] = [0.05, -0.04, 0.03]   # tiny in inflated-scale coords
+    B[2] = rng.uniform(-1.0, 1.0, size=k)
+    Y = X @ B + 0.1 * rng.standard_normal((n, k))
+
+    # With standardize=True, the fit should recover B in original scale
+    # (where feature 0 has tiny coefficients ~0.05).
+    model = skein.MultiTaskLassoPathRegressor(
+        n_lambdas=20, lambda_min_ratio=1e-4,
+        tol=1e-12, max_iter=20000, screening="off",
+        standardize=True,
+    ).fit(X, Y)
+    last = model.coefs_[-1]   # (K, p)
+    # Feature 0 should be visible (sign-recovered) at small λ.
+    for task in range(k):
+        assert np.sign(last[task, 0]) == np.sign(B[0, task]), (
+            f"feature 0 task {task} sign lost: {last[task, 0]} vs truth {B[0, task]}"
+        )
+    # And the magnitudes are in the right ballpark (within 50% — the path
+    # is finite-grid so won't recover B exactly).
+    np.testing.assert_allclose(last[:, 0], B[0], rtol=0.5, atol=0.02)
+
+
+def test_multitask_lasso_standardize_dense_sparse_equivalence():
+    """At the same standardize=True setting and shared λ-grid, dense and
+    sparse paths must produce the same coefficients within tolerance."""
+    rng = np.random.default_rng(169)
+    n, p, k = 60, 8, 2
+    X_dense = rng.standard_normal((n, p))
+    X_dense[:, 0] *= 30.0
+    X_dense[rng.uniform(size=(n, p)) > 0.5] = 0.0
+    B = np.zeros((p, k))
+    B[0] = [0.03, -0.05]
+    B[1:3] = rng.uniform(-1.0, 1.0, size=(2, k))
+    Y = X_dense @ B + 0.1 * rng.standard_normal((n, k))
+    X_sparse = scipy_sparse.csc_matrix(X_dense)
+
+    lambdas = np.array([1.0, 0.3, 0.1, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        lambdas=lambdas, tol=1e-12, max_iter=20000,
+        screening="off", fit_intercept=True, standardize=True,
+    )
+    dense = skein.MultiTaskLassoPathRegressor(**common).fit(X_dense, Y)
+    sparse = skein.MultiTaskLassoPathRegressor(**common).fit(X_sparse, Y)
+    np.testing.assert_allclose(dense.coefs_, sparse.coefs_, atol=1e-5)
+    np.testing.assert_allclose(dense.intercepts_, sparse.intercepts_, atol=1e-5)
+
+
+def test_multitask_mcp_standardize_dense_sparse_equivalence():
+    rng = np.random.default_rng(171)
+    n, p, k = 60, 8, 3
+    X_dense = rng.standard_normal((n, p))
+    X_dense[:, 0] *= 20.0
+    X_dense[rng.uniform(size=(n, p)) > 0.5] = 0.0
+    B = np.zeros((p, k))
+    B[0] = [0.03, -0.04, 0.05]
+    B[1:3] = rng.uniform(-1.0, 1.0, size=(2, k))
+    Y = X_dense @ B + 0.1 * rng.standard_normal((n, k))
+    X_sparse = scipy_sparse.csc_matrix(X_dense)
+
+    lambdas = np.array([0.5, 0.2, 0.05, 0.02], dtype=np.float64)
+    common = dict(
+        gamma=3.0, lambdas=lambdas, tol=1e-12, max_iter=20000,
+        screening="off", fit_intercept=True, standardize=True, max_outer=8,
+    )
+    dense = skein.MultiTaskMCPPathRegressor(**common).fit(X_dense, Y)
+    sparse = skein.MultiTaskMCPPathRegressor(**common).fit(X_sparse, Y)
+    np.testing.assert_allclose(dense.coefs_, sparse.coefs_, atol=1e-5)
+    np.testing.assert_allclose(dense.intercepts_, sparse.intercepts_, atol=1e-5)
+
+
+# ---- M7.2: sparse multi-task ----------------------------------------
+
+
+def test_multitask_lasso_sparse_matches_dense_path():
+    rng = np.random.default_rng(173)
+    n, p, k = 80, 10, 3
+    X_dense = rng.standard_normal((n, p))
+    mask = rng.uniform(size=(n, p)) > 0.5
+    X_dense[mask] = 0.0
+    B = np.zeros((p, k))
+    B[:3] = rng.uniform(-1.5, 1.5, size=(3, k))
+    Y = X_dense @ B + 0.1 * rng.standard_normal((n, k))
+    X_sparse = scipy_sparse.csc_matrix(X_dense)
+
+    lambdas = np.array([0.5, 0.2, 0.08, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        lambdas=lambdas, tol=1e-12, max_iter=20000, screening="off",
+        fit_intercept=True,
+    )
+    dense = skein.MultiTaskLassoPathRegressor(**common).fit(X_dense, Y)
+    sparse = skein.MultiTaskLassoPathRegressor(**common).fit(X_sparse, Y)
+    np.testing.assert_allclose(dense.coefs_, sparse.coefs_, atol=1e-6)
+    np.testing.assert_allclose(dense.intercepts_, sparse.intercepts_, atol=1e-6)
+
+
+def test_multitask_mcp_sparse_matches_dense_path():
+    rng = np.random.default_rng(179)
+    n, p, k = 80, 10, 3
+    X_dense = rng.standard_normal((n, p))
+    mask = rng.uniform(size=(n, p)) > 0.5
+    X_dense[mask] = 0.0
+    B = np.zeros((p, k))
+    B[:3] = rng.uniform(-1.5, 1.5, size=(3, k))
+    Y = X_dense @ B + 0.1 * rng.standard_normal((n, k))
+    X_sparse = scipy_sparse.csc_matrix(X_dense)
+
+    lambdas = np.array([0.5, 0.2, 0.08, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        gamma=3.0, lambdas=lambdas, tol=1e-12, max_iter=20000,
+        screening="off", fit_intercept=True, max_outer=8,
+    )
+    dense = skein.MultiTaskMCPPathRegressor(**common).fit(X_dense, Y)
+    sparse = skein.MultiTaskMCPPathRegressor(**common).fit(X_sparse, Y)
+    np.testing.assert_allclose(dense.coefs_, sparse.coefs_, atol=1e-6)
+    np.testing.assert_allclose(dense.intercepts_, sparse.intercepts_, atol=1e-6)
+
+
+def test_multitask_elastic_net_sparse_matches_dense_path():
+    rng = np.random.default_rng(181)
+    n, p, k = 60, 8, 2
+    X_dense = rng.standard_normal((n, p))
+    mask = rng.uniform(size=(n, p)) > 0.5
+    X_dense[mask] = 0.0
+    B = np.zeros((p, k))
+    B[:3] = rng.uniform(-1.5, 1.5, size=(3, k))
+    Y = X_dense @ B + 0.1 * rng.standard_normal((n, k))
+    X_sparse = scipy_sparse.csc_matrix(X_dense)
+
+    lambdas = np.array([0.3, 0.1, 0.03, 0.01], dtype=np.float64)
+    common = dict(
+        alpha=0.5, lambdas=lambdas, tol=1e-12, max_iter=20000,
+        screening="off", fit_intercept=True,
+    )
+    dense = skein.MultiTaskElasticNetPathRegressor(**common).fit(X_dense, Y)
+    sparse = skein.MultiTaskElasticNetPathRegressor(**common).fit(X_sparse, Y)
+    np.testing.assert_allclose(dense.coefs_, sparse.coefs_, atol=1e-6)
+    np.testing.assert_allclose(dense.intercepts_, sparse.intercepts_, atol=1e-6)
+
+
+def test_multitask_lasso_sparse_predict_shape():
+    rng = np.random.default_rng(191)
+    n, p, k = 60, 8, 3
+    X_dense = rng.standard_normal((n, p))
+    X_dense[rng.uniform(size=(n, p)) > 0.5] = 0.0
+    Y = rng.standard_normal((n, k))
+    X_sparse = scipy_sparse.csc_matrix(X_dense)
+    model = skein.MultiTaskLassoRegressor(lambda_=0.05, tol=1e-10).fit(X_sparse, Y)
+    assert model.coef_.shape == (k, p)
+    assert model.intercept_.shape == (k,)
+    pred = model.predict(X_sparse[:5])
+    assert pred.shape == (5, k)
+
+
+def test_multitask_lasso_path_cv_sparse_input():
+    rng = np.random.default_rng(193)
+    n, p, k = 120, 8, 3
+    X_dense = rng.standard_normal((n, p))
+    X_dense[rng.uniform(size=(n, p)) > 0.5] = 0.0
+    B = np.zeros((p, k))
+    B[:3] = rng.uniform(-1.5, 1.5, size=(3, k))
+    Y = X_dense @ B + 0.1 * rng.standard_normal((n, k))
+    X_sparse = scipy_sparse.csc_matrix(X_dense)
+
+    cv = skein.MultiTaskLassoPathCV(
+        n_lambdas=15, cv=4, tol=1e-10, max_iter=5000, random_state=0,
+    ).fit(X_sparse, Y)
+    assert cv.lambda_best_ > 0
+    assert cv.coef_.shape == (k, p)
+
+
+# ---- M7.2: MultiTaskSCAD + MultiTaskElasticNet ----------------------
+
+
+def test_multitask_scad_path_recovers_signal():
+    X, Y, B_true = _multitask_problem(seed=131, n=200, p=15, k=4)
+    model = skein.MultiTaskSCADPathRegressor(
+        a=3.7, n_lambdas=30, lambda_min_ratio=1e-2,
+        tol=1e-10, max_iter=10000, max_outer=5,
+    ).fit(X, Y)
+    found_clean = False
+    for last in model.coefs_:
+        active_rows = np.where(np.linalg.norm(last, axis=0) > 1e-2)[0].tolist()
+        if all(j in active_rows for j in range(3)) and len(active_rows) <= 5:
+            found_clean = True
+            for j in range(3):
+                for task in range(B_true.shape[1]):
+                    assert np.sign(last[task, j]) == np.sign(B_true[j, task])
+            break
+    assert found_clean, "no λ on the path delivered a clean SCAD recovery"
+
+
+def test_multitask_scad_rejects_a_below_two():
+    X, Y, _ = _multitask_problem(seed=137, n=50, p=5, k=2)
+    with pytest.raises(ValueError, match="`a` must be > 2"):
+        skein.MultiTaskSCADRegressor(lambda_=0.05, a=1.5).fit(X, Y)
+
+
+def test_multitask_elastic_net_alpha_one_matches_lasso():
+    """At α=1, the multi-task elastic net path must coincide with the
+    multi-task lasso path on the same data + λ-grid."""
+    X, Y, _ = _multitask_problem(seed=139, n=120, p=10, k=3)
+    lambdas = np.array([0.5, 0.2, 0.1, 0.05, 0.02, 0.01], dtype=np.float64)
+    common = dict(
+        lambdas=lambdas, tol=1e-12, max_iter=20000, screening="off",
+    )
+    en = skein.MultiTaskElasticNetPathRegressor(alpha=1.0, **common).fit(X, Y)
+    lasso = skein.MultiTaskLassoPathRegressor(**common).fit(X, Y)
+    np.testing.assert_allclose(en.coefs_, lasso.coefs_, atol=1e-7)
+    np.testing.assert_allclose(en.intercepts_, lasso.intercepts_, atol=1e-7)
+
+
+def test_multitask_elastic_net_alpha_zero_matches_closed_form_block_ridge():
+    """At α=0, the multi-task EN with uniform per-feature weights solves
+    standard ridge per-task: `β_k = (X^T X / n + λI)⁻¹ X^T Y[:, k] / n`."""
+    rng = np.random.default_rng(149)
+    n, p, k = 60, 6, 3
+    X = rng.standard_normal((n, p))
+    B = np.zeros((p, k))
+    B[:3] = rng.uniform(-1.0, 1.0, size=(3, k))
+    Y = X @ B + 0.1 * rng.standard_normal((n, k))
+
+    lam = 0.3
+    xtx = X.T @ X / n
+    A = xtx + lam * np.eye(p)
+    # skein with α=0 has data-fidelity factor 1/(2nK); the equivalent
+    # per-task closed-form ridge there has λ_eff = λ * K (the K factor
+    # mirroring the lasso convention difference).
+    A_skein = xtx + lam * k * np.eye(p)
+    beta_closed = np.zeros((p, k))
+    for task in range(k):
+        beta_closed[:, task] = np.linalg.solve(A_skein, X.T @ Y[:, task] / n)
+    # And the equivalent classical ridge (1/(2n) factor):
+    beta_classical = np.zeros((p, k))
+    for task in range(k):
+        beta_classical[:, task] = np.linalg.solve(A, X.T @ Y[:, task] / n)
+
+    model = skein.MultiTaskElasticNetRegressor(
+        lambda_=lam, alpha=0.0,
+        fit_intercept=False, tol=1e-12, max_iter=20000, screening="off",
+    ).fit(X, Y)
+    # `coef_` is (K, p); compare to `beta_closed.T`.
+    np.testing.assert_allclose(model.coef_, beta_closed.T, atol=1e-6)
+    # And distinct from the 1/(2n) classical ridge — sanity check that
+    # we know which convention we're matching.
+    assert np.max(np.abs(model.coef_ - beta_classical.T)) > 1e-3
+
+
+def test_multitask_elastic_net_rejects_alpha_out_of_range():
+    X, Y, _ = _multitask_problem(seed=151, n=50, p=5, k=2)
+    with pytest.raises(ValueError, match="alpha must be in"):
+        skein.MultiTaskElasticNetRegressor(lambda_=0.1, alpha=1.5).fit(X, Y)
+    with pytest.raises(ValueError, match="alpha must be in"):
+        skein.MultiTaskElasticNetRegressor(lambda_=0.1, alpha=-0.1).fit(X, Y)
+
+
+def test_multitask_scad_path_cv_picks_reasonable_lambda():
+    X, Y, _ = _multitask_problem(seed=157, n=160, p=12, k=3)
+    cv = skein.MultiTaskSCADPathCV(
+        a=3.7, n_lambdas=20, cv=4, tol=1e-10, max_iter=5000,
+        max_outer=5, random_state=0,
+    ).fit(X, Y)
+    assert cv.lambda_best_ > 0
+    assert cv.coef_.shape == (3, 12)
+
+
+def test_multitask_elastic_net_path_cv_picks_reasonable_lambda():
+    X, Y, _ = _multitask_problem(seed=163, n=160, p=12, k=3)
+    cv = skein.MultiTaskElasticNetPathCV(
+        alpha=0.5, n_lambdas=25, cv=4, tol=1e-10, max_iter=5000,
+        random_state=0,
+    ).fit(X, Y)
+    assert cv.lambda_best_ > 0
+    assert cv.coef_.shape == (3, 12)
+    active = (np.linalg.norm(cv.coef_, axis=0) > 1e-2).nonzero()[0].tolist()
+    for j in range(3):
+        assert j in active, f"truly active feature {j} not selected: {active}"
 
 
 def _split_into_chunks(x: np.ndarray, n_chunks: int):

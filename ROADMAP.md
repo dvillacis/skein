@@ -20,10 +20,10 @@ load-bearing piece; everything after stacks on top of it.
 | M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; sparse-group SCAD shell + bridge + overlapping group + fused + constrained variants pending |
-| M7 — Multi-task | ⏳ partial | M7.1 multi-task LS lasso + MCP (lasso convex, MCP via LLA) done via `MultiTaskDesign<D>` virtual design wrapper; sparse / standardize / SCAD / GLM multi-task pending |
+| M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **240 cargo + 170 pytest, all green.**
+Test count at this snapshot: **241 cargo + 184 pytest, all green.**
 
 ---
 
@@ -750,18 +750,52 @@ machinery handles the headline algorithm unchanged.
   `λ = α/K`, MCP signal recovery on the path, CV picking the active
   features, 2D-Y validation, and the `standardize_x=True` rejection.
 
-### M7.2 — Pending
+### ✅ M7.2 — LS-feature parity
 
-- **MultiTaskSCAD** via LLA (needs `surrogate_weights_group_scad`
-  threaded through; mechanical extension of M7.1).
-- **MultiTaskElasticNet** (uses `GroupElasticNet` from M6.2 as inner).
-- **Sparse design support** (`SparseCSC` + `MultiTaskDesign`).
-- **`standardize_x` for multi-task** (lazy `Standardized` wrapper
-  composed with `MultiTaskDesign`).
+The headline algorithm reduction makes every penalty / backend port
+mechanical: `MultiTaskDesign<D>` composes with `Augmented` /
+`Standardized` like any other backend, so the only new code per item
+is the PyO3 entry point.
+
+- ✅ **MultiTaskSCAD** via LLA — uses `surrogate_weights_group_scad`
+  inside the inner-penalty closure, mirroring MultiTaskMCP. Same
+  `solve_block_path_lla` scaffold.
+- ✅ **MultiTaskElasticNet** (convex) — uses `GroupElasticNet` from
+  M6.2 as the inner penalty. `α=1` reduces to plain MultiTaskLasso;
+  `α=0` is per-row block ridge. Path equivalence at α=1 verified.
+- ✅ **Sparse design** — 4 new sparse PyO3 entries
+  (`solve_multitask_{lasso,mcp,scad,elastic_net}_ls_path_sparse`)
+  taking `(data, indices, indptr, n_rows, n_cols, Y, …)` and wrapping
+  `SparseCSC` in `Augmented` (1s column for intercept) then
+  `MultiTaskDesign` (which replicates the augmented column into K
+  virtual intercept columns automatically). Per-feature row-group at
+  index `p` gets weight 0 → unpenalized intercept group, with each
+  per-task intercept independently fit. Cargo test:
+  `MultiTaskDesign<SparseCSC>` solver-path matches a dense reference
+  at machine precision. Pytest: dense ↔ sparse equivalence on shared
+  λ-grids for lasso, MCP, EN; sparse predict shape; sparse CV smoke.
+  Python estimators dispatch on `scipy.sparse.issparse(x)`.
+- ✅ **`standardize_x` for multi-task** — the lazy `Standardized` /
+  `Augmented` / `MultiTaskDesign` composition gives this for free.
+  Dense uses physical center+scale (mirrors M1's scalar LS path);
+  sparse uses scale-only via `Standardized<Augmented<SparseCSC>>`
+  with the augmented intercept column at scale=1. Per-feature L1
+  weights rescale by `1/s_j`; the LLA closure also receives the
+  rescaled weights so the surrogate computation is in standardized
+  space. Coefficients are de-scaled at the boundary. Pytest: dense
+  ↔ sparse equivalence under `standardize=True` for lasso + MCP, and
+  signal-recovery sanity test on a 50×-inflated column.
+
+### M7.3 — Pending
+
 - **Multi-response GLMs / multinomial logit** (multinomial reduces to
-  a multi-task logistic with the row-grouped K-class softmax surface).
+  a multi-task logistic with the row-grouped K-class softmax surface;
+  this needs a `MultinomialLogit` GLM datafit and a stacking helper
+  for K classes — not just a wrapper, more invasive than M7.2 was).
 - **Shared-support estimators** for the "same active features across
   related outcomes" use case that genomics + finance both want.
+- **Multi-response GLM benchmarks** vs `glmnet::glmnet(family="mgaussian")`
+  and sklearn `MultiTaskElasticNet`.
 
 ---
 

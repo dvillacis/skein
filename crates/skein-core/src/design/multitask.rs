@@ -281,6 +281,88 @@ mod tests {
         let _ = MultiTaskDesign::new(DenseMatrix::new(x), 0);
     }
 
+    /// `MultiTaskDesign` is generic over the inner backend, so wrapping
+    /// `SparseCSC` should "just work". Validate by comparing the sparse-
+    /// backed solver path to the dense-backed reference on the same
+    /// problem.
+    #[test]
+    fn solver_path_matches_dense_reference_with_sparse_inner() {
+        use crate::datafit::LeastSquares;
+        use crate::design::SparseCSC;
+        use crate::penalty::{GroupLasso, GroupPenalty};
+        use crate::solver::{solve_block_path, BlockPathConfig, CdConfig, Screening};
+
+        let n = 30;
+        let p = 5;
+        let k = 3;
+
+        let mut state: u64 = 211;
+        let mut sample = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            ((state as f64) / (u64::MAX as f64)) * 2.0 - 1.0
+        };
+        // Build a sparse-ish X: ~50% nonzeros.
+        let mut x_dense = Array2::<f64>::zeros((n, p));
+        let mut data: Vec<f64> = Vec::new();
+        let mut indices: Vec<usize> = Vec::new();
+        let mut indptr: Vec<usize> = vec![0];
+        for j in 0..p {
+            for i in 0..n {
+                let v = sample();
+                if v.abs() > 0.5 {
+                    x_dense[[i, j]] = v;
+                    data.push(v);
+                    indices.push(i);
+                }
+            }
+            indptr.push(data.len());
+        }
+        let y = Array1::<f64>::from_shape_fn(n * k, |_| 0.4 * sample());
+
+        let cfg = BlockPathConfig {
+            n_lambdas: 6,
+            lambda_min_ratio: 1e-2,
+            lambdas: None,
+            cd: CdConfig {
+                max_iter: 5000,
+                tol: 1e-12,
+                acceleration: Some(5),
+            },
+            screening: Screening::Off,
+            parallel: false,
+        };
+        let groups = MultiTaskDesign::<DenseMatrix>::auto_groups(p, k);
+        let n_groups = groups.n_groups();
+
+        let dense = MultiTaskDesign::new(DenseMatrix::new(x_dense), k);
+        let csc = SparseCSC::new(
+            n,
+            Array1::from(data),
+            Array1::from(indices),
+            Array1::from(indptr),
+        );
+        let sparse = MultiTaskDesign::new(csc, k);
+
+        let datafit_d = LeastSquares::new(y.clone());
+        let datafit_s = LeastSquares::new(y);
+        let make_pen_d =
+            |lam: f64| -> Box<dyn GroupPenalty> { Box::new(GroupLasso::new(lam, n_groups)) };
+        let make_pen_s =
+            |lam: f64| -> Box<dyn GroupPenalty> { Box::new(GroupLasso::new(lam, n_groups)) };
+
+        let (betas_d, _) = solve_block_path(&dense, &datafit_d, make_pen_d, &groups, &cfg);
+        let (betas_s, _) = solve_block_path(&sparse, &datafit_s, make_pen_s, &groups, &cfg);
+
+        assert_eq!(betas_d.shape(), betas_s.shape());
+        for k_lam in 0..betas_d.nrows() {
+            for j in 0..p * k {
+                assert_abs_diff_eq!(betas_d[[k_lam, j]], betas_s[[k_lam, j]], epsilon = 1e-9);
+            }
+        }
+    }
+
     /// End-to-end solver-equivalence: a multi-task LS lasso path solved
     /// via `MultiTaskDesign + GroupLasso` must coincide with a
     /// hand-stacked group-lasso path on the equivalent dense `X̃` and
