@@ -19,11 +19,11 @@ load-bearing piece; everything after stacks on top of it.
 | M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + M3.5 Cox PH Breslow + M3.6 multinomial (Rust + PyO3 + estimators) done; Efron ties + opportunistic GLMs (M3.7) pending |
 | M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) done; stability selection + adaptive + debiased + Rayon-parallel folds pending |
-| M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; **bridge `\|β\|^q` (LS, scalar LLA path) done**; overlapping group + fused + adaptive + constrained variants pending |
+| M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; **bridge `\|β\|^q` (LS, scalar LLA path) done**; **adaptive {Lasso, MCP, SCAD} (LS, two-stage pilot fit) done**; overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 
-Test count at this snapshot: **257 cargo + 218 pytest, all green.**
+Test count at this snapshot: **257 cargo + 228 pytest, all green.**
 
 ---
 
@@ -766,6 +766,18 @@ ordered by user demand and by what differentiates us.
 - **Fused lasso / generalized lasso**: 1D and graph-structured
   fusion. Solved via specialized prox (taut-string for 1D, ADMM for
   general). Lives behind `solver::fused`.
+- ✅ **Adaptive {Lasso, MCP, SCAD}** (scalar LS, two-stage):
+  `python/skein_glm/adaptive.py` — six classes
+  (`AdaptiveLassoPathRegressor`, `AdaptiveMCPPathRegressor`,
+  `AdaptiveSCADPathRegressor`, plus three `*PathCV` wrappers).
+  Pure Python: pilot is `MCPPathRegressor(gamma=1e9)` (plain lasso),
+  per-feature adaptive weights `1 / max(|β_pilot|, ε)^η`, final fit
+  reuses skein's existing `weights=` parameter — no Rust changes.
+  Path estimators expose `coef_pilot_` and `weights_` for inspection;
+  CV runs the pilot on full data and uses fixed weights per fold.
+  10 pytest cover signal recovery, pilot-position behavior, dense
+  ↔ sparse equivalence, validation, η-monotonicity in sparsity.
+  Adaptive group / GLM variants are a follow-up.
 - **Adaptive group MCP / SCAD** with weights from a pilot fit.
 - **Constrained variants**: nonneg lasso, box constraints. Implemented
   by post-prox projection.

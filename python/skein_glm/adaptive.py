@@ -1,0 +1,608 @@
+"""Adaptive {lasso, MCP, SCAD} estimators (M6.x).
+
+Two-stage procedure introduced by Zou (2006) for adaptive lasso, extended
+here to MCP and SCAD:
+
+1. **Pilot fit.** Run a plain lasso path (MCP at γ → ∞) on `(X, y)` and
+   pick β at a position `pilot_position` along the path (default
+   `'mid'` — the middle of the auto-generated λ-grid). Other options:
+   `'last'` (smallest λ, closest to OLS), or an integer index.
+2. **Adaptive weights.** Compute per-feature `w_j = 1 / max(|β_pilot[j]|,
+   eps_pilot)^η`. Larger pilot magnitudes ⇒ smaller penalty weight ⇒ less
+   shrinkage on truly active features. The exponent `η` (default 1.0)
+   controls how aggressively the weights pull toward unbiased estimates.
+3. **Final fit.** Run the chosen final penalty (Lasso / MCP / SCAD) on
+   `(X, y)` with these adaptive weights. The path is the **final**
+   estimator's path, λ-decreasing.
+
+The pilot fit is on the **full** data (not per-fold) so the CV variants
+keep their statistical guarantees: the pilot weights are an
+input-data-based summary, the per-fold fit only re-runs the final
+adaptive solve on each train split.
+
+This is the headline reason the per-feature weight axis exists in
+skein — the underlying solvers all accept `weights=` already, so
+adaptive estimators are pure composition with no Rust changes.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+import numpy as np
+from numpy.typing import NDArray
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.model_selection import KFold
+
+from skein_glm import _core
+from skein_glm.estimators import (
+    MCPPathRegressor,
+    SCADPathRegressor,
+    _is_sparse,
+)
+
+PilotPosition = Literal["mid", "last"]
+
+
+def _validate_pilot_position(p: Any, n_lambdas: int) -> int:
+    """Resolve `pilot_position` to a concrete index in `[0, n_lambdas)`."""
+    if isinstance(p, str):
+        if p == "mid":
+            return n_lambdas // 2
+        if p == "last":
+            return n_lambdas - 1
+        raise ValueError(
+            f"pilot_position must be 'mid', 'last', or int; got {p!r}"
+        )
+    if isinstance(p, (int, np.integer)):
+        idx = int(p)
+        if not 0 <= idx < n_lambdas:
+            raise ValueError(
+                f"pilot_position {idx} out of range for n_pilot_lambdas={n_lambdas}"
+            )
+        return idx
+    raise TypeError(
+        f"pilot_position must be 'mid', 'last', or int; got {type(p).__name__}"
+    )
+
+
+def _adaptive_weights(
+    beta_pilot: NDArray[np.float64],
+    eta: float,
+    eps_pilot: float,
+) -> NDArray[np.float64]:
+    """Per-feature `1 / max(|β|, eps)^η`. Used as the `weights=`
+    argument to the final solver."""
+    if not eta > 0.0:
+        raise ValueError(f"eta must be > 0; got {eta}")
+    if not eps_pilot > 0.0:
+        raise ValueError(f"eps_pilot must be > 0; got {eps_pilot}")
+    mag = np.maximum(np.abs(beta_pilot), eps_pilot)
+    return 1.0 / np.power(mag, eta)
+
+
+def _fit_pilot(
+    x,
+    y,
+    n_pilot_lambdas: int,
+    pilot_position,
+    fit_intercept: bool,
+    standardize: bool,
+) -> NDArray[np.float64]:
+    """Run a plain lasso path (MCP at γ = 1e9) on `(X, y)` and return the
+    β at the resolved `pilot_position`. The path solver dispatches on
+    sparse vs dense via the underlying estimator."""
+    pilot = MCPPathRegressor(
+        gamma=1e9,
+        n_lambdas=n_pilot_lambdas,
+        lambda_min_ratio=1e-3,
+        fit_intercept=fit_intercept,
+        standardize=standardize,
+    ).fit(x, y)
+    idx = _validate_pilot_position(pilot_position, len(pilot.lambdas_))
+    return pilot.coefs_[idx].copy()
+
+
+# =========================================================================
+# Path estimators
+# =========================================================================
+
+
+class _AdaptivePathBase(BaseEstimator, RegressorMixin):
+    """Common scaffold: pilot → weights → final path. Subclasses set
+    `_final_cls` (the underlying skein path estimator class) and
+    `_extra_kwargs()` (penalty-specific params like γ or a)."""
+
+    coefs_: NDArray[np.float64]
+    intercepts_: NDArray[np.float64]
+    lambdas_: NDArray[np.float64]
+    coef_pilot_: NDArray[np.float64]
+    weights_: NDArray[np.float64]
+    info_: dict[str, Any]
+    n_features_in_: int
+
+    _final_cls: Any  # subclass-defined
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def _make_final(self, weights: NDArray[np.float64]):
+        kw: dict[str, Any] = dict(
+            lambdas=self.lambdas,  # type: ignore[attr-defined]
+            n_lambdas=self.n_lambdas,  # type: ignore[attr-defined]
+            lambda_min_ratio=self.lambda_min_ratio,  # type: ignore[attr-defined]
+            weights=weights,
+            max_iter=self.max_iter,  # type: ignore[attr-defined]
+            tol=self.tol,  # type: ignore[attr-defined]
+            fit_intercept=self.fit_intercept,  # type: ignore[attr-defined]
+            standardize=self.standardize,  # type: ignore[attr-defined]
+            screening=self.screening,  # type: ignore[attr-defined]
+            acceleration=self.acceleration,  # type: ignore[attr-defined]
+        )
+        kw.update(self._extra_kwargs())
+        return self._final_cls(**kw)
+
+    def fit(self, x, y) -> "_AdaptivePathBase":
+        beta_pilot = _fit_pilot(
+            x,
+            y,
+            self.n_pilot_lambdas,  # type: ignore[attr-defined]
+            self.pilot_position,  # type: ignore[attr-defined]
+            self.fit_intercept,  # type: ignore[attr-defined]
+            self.standardize,  # type: ignore[attr-defined]
+        )
+        weights = _adaptive_weights(
+            beta_pilot,
+            self.eta,  # type: ignore[attr-defined]
+            self.eps_pilot,  # type: ignore[attr-defined]
+        )
+        final = self._make_final(weights).fit(x, y)
+        self.coefs_ = final.coefs_
+        self.intercepts_ = final.intercepts_
+        self.lambdas_ = final.lambdas_
+        self.coef_pilot_ = beta_pilot
+        self.weights_ = weights
+        self.info_ = final.info_
+        self.n_features_in_ = final.n_features_in_
+        return self
+
+    def predict(self, x) -> NDArray[np.float64]:
+        if _is_sparse(x):
+            return np.asarray(x @ self.coefs_.T) + self.intercepts_[None, :]
+        x = np.ascontiguousarray(x, dtype=np.float64)
+        return x @ self.coefs_.T + self.intercepts_[None, :]
+
+
+class AdaptiveLassoPathRegressor(_AdaptivePathBase):
+    """Adaptive lasso (Zou 2006) along a λ-path with warm starts.
+
+    Pilot is a plain lasso fit (MCP at γ = 1e9); final is also lasso
+    with the per-feature inverse-magnitude weights. With pilot magnitudes
+    η-rescaled, the final solve produces the asymptotically unbiased
+    "oracle" sparse solution under the right regularity conditions.
+
+    Parameters
+    ----------
+    eta : float, default 1.0
+        Adaptive-weight exponent. `w_j = 1 / max(|β_pilot[j]|, eps)^η`.
+    eps_pilot : float, default 1e-6
+        Floor on `|β_pilot|` to keep weights finite.
+    n_pilot_lambdas : int, default 10
+        Length of the pilot's auto λ-grid.
+    pilot_position : {'mid', 'last'} or int, default 'mid'
+        Which λ along the pilot path to read β from. ``'mid'`` is a
+        good default — the path's middle is typically a reasonable
+        bias/variance compromise. ``'last'`` is closest to OLS.
+    lambdas : array-like or None, default None
+        Forwarded to the final estimator (`MCPPathRegressor` at γ = 1e9).
+        See its docstring for the rest of the standard kwargs
+        (``n_lambdas``, ``lambda_min_ratio``, ``max_iter``, ``tol``,
+        ``fit_intercept``, ``standardize``, ``screening``,
+        ``acceleration``).
+
+    Attributes
+    ----------
+    coefs_ : (n_lambdas, n_features)
+    intercepts_ : (n_lambdas,)
+    lambdas_ : (n_lambdas,)
+    coef_pilot_ : (n_features,) — the β read off the pilot path.
+    weights_ : (n_features,) — the adaptive weights computed from the pilot.
+    info_ : dict
+    n_features_in_ : int
+    """
+
+    _final_cls = MCPPathRegressor
+
+    def __init__(
+        self,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+    ) -> None:
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": 1e9}
+
+
+class AdaptiveMCPPathRegressor(_AdaptivePathBase):
+    """Adaptive MCP along a λ-path with warm starts. Pilot is plain
+    lasso; final is MCP at the user's `gamma` with pilot-derived weights."""
+
+    _final_cls = MCPPathRegressor
+
+    def __init__(
+        self,
+        gamma: float = 3.0,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+    ) -> None:
+        self.gamma = gamma
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": self.gamma}
+
+
+class AdaptiveSCADPathRegressor(_AdaptivePathBase):
+    """Adaptive SCAD along a λ-path with warm starts. Pilot is plain
+    lasso; final is SCAD at the user's `a` with pilot-derived weights."""
+
+    _final_cls = SCADPathRegressor
+
+    def __init__(
+        self,
+        a: float = 3.7,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+    ) -> None:
+        self.a = a
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"a": self.a}
+
+
+# =========================================================================
+# Path-CV estimators (K-fold CV with pilot fit on full data)
+# =========================================================================
+
+
+class _AdaptivePathCVBase(BaseEstimator, RegressorMixin):
+    """K-fold CV for the adaptive estimators. Pilot weights are computed
+    once on the full data (not per fold) — they're a data-derived
+    hyperparameter rather than a model parameter, and the per-fold
+    final fit uses these fixed weights. CV picks the λ minimizing
+    mean test MSE."""
+
+    coef_: NDArray[np.float64]
+    intercept_: float
+    coef_pilot_: NDArray[np.float64]
+    weights_: NDArray[np.float64]
+    cv_scores_: NDArray[np.float64]
+    cv_mean_scores_: NDArray[np.float64]
+    cv_std_scores_: NDArray[np.float64]
+    lambdas_: NDArray[np.float64]
+    lambda_best_: float
+    info_: dict[str, Any]
+    n_features_in_: int
+
+    _final_cls: Any
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def _make_final(self, weights: NDArray[np.float64], **overrides):
+        kw: dict[str, Any] = dict(
+            lambdas=self.lambdas,  # type: ignore[attr-defined]
+            n_lambdas=self.n_lambdas,  # type: ignore[attr-defined]
+            lambda_min_ratio=self.lambda_min_ratio,  # type: ignore[attr-defined]
+            weights=weights,
+            max_iter=self.max_iter,  # type: ignore[attr-defined]
+            tol=self.tol,  # type: ignore[attr-defined]
+            fit_intercept=self.fit_intercept,  # type: ignore[attr-defined]
+            standardize=self.standardize,  # type: ignore[attr-defined]
+            screening=self.screening,  # type: ignore[attr-defined]
+            acceleration=self.acceleration,  # type: ignore[attr-defined]
+        )
+        kw.update(self._extra_kwargs())
+        kw.update(overrides)
+        return self._final_cls(**kw)
+
+    def fit(self, x, y) -> "_AdaptivePathCVBase":
+        # Step 1: pilot weights from the full data.
+        beta_pilot = _fit_pilot(
+            x,
+            y,
+            self.n_pilot_lambdas,  # type: ignore[attr-defined]
+            self.pilot_position,  # type: ignore[attr-defined]
+            self.fit_intercept,  # type: ignore[attr-defined]
+            self.standardize,  # type: ignore[attr-defined]
+        )
+        weights = _adaptive_weights(
+            beta_pilot,
+            self.eta,  # type: ignore[attr-defined]
+            self.eps_pilot,  # type: ignore[attr-defined]
+        )
+
+        # Step 2: full-data final refit (provides λ-grid and final β).
+        full = self._make_final(weights).fit(x, y)
+        lambdas = full.lambdas_
+
+        # Step 3: K-fold CV on the final estimator with fixed pilot weights.
+        y_arr = np.ascontiguousarray(y, dtype=np.float64)
+        if _is_sparse(x):
+            from scipy import sparse  # type: ignore[import-untyped]
+            x_for_indexing = x.tocsr() if not sparse.isspmatrix_csr(x) else x
+        else:
+            x_for_indexing = np.ascontiguousarray(x, dtype=np.float64)
+
+        cv = self.cv  # type: ignore[attr-defined]
+        random_state = self.random_state  # type: ignore[attr-defined]
+        if isinstance(cv, int):
+            splitter = KFold(n_splits=cv, shuffle=True, random_state=random_state)
+        else:
+            splitter = cv
+
+        n_lambdas = lambdas.shape[0]
+        n = y_arr.shape[0]
+        split_input = (
+            np.zeros((n, 1)) if _is_sparse(x) else x_for_indexing
+        )
+        scores = np.full((splitter.get_n_splits(split_input), n_lambdas), np.nan)
+
+        for fold_idx, (train_idx, test_idx) in enumerate(splitter.split(split_input)):
+            x_tr = x_for_indexing[train_idx]
+            x_te = x_for_indexing[test_idx]
+            y_tr = y_arr[train_idx]
+            y_te = y_arr[test_idx]
+            fold = self._make_final(weights, lambdas=lambdas).fit(x_tr, y_tr)
+            for lam_idx in range(n_lambdas):
+                pred = (
+                    x_te @ fold.coefs_[lam_idx] + fold.intercepts_[lam_idx]
+                )
+                if hasattr(pred, "toarray"):
+                    pred = pred.toarray()
+                pred = np.asarray(pred).ravel()
+                diff = y_te - pred
+                scores[fold_idx, lam_idx] = float(np.mean(diff * diff))
+
+        self.cv_scores_ = scores
+        self.cv_mean_scores_ = np.nanmean(scores, axis=0)
+        self.cv_std_scores_ = np.nanstd(scores, axis=0)
+        best = int(np.argmin(self.cv_mean_scores_))
+        self.lambdas_ = lambdas
+        self.lambda_best_ = float(lambdas[best])
+        self.coef_ = full.coefs_[best]
+        self.intercept_ = float(full.intercepts_[best])
+        self.coef_pilot_ = beta_pilot
+        self.weights_ = weights
+        self.info_ = full.info_
+        self.n_features_in_ = full.n_features_in_
+        return self
+
+    def predict(self, x) -> NDArray[np.float64]:
+        if _is_sparse(x):
+            pred = x @ self.coef_
+            if hasattr(pred, "toarray"):
+                pred = pred.toarray()
+            return np.asarray(pred) + self.intercept_
+        x = np.ascontiguousarray(x, dtype=np.float64)
+        return x @ self.coef_ + self.intercept_
+
+
+class AdaptiveLassoPathCV(_AdaptivePathCVBase):
+    """K-fold CV over an adaptive-lasso λ-path."""
+
+    _final_cls = MCPPathRegressor
+
+    def __init__(
+        self,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+    ) -> None:
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": 1e9}
+
+
+class AdaptiveMCPPathCV(_AdaptivePathCVBase):
+    """K-fold CV over an adaptive-MCP λ-path."""
+
+    _final_cls = MCPPathRegressor
+
+    def __init__(
+        self,
+        gamma: float = 3.0,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+    ) -> None:
+        self.gamma = gamma
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"gamma": self.gamma}
+
+
+class AdaptiveSCADPathCV(_AdaptivePathCVBase):
+    """K-fold CV over an adaptive-SCAD λ-path."""
+
+    _final_cls = SCADPathRegressor
+
+    def __init__(
+        self,
+        a: float = 3.7,
+        *,
+        eta: float = 1.0,
+        eps_pilot: float = 1e-6,
+        n_pilot_lambdas: int = 10,
+        pilot_position: PilotPosition | int = "mid",
+        cv: Any = 5,
+        random_state: int | None = None,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        screening: str = "strong",
+        acceleration: int | None = 5,
+    ) -> None:
+        self.a = a
+        self.eta = eta
+        self.eps_pilot = eps_pilot
+        self.n_pilot_lambdas = n_pilot_lambdas
+        self.pilot_position = pilot_position
+        self.cv = cv
+        self.random_state = random_state
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.screening = screening
+        self.acceleration = acceleration
+
+    def _extra_kwargs(self) -> dict[str, Any]:
+        return {"a": self.a}
+
+
+__all__ = [
+    "AdaptiveLassoPathRegressor",
+    "AdaptiveMCPPathRegressor",
+    "AdaptiveSCADPathRegressor",
+    "AdaptiveLassoPathCV",
+    "AdaptiveMCPPathCV",
+    "AdaptiveSCADPathCV",
+]

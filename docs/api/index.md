@@ -12,6 +12,7 @@ a linear scan through 80 classes.
 | Gaussian (LS) — scalar penalties (MCP, SCAD, ElasticNet)  | [LS](estimators-ls.md)        |
 | Gaussian (LS) — group penalties (incl. GroupElasticNet)   | [LS](estimators-ls.md)        |
 | Multi-task LS — 2D `Y`, joint feature selection           | [Multi-task](estimators-multitask.md) |
+| Adaptive {Lasso, MCP, SCAD} — pilot-fit two-stage         | [Adaptive](estimators-adaptive.md) |
 | Binomial logistic                             | [Logistic](estimators-logistic.md) |
 | Multinomial / softmax (K classes, row-grouped) | [Multinomial](estimators-multinomial.md) |
 | Poisson                                       | [Poisson](estimators-poisson.md)   |

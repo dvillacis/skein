@@ -40,8 +40,9 @@ When someone asks "why not just `skglm`, `glmnet`, or `ncvreg`?":
 | Poisson      | Log-link                          | Same as binomial                                   | 14 sklearn classes   |
 | Cox PH       | Breslow ties                      | Same as binomial                                   | 14 sklearn classes   |
 
-80 estimators total. Plus 37 `*PathCV` cross-validation wrappers, plus
-`select_by_ic` for AIC/BIC/EBIC across all five GLM families.
+86 estimators total (incl. 6 adaptive {Lasso, MCP, SCAD} × {Path, PathCV}).
+Plus 40 `*PathCV` cross-validation wrappers, plus `select_by_ic` for
+AIC/BIC/EBIC across all five GLM families.
 
 ## Quick taste
 
@@ -86,7 +87,7 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Status
 
-v0.2 is a complete, tested implementation: **257 cargo + 218 pytest
+v0.2 is a complete, tested implementation: **257 cargo + 228 pytest
 tests, all green** at last snapshot. Sparse + dense + mmap + chunked
 + multi-task backends all interoperate; every datafit × penalty
 combination is wired end-to-end with sklearn-style `fit` / `predict` /
@@ -154,6 +155,7 @@ examples/survival
 api/index
 api/estimators-ls
 api/estimators-multitask
+api/estimators-adaptive
 api/estimators-logistic
 api/estimators-multinomial
 api/estimators-poisson

@@ -156,6 +156,14 @@ from skein_glm.cv import (
     SparseGroupSCADPathCV,
 )
 from skein_glm.ic import select_by_ic
+from skein_glm.adaptive import (
+    AdaptiveLassoPathCV,
+    AdaptiveLassoPathRegressor,
+    AdaptiveMCPPathCV,
+    AdaptiveMCPPathRegressor,
+    AdaptiveSCADPathCV,
+    AdaptiveSCADPathRegressor,
+)
 from skein_glm.multinomial import (
     MultinomialElasticNetClassifier,
     MultinomialElasticNetPathCV,
@@ -242,6 +250,9 @@ __all__ = [
     "ElasticNetPathRegressor",
     "BridgeRegressor",
     "BridgePathRegressor",
+    "AdaptiveLassoPathRegressor",
+    "AdaptiveMCPPathRegressor",
+    "AdaptiveSCADPathRegressor",
     "GroupElasticNetRegressor",
     "GroupElasticNetPathRegressor",
     "GroupLassoRegressor",
@@ -312,6 +323,9 @@ __all__ = [
     "SCADPathCV",
     "ElasticNetPathCV",
     "BridgePathCV",
+    "AdaptiveLassoPathCV",
+    "AdaptiveMCPPathCV",
+    "AdaptiveSCADPathCV",
     "GroupElasticNetPathCV",
     "GroupLassoPathCV",
     "GroupMCPPathCV",
