@@ -1,0 +1,248 @@
+{
+  "scenario": "lasso_ls",
+  "host_id": "darwin-arm64-MacBook-Pro-de-David-5.local",
+  "runs": [
+    {
+      "package": "skein",
+      "version": "0.4.0",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.03011379199961084,
+      "fit_time_min_s": 0.030027625000002445,
+      "fit_time_max_s": 0.03015633299946785,
+      "trials": [
+        0.03015633299946785,
+        0.030027625000002445,
+        0.03011379199961084
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 93,
+      "size": "small",
+      "extra": {
+        "screening": "strong",
+        "info_keys": [
+          "converged",
+          "final_objs",
+          "iters",
+          "kkt_passes",
+          "working_set_sizes"
+        ]
+      },
+      "timestamp": "2026-05-10T11:10:39.040345+00:00"
+    },
+    {
+      "package": "sklearn",
+      "version": "1.8.0",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.00557341700005054,
+      "fit_time_min_s": 0.005407458000263432,
+      "fit_time_max_s": 0.005587624999861873,
+      "trials": [
+        0.005587624999861873,
+        0.00557341700005054,
+        0.005407458000263432
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 93,
+      "size": "small",
+      "extra": {},
+      "timestamp": "2026-05-10T11:10:39.040345+00:00"
+    },
+    {
+      "package": "skglm",
+      "version": "0.5",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.14400683300027595,
+      "fit_time_min_s": 0.14399662499999977,
+      "fit_time_max_s": 0.1440641670005789,
+      "trials": [
+        0.14399662499999977,
+        0.1440641670005789,
+        0.14400683300027595
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 93,
+      "size": "small",
+      "extra": {},
+      "timestamp": "2026-05-10T11:10:39.040345+00:00"
+    },
+    {
+      "package": "celer",
+      "version": "0.7.4",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.184861791000003,
+      "fit_time_min_s": 0.18344162499943195,
+      "fit_time_max_s": 0.18971400000009453,
+      "trials": [
+        0.18971400000009453,
+        0.18344162499943195,
+        0.184861791000003
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 93,
+      "size": "small",
+      "extra": {},
+      "timestamp": "2026-05-10T11:10:39.040345+00:00"
+    },
+    {
+      "package": "glmnet",
+      "version": "5.0",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.011,
+      "fit_time_min_s": 0.011,
+      "fit_time_max_s": 0.011,
+      "trials": [
+        0.011,
+        0.011,
+        0.011
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 93,
+      "size": "small",
+      "extra": {
+        "via": "Rscript"
+      },
+      "timestamp": "2026-05-10T11:10:39.040345+00:00"
+    },
+    {
+      "package": "skein",
+      "version": "0.4.0",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 3.2383162500000253,
+      "fit_time_min_s": 3.2189896250001766,
+      "fit_time_max_s": 3.6143336249997446,
+      "trials": [
+        3.2189896250001766,
+        3.6143336249997446,
+        3.2383162500000253
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 791,
+      "size": "medium",
+      "extra": {
+        "screening": "strong",
+        "info_keys": [
+          "converged",
+          "final_objs",
+          "iters",
+          "kkt_passes",
+          "working_set_sizes"
+        ]
+      },
+      "timestamp": "2026-05-10T11:10:39.040345+00:00"
+    },
+    {
+      "package": "sklearn",
+      "version": "1.8.0",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.18689645900030882,
+      "fit_time_min_s": 0.18438112500007264,
+      "fit_time_max_s": 0.18765133299984882,
+      "trials": [
+        0.18689645900030882,
+        0.18438112500007264,
+        0.18765133299984882
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 786,
+      "size": "medium",
+      "extra": {},
+      "timestamp": "2026-05-10T11:10:39.040345+00:00"
+    },
+    {
+      "package": "skglm",
+      "version": "0.5",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 10.627538458000345,
+      "fit_time_min_s": 10.22749608399954,
+      "fit_time_max_s": 10.735681832999944,
+      "trials": [
+        10.627538458000345,
+        10.735681832999944,
+        10.22749608399954
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 791,
+      "size": "medium",
+      "extra": {},
+      "timestamp": "2026-05-10T11:10:39.040345+00:00"
+    },
+    {
+      "package": "celer",
+      "version": "0.7.4",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 12.881485999999313,
+      "fit_time_min_s": 12.347410041999865,
+      "fit_time_max_s": 13.15202304200011,
+      "trials": [
+        12.347410041999865,
+        13.15202304200011,
+        12.881485999999313
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 791,
+      "size": "medium",
+      "extra": {},
+      "timestamp": "2026-05-10T11:10:39.040345+00:00"
+    },
+    {
+      "package": "glmnet",
+      "version": "5.0",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.893,
+      "fit_time_min_s": 0.879,
+      "fit_time_max_s": 0.912,
+      "trials": [
+        0.879,
+        0.912,
+        0.893
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 792,
+      "size": "medium",
+      "extra": {
+        "via": "Rscript"
+      },
+      "timestamp": "2026-05-10T11:10:39.040345+00:00"
+    }
+  ]
+}
