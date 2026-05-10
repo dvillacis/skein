@@ -222,3 +222,60 @@ skglm and celer numbers in this table are not informative — both
 runners do per-λ `Lasso(alpha=λ).fit()` fresh, while sklearn /
 skein / glmnet use native warm-started path solvers. The comparison
 becomes meaningful once the M9.3 runner fairness fix lands.
+
+## Postscript — runner fairness fix landed
+
+Updated `benches/runners/skglm_runner.py` to use
+`skglm.estimators.Lasso.path(X, y, alphas=…)` and
+`benches/runners/celer_runner.py` to use
+`celer.homotopy.celer_path(X, y, "lasso", alphas=…)` — the same
+warm-started path APIs each package's own benchmarks use. Both
+packages now get the same warm-start advantage skein and sklearn have.
+
+**Apples-to-apples results (medium, n=10k, p=1k, 100-λ path)**:
+
+| package | deep regime | sparse regime |
+|---|---|---|
+| sklearn (`lasso_path`)              | 188 ms | 147 ms |
+| glmnet (R, via Rscript)             | 950 ms | 707 ms |
+| skein                               | 3.32 s | 2.50 s |
+| celer (`celer_path`)                | 3.97 s | **466 ms** |
+| skglm (`Lasso.path`)                | 5.24 s | 3.47 s |
+
+Two real findings:
+
+1. **skein beats both celer and skglm in the deep regime**. When the
+   path runs deep into the saturated tail, our M10.3 structural
+   changes + strong-rule-equivalent priority WS combine to beat
+   celer's dual-extrapolation overhead and skglm's per-feature numba
+   dispatch. We stay 17× behind sklearn (BLAS gap) and 3.5× behind
+   glmnet (also Fortran BLAS) but ahead of the Python comparators.
+
+2. **celer dominates in the sparse regime — 5× faster than glmnet,
+   5.4× faster than skein**. Their dual-extrapolation builds a
+   tighter screening sphere as the path progresses, so the WS shrinks
+   aggressively when the true support is small. skein's PGD-based
+   screening only compresses fit time 1.3× from deep to sparse;
+   celer compresses 8.5×.
+
+The first is encouraging, but the second is the bigger lesson:
+**celer has an algorithmic advantage on sparse paths that priority
+WS + adaptive inner tol don't capture**. That's the next non-BLAS
+lever after Option C — but it's a real algorithmic addition (dual
+extrapolation, tracked dual feasibility), not a simple
+restructuring.
+
+Order of remaining levers, post-runner-fairness:
+
+  C. ndarray `blas` feature: ~3× on deep, would close most of the
+     gap to sklearn / glmnet. The single largest move.
+  E. Anderson on residual instead of β (smaller code, ~1.05–1.2×).
+  F. Dual extrapolation (celer's lever): would close the celer-sparse
+     gap. Significant new code.
+
+skglm at 5.24s deep / 3.47s sparse — note that skglm's *AndersonCD*
+is what drives our `subdiff_distance` adoption philosophy in the
+adaptive PGD work. skglm uses numba @njit for the inner CD; we use
+ndarray's pure-Rust dot path. Numba's BLAS dispatch on
+`X[:, j].dot(Xw)` apparently isn't meaningfully faster than
+`dot_generic` here — both packages cluster in the 3–5 s range.

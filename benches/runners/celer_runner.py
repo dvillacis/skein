@@ -1,4 +1,9 @@
-"""celer runner — fast convex solver via dual extrapolation + screening."""
+"""celer runner — fast convex solver via dual extrapolation + screening.
+
+Uses `celer.homotopy.celer_path` so warm-starts along the λ-grid are
+honest (the dropin `celer.Lasso` fit per-λ throws away the previous
+solve). This is the same path API celer's own benchmarks use.
+"""
 
 from __future__ import annotations
 
@@ -35,40 +40,32 @@ def fit(
     tol: float,
     **_: object,
 ) -> RunResult:
-    from celer import Lasso, ElasticNet  # type: ignore
-    from celer import LogisticRegression as CelerLogistic  # type: ignore
+    from celer.homotopy import celer_path
 
     alphas = np.asarray(lambda_grid)
 
-    if problem.family == "gaussian" and penalty == "lasso":
+    if problem.family == "gaussian" and penalty in ("lasso", "elastic_net"):
+        l1_ratio = 1.0 if penalty == "lasso" else 0.5
         t0 = time.perf_counter()
-        coefs = []
-        for lam in alphas:
-            est = Lasso(alpha=lam, tol=tol, fit_intercept=True)
-            est.fit(problem.x, problem.y)
-            coefs.append(est.coef_)
-        elapsed = time.perf_counter() - t0
-    elif problem.family == "gaussian" and penalty == "elastic_net":
-        t0 = time.perf_counter()
-        coefs = []
-        for lam in alphas:
-            est = ElasticNet(alpha=lam, l1_ratio=0.5, tol=tol, fit_intercept=True)
-            est.fit(problem.x, problem.y)
-            coefs.append(est.coef_)
+        _alphas, coefs, *_rest = celer_path(
+            problem.x,
+            problem.y,
+            "lasso",
+            alphas=alphas,
+            tol=tol,
+            l1_ratio=l1_ratio,
+        )
         elapsed = time.perf_counter() - t0
     elif problem.family == "logistic" and penalty == "lasso":
-        n = problem.x.shape[0]
-        t0 = time.perf_counter()
-        coefs = []
-        for lam in alphas:
-            est = CelerLogistic(C=1.0 / (lam * n), tol=tol, fit_intercept=True)
-            est.fit(problem.x, problem.y)
-            coefs.append(est.coef_.ravel())
-        elapsed = time.perf_counter() - t0
+        # celer_path's logreg loss is the un-normalised sum (no `/n`),
+        # so to match skein's `lasso_path`-style λ-scaling we'd need
+        # to convert. For now, bench logistic separately.
+        raise NotImplementedError("celer runner: logistic not yet wired")
     else:
-        raise NotImplementedError(f"celer: ({problem.family}, {penalty}) not supported")
+        raise NotImplementedError(f"celer runner: ({problem.family}, {penalty}) not supported")
 
-    coef_path = np.stack(coefs, axis=0)
+    coefs = np.asarray(coefs)  # shape (n_features, n_alphas)
+    coef_path = coefs.T  # → (n_alphas, n_features)
     final_active = int(np.count_nonzero(coef_path[-1]))
     return RunResult(
         package=name,
