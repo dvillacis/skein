@@ -589,10 +589,12 @@ struct OuterState {
     safely_inactive: Vec<usize>,
 }
 
-#[allow(clippy::too_many_arguments)] // Path-solver inner helper; eleven
-// args read as a single pass-through of the per-λ outer state. Wrapping
-// them in a struct just for clippy's threshold isn't worth the
-// indirection here.
+// Path-solver inner helper; eleven args read as a single pass-through of
+// the per-λ outer state (β, r, ws, lc cache, λ, tol, optional Anderson
+// extrapolation, the running best-dual accumulator). Wrapping them in a
+// struct just for clippy's threshold isn't worth the indirection at the
+// only call site.
+#[allow(clippy::too_many_arguments)]
 fn compute_outer_state(
     design: &dyn DesignMatrix,
     datafit: &dyn Datafit,

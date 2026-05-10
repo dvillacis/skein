@@ -4,6 +4,56 @@ All notable changes to `skein-glm` are recorded here. The project follows
 semantic versioning, with the pre-1.0 minor-bump-on-feature policy
 documented in `docs/extending/rust-api.md`.
 
+## [0.5.1] — 2026-05-10
+
+CI green-up patch on top of `v0.5.0`. No behaviour change, no new
+features. Cuts a separate tag because the v0.5.0 push triggered CI
+lint failures (rustfmt, clippy threshold, ruff unused-imports,
+sphinx unreferenced-docs) that needed the formatter / config tweaks
+below.
+
+### Fixed
+
+- **`cargo fmt --all -- --check`** in CI:
+  - `examples/lasso_ls_medium.rs`, `solver/cd.rs`, `solver/path.rs`
+    reformatted to rustfmt's defaults (single-line struct literals
+    where they fit, function-call reflow, the
+    `extrapolation.as_ref().map(...)` chain wrapped per
+    chain-fit rule).
+- **`cargo clippy --workspace --all-targets -- -D warnings`** in CI:
+  - `solver/path.rs::compute_outer_state` grew to 11 args during
+    F.2 (Anderson-extrapolation pair + `&mut best_dual_obj`
+    accumulator). Clippy's threshold is 7. Annotated with
+    `#[allow(clippy::too_many_arguments)]` and a comment
+    explaining the rationale; wrapping the args in a struct just
+    for clippy's threshold isn't worth the indirection at the
+    only call site.
+- **`ruff check .`** in CI:
+  - `benches/runners/sklearn_runner.py`: dropped unused
+    `ElasticNet, Lasso` from the per-call import list (we only
+    use the `*_path` functions on the LS branch and
+    `LogisticRegression` on the logistic branch).
+  - `benches/scenarios/lasso_ls{,_sparse}.py`: `import numpy as np`
+    removed — unused after the F.4 / scenarios refactor that
+    moved `lambda_grid` into `benches/scenarios/_common.py`.
+- **`sphinx-build -W -b html docs docs/_build/html`** in CI: two
+  perf docs (`docs/perf/lasso_ls_profile.md`,
+  `docs/perf/celer_skglm_study.md`) added in v0.5.0 weren't
+  referenced from any toctree, so `-W` (warnings as errors) failed
+  the docs build. Added a "Performance" section to the top-level
+  toctree in `docs/index.md`.
+
+### Tests / lints all green locally
+
+  cargo fmt --all -- --check                             ✓
+  cargo clippy --workspace --all-targets -- -D warnings  ✓
+  ruff check .                                           ✓
+  mypy python/                                           ✓
+  sphinx-build -W -b html docs docs/_build/html          ✓
+  cargo test -p skein-core (default + blas-accelerate)   265 / 265
+  cargo test -p skein-core --features blas-openblas      265 / 265
+  pytest                                                 279 / 279
+
 ## [0.5.0] — 2026-05-10
 
 The performance release. M9 (cross-package benchmark harness) and M10

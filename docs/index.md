@@ -189,6 +189,14 @@ api/abcs
 
 ```{toctree}
 :hidden:
+:caption: Performance
+
+perf/lasso_ls_profile
+perf/celer_skglm_study
+```
+
+```{toctree}
+:hidden:
 :caption: Project
 
 roadmap
