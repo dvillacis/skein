@@ -203,27 +203,83 @@ where
             }
         };
 
-        let kkt_tol = lam.max(1e-12) * 1e-6;
+        // Cache per-coord Lipschitz constants once per λ. For unweighted
+        // LS this is an O(1) table lookup per call, but weighted-LS /
+        // GLM datafits compute it via a column scan, so caching avoids
+        // O(p · n) work when we evaluate the prox-gradient distance over
+        // the full feature set in the verifier loop below.
+        let coord_lipschitz: Vec<f64> = (0..p)
+            .map(|j| datafit.coord_lipschitz(design, j))
+            .collect();
+
         let mut passes = 0usize;
+        let mut inner_cd_cfg = config.cd.clone();
+        let mut prev_outer_pgd: f64 = f64::INFINITY;
 
         let (final_residual, last_report): (Array1<f64>, CdReport) = loop {
             passes += 1;
-            // `cd_solve_subset` returns the residual it already maintains
-            // via incremental axpy updates inside the inner loop — no need
-            // to recompute `r = Xβ − y` from scratch here (that was a
-            // wasted O(np) matvec per λ in earlier versions).
+
+            // Adaptive inner tolerance, celer/skglm style.
+            //
+            // We measure outer convergence as the prox-gradient distance
+            // `max_j |β_j − prox_j(β_j − grad_j / lc_j)|` — the same
+            // stationarity measure skglm uses (`dist_fix_point_cd`). It
+            // shares units (coefficient delta) with `config.cd.tol` so
+            // the inner CD's `max_delta < tol` rule and the outer
+            // verifier are commensurable.
+            //
+            // After each outer pass we have an outer PGD measurement.
+            // For the *next* inner solve we set `inner_tol = max(tol,
+            // 0.3 · prev_outer_pgd)`: when we're far from optimum the
+            // inner stops sloppy (saves the last few sweeps); when
+            // prev_outer_pgd shrinks toward `tol`, inner_tol converges
+            // to `tol` and the final β meets the user's request.
+            //
+            // First pass has no prior PGD, so we relax 10× — enough to
+            // skip the last sweep on warm-started λs while keeping
+            // the very first cold-start λ_max iteration tight enough
+            // to not need extra outer passes.
+            inner_cd_cfg.tol = if prev_outer_pgd.is_finite() {
+                config.cd.tol.max(0.3 * prev_outer_pgd)
+            } else {
+                config.cd.tol * 10.0
+            };
+
             let (new_beta, r, report) =
-                cd_solve_subset(warm, &ws, design, datafit, &*pen, &config.cd);
+                cd_solve_subset(warm, &ws, design, datafit, &*pen, &inner_cd_cfg);
             warm = new_beta;
 
-            // Without screening, the WS is already the full set; one pass.
+            // Without screening, the WS is the full set; one pass and
+            // we trust the inner CD's convergence.
             if matches!(config.screening, Screening::Off) {
                 break (r, report);
             }
-            let violators =
-                find_kkt_violators(design, datafit, r.view(), weights.view(), &ws, lam, kkt_tol);
-            if violators.is_empty() {
+
+            let (violators, max_pgd) = compute_outer_state(
+                design,
+                datafit,
+                &*pen,
+                warm.view(),
+                r.view(),
+                &ws,
+                &coord_lipschitz,
+                config.cd.tol,
+            );
+            prev_outer_pgd = max_pgd;
+
+            // Outer convergence: stationary on the full feature set.
+            if max_pgd < config.cd.tol {
                 break (r, report);
+            }
+
+            if violators.is_empty() {
+                // Working set is correct (no inactive feature wants to
+                // become active) but the inner CD stopped sloppy. The
+                // next pass will rerun with `inner_tol = 0.3 · max_pgd`
+                // — strictly tighter than this pass, since it stopped
+                // at `inner_tol > config.cd.tol`. Continue without
+                // expanding the WS.
+                continue;
             }
             ws.extend(violators);
             ws.sort_unstable();
@@ -370,39 +426,68 @@ fn gap_safe_screen(
     ws
 }
 
-/// KKT-verification step on the complement of the current working set.
+/// Outer KKT-verification by prox-gradient distance.
 ///
-/// Returns indices of features `j ∉ in_ws` whose gradient violates the KKT
-/// inclusion `|X_jᵀ r / n| ≤ λ · w_j` (or `≤ 0` for unpenalized features).
-/// `in_ws` must be sorted ascending.
-fn find_kkt_violators(
+/// Returns `(violators, max_pgd)`:
+///   - `violators` — features `j ∉ in_ws` whose one-step prox-gradient
+///     update would move `β_j` by more than `tol` (i.e. they're far
+///     enough from a stationary fixed point that they should join the
+///     working set).
+///   - `max_pgd` — `max_j |β_j − prox_j(β_j − grad_j / lc_j, 1 / lc_j)|`
+///     over **all** features (the global outer convergence measure).
+///     `max_pgd ≤ tol` means β is at a prox-gradient stationary point
+///     for the full problem; the inner CD has converged on every
+///     feature, in or out of the working set.
+///
+/// One BLAS gemv (`full_grad`) plus `p` per-coord prox calls — same
+/// asymptotic cost as the previous gradient-only verifier, but the
+/// magnitude returned is in coefficient units and commensurable with
+/// `config.cd.tol`. That's what powers the adaptive inner tolerance
+/// in `solve_path`: we set the next `inner_tol = max(tol, 0.3 · max_pgd)`
+/// so the inner solver isn't asked to converge below the current outer
+/// stationarity bound (celer/skglm pattern).
+///
+/// `in_ws` must be sorted ascending. `coord_lipschitz[j]` is the
+/// per-feature Lipschitz constant used to set the prox-gradient
+/// stepsize; `0.0` entries are treated as constant features and skip
+/// the prox check entirely.
+fn compute_outer_state(
     design: &dyn DesignMatrix,
     datafit: &dyn Datafit,
+    penalty: &dyn Penalty,
+    beta: ArrayView1<'_, f64>,
     residual: ArrayView1<'_, f64>,
-    weights: ArrayView1<'_, f64>,
     in_ws: &[usize],
-    lambda: f64,
+    coord_lipschitz: &[f64],
     tol: f64,
-) -> Vec<usize> {
+) -> (Vec<usize>, f64) {
     let p = design.n_features();
-    // One BLAS gemv instead of `p − |ws|` per-coord `coord_grad` calls.
-    // The walk over `in_ws` to skip already-included features is `O(p)`
-    // either way; gemv just makes the gradient itself cheap.
+    debug_assert_eq!(coord_lipschitz.len(), p);
     let grad = datafit.full_grad(design, residual);
     let mut violators = Vec::new();
-    let mut idx = 0usize;
+    let mut max_pgd = 0.0_f64;
+    let mut ws_idx = 0usize;
     for j in 0..p {
-        if idx < in_ws.len() && in_ws[idx] == j {
-            idx += 1;
+        let in_ws_flag = ws_idx < in_ws.len() && in_ws[ws_idx] == j;
+        if in_ws_flag {
+            ws_idx += 1;
+        }
+        let lj = coord_lipschitz[j];
+        if lj == 0.0 {
             continue;
         }
-        let w = weights[j];
-        let bound = if w <= 0.0 { tol } else { lambda * w + tol };
-        if grad[j].abs() > bound {
+        let step = 1.0 / lj;
+        let z = beta[j] - grad[j] * step;
+        let prox_bj = penalty.prox_coord(j, z, step);
+        let d = (prox_bj - beta[j]).abs();
+        if d > max_pgd {
+            max_pgd = d;
+        }
+        if !in_ws_flag && d > tol {
             violators.push(j);
         }
     }
-    violators
+    (violators, max_pgd)
 }
 
 #[cfg(test)]
