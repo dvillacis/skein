@@ -166,6 +166,14 @@ impl DesignMatrix for MmapMatrixF32 {
         }
         out
     }
+
+    fn col_axpy(&self, j: usize, alpha: f64, mut r: ndarray::ArrayViewMut1<f64>) {
+        // f32-on-disk → must promote per element; no BLAS path here.
+        let col = self.column_slice(j);
+        for (ri, &cv) in r.iter_mut().zip(col.iter()) {
+            *ri += alpha * (cv as f64);
+        }
+    }
 }
 
 #[cfg(test)]

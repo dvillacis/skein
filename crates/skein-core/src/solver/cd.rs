@@ -50,7 +50,14 @@ pub fn cd_solve(
     config: &CdConfig,
 ) -> (Array1<f64>, CdReport) {
     let p = design.n_features();
-    cd_solve_warm(Array1::<f64>::zeros(p), design, datafit, penalty, config)
+    let (beta, _, report) = cd_solve_warm_with_residual(
+        Array1::<f64>::zeros(p),
+        design,
+        datafit,
+        penalty,
+        config,
+    );
+    (beta, report)
 }
 
 /// CD with a caller-supplied initial β. Used by the path solver to warm-start
@@ -63,6 +70,23 @@ pub fn cd_solve_warm(
     penalty: &dyn Penalty,
     config: &CdConfig,
 ) -> (Array1<f64>, CdReport) {
+    let (beta, _, report) =
+        cd_solve_warm_with_residual(beta_init, design, datafit, penalty, config);
+    (beta, report)
+}
+
+/// CD over the full feature set; returns the final residual alongside `β`.
+/// The path solver calls this so it can re-use the residual the inner CD
+/// already maintains (via incremental `r += δ · X[:, j]` updates), instead of
+/// recomputing `r = Xβ − y` from scratch after every call — that recompute
+/// was an `O(np)` matvec per λ that the caller already had the answer to.
+pub fn cd_solve_warm_with_residual(
+    beta_init: Array1<f64>,
+    design: &dyn DesignMatrix,
+    datafit: &dyn Datafit,
+    penalty: &dyn Penalty,
+    config: &CdConfig,
+) -> (Array1<f64>, Array1<f64>, CdReport) {
     let p = design.n_features();
     let features: Vec<usize> = (0..p).collect();
     cd_solve_subset(beta_init, &features, design, datafit, penalty, config)
@@ -72,6 +96,11 @@ pub fn cd_solve_warm(
 /// held fixed at their values in `beta_init`; their contribution to `Xβ` is
 /// captured because the residual is initialized from the full `β`.
 ///
+/// Returns `(β, r, report)` where `r = Xβ − y` (or the datafit's analogous
+/// residual) is the final residual maintained by the in-loop axpy updates.
+/// Callers in the path solver use `r` directly for KKT verification rather
+/// than recomputing it via a fresh matvec.
+///
 /// Empty `features` returns immediately (no work to do, considered converged).
 pub fn cd_solve_subset(
     beta_init: Array1<f64>,
@@ -80,8 +109,7 @@ pub fn cd_solve_subset(
     datafit: &dyn Datafit,
     penalty: &dyn Penalty,
     config: &CdConfig,
-) -> (Array1<f64>, CdReport) {
-    let n = design.n_samples();
+) -> (Array1<f64>, Array1<f64>, CdReport) {
     let p = design.n_features();
     debug_assert_eq!(beta_init.len(), p, "beta_init length must equal n_features");
     let mut beta = beta_init;
@@ -91,6 +119,7 @@ pub fn cd_solve_subset(
         let obj = datafit.value(r.view()) + penalty.value(beta.view());
         return (
             beta,
+            r,
             CdReport {
                 iter: 0,
                 converged: true,
@@ -124,11 +153,8 @@ pub fn cd_solve_subset(
             let new_bj = penalty.prox_coord(j, z, step);
             let delta = new_bj - beta[j];
             if delta != 0.0 {
-                // r += δ · X[:, j]
-                let col = design.columns(&[j]);
-                for i in 0..n {
-                    r[i] += delta * col[[i, 0]];
-                }
+                // r += δ · X[:, j] — zero-alloc via DesignMatrix::col_axpy.
+                design.col_axpy(j, delta, r.view_mut());
                 beta[j] = new_bj;
                 let abs_delta = delta.abs();
                 if abs_delta > max_delta {
@@ -167,7 +193,7 @@ pub fn cd_solve_subset(
         }
     }
 
-    (beta, report)
+    (beta, r, report)
 }
 
 /// Type-II Anderson extrapolation on a sequence of CD iterates.
@@ -337,7 +363,7 @@ mod tests {
         let penalty = Mcp::new(0.01, 1e6, 3);
         let beta_init = array![0.5, 1.0, -0.5];
         let features = vec![0, 2]; // hold β[1] fixed
-        let (beta_out, _) = cd_solve_subset(
+        let (beta_out, _, _) = cd_solve_subset(
             beta_init.clone(),
             &features,
             &design,
@@ -361,7 +387,7 @@ mod tests {
             acceleration: Some(5),
         };
         let (beta_full, _) = cd_solve(&design, &datafit, &penalty, &cfg);
-        let (beta_subset, _) = cd_solve_subset(
+        let (beta_subset, _, _) = cd_solve_subset(
             ndarray::Array1::<f64>::zeros(2),
             &[0, 1],
             &design,
@@ -455,7 +481,7 @@ mod tests {
         let datafit = LeastSquares::new(y);
         let penalty = Mcp::new(0.1, 3.0, 2);
         let beta_init = array![0.7, -0.3];
-        let (beta_out, report) = cd_solve_subset(
+        let (beta_out, _, report) = cd_solve_subset(
             beta_init.clone(),
             &[],
             &design,

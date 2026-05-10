@@ -183,6 +183,14 @@ impl DesignMatrix for MmapMatrix {
         }
         out
     }
+
+    fn col_axpy(&self, j: usize, alpha: f64, mut r: ndarray::ArrayViewMut1<f64>) {
+        // mmap columns are contiguous (column-major on-disk layout) → use
+        // a slice-backed view to drive scaled_add through BLAS.
+        let col = self.column_slice(j);
+        let col_view = ndarray::ArrayView1::from(col);
+        r.scaled_add(alpha, &col_view);
+    }
 }
 
 #[cfg(test)]

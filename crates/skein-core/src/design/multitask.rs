@@ -141,6 +141,16 @@ impl<D: DesignMatrix> DesignMatrix for MultiTaskDesign<D> {
         }
         out
     }
+
+    fn col_axpy(&self, j: usize, alpha: f64, mut r: ndarray::ArrayViewMut1<f64>) {
+        let k = self.n_tasks;
+        let n = self.base.n_samples();
+        let feature = j / k;
+        let task = j % k;
+        // Virtual column j touches only the task's row block.
+        self.base
+            .col_axpy(feature, alpha, r.slice_mut(s![task * n..(task + 1) * n]));
+    }
 }
 
 #[cfg(test)]

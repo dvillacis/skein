@@ -140,7 +140,6 @@ pub(crate) fn block_cd_solve_subset_parallel_with_cache(
     groups: &Groups,
     config: &CdConfig,
 ) -> (Array1<f64>, CdReport) {
-    let n = design.n_samples();
     let p = design.n_features();
     debug_assert_eq!(beta_init.len(), p, "beta_init length must equal n_features");
     debug_assert_eq!(
@@ -207,10 +206,8 @@ pub(crate) fn block_cd_solve_subset_parallel_with_cache(
             for (k, &j) in cols.iter().enumerate() {
                 let delta = new_block[k] - beta_snapshot[j];
                 if delta != 0.0 {
-                    let col = design.columns(&[j]);
-                    for i in 0..n {
-                        r[i] += delta * col[[i, 0]];
-                    }
+                    // r += δ · X[:, j] — zero-alloc via DesignMatrix::col_axpy.
+                    design.col_axpy(j, delta, r.view_mut());
                     beta[j] = new_block[k];
                     delta_norm_sq += delta * delta;
                 }

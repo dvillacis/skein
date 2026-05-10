@@ -21,7 +21,9 @@ load-bearing piece; everything after stacks on top of it.
 | M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) + **M5.x stability selection (MB bootstrap)** done; adaptive done in M6.x; debiased + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; **bridge `\|β\|^q` (LS, scalar LLA path) done**; **adaptive {Lasso, MCP, SCAD} (LS, two-stage pilot fit) done**; overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
-| M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches + comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
+| M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches moved to M9; comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
+| M9 — Performance & correctness benchmarks | ⏳ partial | M9.1 harness scaffolded (problem generators, driver, runner ABI, 6 runner stubs, one example scenario, end-to-end smoke verified on lasso/LS); first real lasso/LS numbers landed; M9.2–M9.5 pending. Supersedes the deferred M8.6 bullet. |
+| M10 — Performance improvements | ⏳ planned | profile + close the gaps M9 surfaces; first known target: 60× lasso/LS gap vs sklearn at n=10k, p=1k. Driven by bench findings, not speculative optimization. |
 
 Test count at this snapshot: **265 cargo + 279 pytest, all green.**
 
@@ -996,15 +998,269 @@ Ship-grade polish. Without this, none of the above gets adopted.
   can rely on (Sync+Send, prox convention, residual sign,
   col_sq_norms O(1)) and the minor-version bump policy while
   pre-1.0.
-- **Comparison / timing benchmarks** (deferred): criterion +
-  asv against glmnet/ncvreg/grpreg. The R numerical regression
-  suite already covers correctness; timing comparisons are
-  marketing material, lower priority than the algorithmic
-  milestones still ahead.
+- **Comparison / timing benchmarks** — **superseded by M9** below.
+  The original framing of this bullet ("marketing material, lower
+  priority") understated the role: with M3–M7 substantially landed,
+  the absence of competitive evidence is now the binding constraint
+  on adoption, so it gets its own milestone.
 - **Comprehensive subclass docstrings** (deferred): the 72
   estimator subclasses keep their existing one-line docstrings;
   base-class docstrings carry the substance. A complete pass is
   worthwhile but not blocking.
+
+---
+
+## M9 — Performance & correctness benchmarks
+
+The pitch above ("beat both on throughput") needs evidence. Today the
+only timing data is the internal `block_cd` criterion microbench
+(serial-vs-parallel block CD, screening modes — no cross-package
+comparison), and the only correctness data is the M8.4 R regression
+suite at `n=200, p=20–30` (small enough that everyone converges; tells
+us nothing about behavior at scale). M9 closes both gaps.
+
+Scope: reproducible local-only benchmark suite producing committed
+JSON/PNG snapshots. Out of scope: CI integration, regression gating,
+GPU benches.
+
+### ⏳ M9.1 — Bench harness & problem generators (partial)
+
+- ✅ New top-level `benches/` directory created (root-level, separate
+  from the existing `crates/skein-core/benches/` which stays for
+  criterion microbenches). Layout:
+
+  ```
+  benches/
+    problems.py          shared synthetic generators (LS, logistic,
+                         Poisson, Cox, group-structured), seeded
+    runners/
+      skein_runner.py    fits via skein estimators
+      skglm_runner.py
+      sklearn_runner.py
+      celer_runner.py
+      pyglmnet_runner.py
+      r_runner.R         glmnet / ncvreg / grpreg via Rscript
+    scenarios/           one driver per (penalty × datafit) combo
+    results/             committed JSON snapshots
+    correctness/         cross-package agreement matrices
+    README.md            run instructions, methodology, host notes
+  ```
+
+- ✅ Problem generators (`benches/problems.py`) reuse the conventions
+  from `tests/fixtures/generate.R` (gaussian X, sparse true β, additive
+  noise) so M9.4 fixtures can share generators with the R regression
+  suite. Sizes: small=`(1k, 100)`, medium=`(10k, 1k)`,
+  large=`(100k, 10k)`. Families: gaussian (lasso + group), logistic,
+  poisson.
+- ✅ Result schema (`benches/runners/__init__.py` `RunResult` +
+  `benches/run.py`): `{scenario, package, version, n, p, n_groups,
+  lambda_grid_len, fit_time_s, n_iter, final_obj, active_set_size,
+  host_id, timestamp, extra}`. One JSON file per scenario; driver
+  writes append-style so partial runs are recoverable.
+- ✅ Driver `benches/run.py` takes `--scenarios`, `--packages`,
+  `--sizes` and dispatches. Missing comparator imports skip with a
+  warning rather than failing (the suite is intentionally tolerant).
+  R runner shells out via `Rscript` against a tempfile so R and Python
+  see byte-identical inputs.
+- ✅ Runner stubs for all six comparators wired against the common
+  ABI: `skein_runner.py`, `sklearn_runner.py`, `skglm_runner.py`,
+  `celer_runner.py`, `pyglmnet_runner.py`, `r_runner.R` (glmnet +
+  ncvreg + grpreg dispatch inside the R script).
+- ✅ End-to-end smoke verified: `python benches/run.py --scenarios
+  lasso_ls --packages sklearn skein --sizes small` fits both, writes
+  the JSON snapshot.
+- Pending: validate each comparator runner against a live install
+  (skglm, celer, pyglmnet, R toolchain), and tune timing methodology
+  (warm-up runs, repeated trials, per-run dispersion reporting).
+
+### M9.2 — Microbenchmark expansion (criterion)
+
+Extend `crates/skein-core/benches/block_cd.rs` with the scenarios its
+README flags as "future bench":
+
+- LLA outer iteration counts vs CD-only on a SCAD/MCP nonconvex
+  problem.
+- Parallel block-CD speedup at realistic sizes (`n_groups ≥ 8k`,
+  sparse `X` via `SparseCSC`) — validates the 4–8× target from M2.5.
+- Path solve scaling vs `n_lambdas` and vs working-set size.
+
+Update the snapshot table in `crates/skein-core/benches/README.md`.
+
+### M9.3 — Cross-package speed benchmarks
+
+For each (scenario, package) pair, measure wall-clock time-to-fit on a
+shared λ-grid with a uniform convergence tolerance documented in the
+methodology page.
+
+| Penalty / datafit | Comparators |
+|---|---|
+| Lasso LS | sklearn, skglm, celer, glmnet |
+| ElasticNet LS | sklearn, skglm, glmnet |
+| MCP / SCAD LS | ncvreg |
+| Group lasso LS | skglm (partial), grpreg |
+| Group MCP / SCAD LS | grpreg |
+| Sparse-group MCP/SCAD LS | (skein only — absolute throughput showcase) |
+| Logistic lasso | sklearn, skglm, celer, glmnet, pyglmnet |
+| Logistic MCP/SCAD | ncvreg |
+| Poisson lasso | glmnet, pyglmnet |
+| Cox lasso | glmnet |
+
+Three problem sizes per scenario (small / medium / large from M9.1's
+grid). Output: per-scenario bar charts (matplotlib, committed PNG +
+underlying JSON) and a markdown summary at `docs/benchmarks/speed.md`.
+
+Fairness note: skein is reported with-screening *and* without-screening
+separately, since several comparators have no equivalent (it would
+otherwise be apples-to-oranges).
+
+**Runner-fairness bug to fix before publishing M9.3 numbers**: the
+current `skglm` and `celer` runners loop `Lasso(alpha=λ).fit()` over
+the grid, while sklearn (`lasso_path`) and skein use native warm-started
+path solvers. Both packages do support warm-started paths; the runners
+need to be rewritten to use them. Until that's fixed, skglm/celer
+numbers in `benches/results/lasso_ls.json` are not informative.
+
+**Problem-regime coverage**: the first lasso/LS run hit the saturated
+regime (active = 791 / 1000 features at the smallest λ on medium),
+which is *not* lasso's intended use case and disfavors libraries with
+screening. Add sparse-regime variants per scenario (e.g.
+`k_active ≈ √p`, `lambda_min_ratio = 0.05`) so the bench reflects
+realistic sparse problems.
+
+### M9.4 — Correctness at scale
+
+The M8.4 fixtures top out at `p=30`. Add a parallel suite to
+`tests/fixtures/generate.R` for `n=1000, p=500` and `n=5000, p=2000`
+covering the same penalties, with looser tolerances per scenario (LLA
+local-min divergence on nonconvex problems will widen the band).
+
+For Python comparators (skglm, sklearn, celer, pyglmnet) where there's
+no fixture infrastructure, add `benches/correctness/` cross-checks that
+run *at bench time* (not in pytest) and assert active-set + sign
+agreement. This is intentionally separate from `tests/` so optional
+comparator deps are not required to run pytest, and so cross-package
+agreement at scale is treated as a benchmark output, not a correctness
+gate on skein.
+
+### M9.5 — Docs
+
+New `docs/benchmarks/` section:
+
+- `speed.md` — comparison tables and charts from M9.3.
+- `correctness.md` — agreement matrix from M9.4.
+- `methodology.md` — host hardware, package versions, λ-grid choices,
+  convergence tolerances, fairness notes.
+
+Wire into `mkdocs.yml`; add a "Performance" section to `README.md`
+linking out.
+
+### Out of scope (deferred past M9)
+
+- Continuous regression gating in CI (R toolchain + 5 Python comparator
+  deps in CI is too noisy and slow for the value).
+- GPU / multi-precision throughput comparisons (lives wherever the GPU
+  backend lands in M4's "GPU pending").
+- Benchmarks of multi-response GLMs (depends on M7.3 landing first).
+
+---
+
+## M10 — Performance improvements
+
+The first M9 lasso/LS run (n=10k, p=1k, 100-λ path, dense X) showed
+skein at **7.6 s** vs sklearn at **0.12 s** — a ~60× gap. That gap is
+the binding constraint on adoption: the elevator pitch ("beat both on
+throughput") is already not true on the most basic scenario. M10 is the
+work to close it. M10 is reactive to M9 — every sub-task starts from a
+profile, not from speculation.
+
+Caveats on the headline number that M10 needs to keep separate from
+the optimization work itself:
+
+- The medium problem hit a near-saturated regime (active ≈ 791 of 1000
+  features at the smallest λ). Sparser problems are where lasso lives,
+  and where skein's screening is meant to pay off; expect the gap to
+  shrink there. **Re-run on a sparse-regime problem** before assuming
+  every 60× shows up.
+- skglm/celer were on per-λ fits in that run, not their warm-started
+  paths — so don't overweight their numbers as "skglm beats skein."
+  After M9.3 fixes the runners, the comparison becomes meaningful and
+  may move skein up the rankings.
+
+### M10.1 — Profile the medium lasso/LS path
+
+- Run `cargo flamegraph --bench block_cd` on a path-equivalent
+  microbench (extend M9.2's path-scaling scenario) at n=10k, p=1k.
+  Identify the top three hot frames.
+- Cross-check from Python: `py-spy record -- python -c "..."` driving
+  `ElasticNetPathRegressor` on the same problem. Confirms whether the
+  PyO3 boundary is contributing.
+- Deliverable: a one-page note in `docs/perf/lasso_ls_profile.md`
+  with the flamegraph + top-3 cost centers + concrete remediation
+  candidates. No code changes yet — establish the baseline.
+
+### M10.2 — Specific hypotheses to confirm or rule out
+
+Each is a hypothesis surfaced by the smoke run and the codebase shape.
+Profile (M10.1) decides which actually matter.
+
+- **LLA wrapper overhead on convex penalties.** The lasso path runs
+  through the same LLA-outer scaffold as nonconvex penalties; on a
+  convex penalty the outer loop is a no-op but may still re-allocate /
+  re-validate per λ. Confirm by toggling and timing.
+- **Per-λ Anderson acceleration restart cost.** Anderson is on by
+  default (`acceleration: Some(5)` from M1); on lasso paths the
+  restart-per-λ may be net negative. Bench `acceleration=None` vs
+  default.
+- **Strong-rule overhead in the saturated regime.** When the working
+  set ≈ all features, screening is pure overhead. Bench
+  `screening="off"` for comparison; consider an automatic fallback
+  when active-set fraction crosses a threshold.
+- **Standardize-on-the-fly cost.** sklearn's `lasso_path` skips the
+  standardization layer; skein's `Standardized<Dense>` is lazy but
+  introduces dispatch per `col_dot`. Bench with raw `DenseMatrix`
+  vs the standardized wrapper at the Rust level.
+- **PyO3 marshalling.** Each `solve_path_*` call copies arrays in/out;
+  on a warm path with 100 λ this might compound. Bench the same
+  problem from a `cargo bench` harness (no PyO3) and compare to the
+  Python timing.
+
+### M10.3 — First wave of fixes
+
+Driven by M10.1's findings, not in advance. Expected candidate fixes
+(updated as the profile lands):
+
+- Skip the LLA outer entirely when the inner penalty is convex
+  (recognized at `Penalty` trait level).
+- Auto-disable Anderson on convex paths after one λ where it didn't
+  pay off.
+- Skip strong-rule passes when the previous λ left the working set
+  >`τ`% of features active.
+- Fast path in `cd_solve` for the "all features active, no screening"
+  case that avoids the per-coord working-set bookkeeping.
+
+Each fix lands as its own commit with a before/after timing on the
+M9.1 bench harness, so we can attribute wins to specific changes.
+
+### M10.4 — Verify against the rerun bench
+
+Re-run `python benches/run.py --scenarios lasso_ls --packages all
+--sizes small,medium,large` after M10.3. Target: within 2× of sklearn
+at small and medium on the saturated regime, and **faster than sklearn
+on the sparse regime** where screening pays off.
+
+If we hit those targets on lasso/LS, repeat the cycle for MCP/SCAD,
+group lasso, and group MCP — those are skein's actual differentiators
+and the per-penalty profile will be different.
+
+### Out of scope for M10
+
+- GPU acceleration (separate workstream tied to M4's "GPU pending").
+- Algorithmic redesign (e.g. dual extrapolation à la celer). Stay
+  inside the existing CD/LLA scaffold; only consider new algorithms
+  if the profile says we're at the floor of the current one.
+- Optimizing the GLM datafits before lasso/LS is competitive — the
+  scalar lasso path is the load-bearing scenario; everything else
+  inherits from it.
 
 ---
 

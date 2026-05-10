@@ -208,9 +208,13 @@ where
 
         let (final_residual, last_report): (Array1<f64>, CdReport) = loop {
             passes += 1;
-            let (new_beta, report) = cd_solve_subset(warm, &ws, design, datafit, &*pen, &config.cd);
+            // `cd_solve_subset` returns the residual it already maintains
+            // via incremental axpy updates inside the inner loop — no need
+            // to recompute `r = Xβ − y` from scratch here (that was a
+            // wasted O(np) matvec per λ in earlier versions).
+            let (new_beta, r, report) =
+                cd_solve_subset(warm, &ws, design, datafit, &*pen, &config.cd);
             warm = new_beta;
-            let r = datafit.init_residual(design, warm.view());
 
             // Without screening, the WS is already the full set; one pass.
             if matches!(config.screening, Screening::Off) {
@@ -273,6 +277,11 @@ fn strong_rule_screen(
 ) -> Vec<usize> {
     let p = design.n_features();
     let threshold = 2.0 * lambda_k - lambda_prev;
+    // One BLAS gemv (`Xᵀ r / n` for LS) instead of `p` per-coord
+    // `coord_grad(j, r)` calls. Same numerical result; orders of
+    // magnitude faster on dense backends because gemv is fully
+    // BLAS-vectorised over the whole matrix.
+    let grad = datafit.full_grad(design, residual);
     let mut ws = Vec::new();
     for j in 0..p {
         let w = weights[j];
@@ -280,8 +289,7 @@ fn strong_rule_screen(
             ws.push(j);
             continue;
         }
-        let g = datafit.coord_grad(design, j, residual).abs();
-        if g >= threshold * w {
+        if grad[j].abs() >= threshold * w {
             ws.push(j);
         }
     }
@@ -377,6 +385,10 @@ fn find_kkt_violators(
     tol: f64,
 ) -> Vec<usize> {
     let p = design.n_features();
+    // One BLAS gemv instead of `p − |ws|` per-coord `coord_grad` calls.
+    // The walk over `in_ws` to skip already-included features is `O(p)`
+    // either way; gemv just makes the gradient itself cheap.
+    let grad = datafit.full_grad(design, residual);
     let mut violators = Vec::new();
     let mut idx = 0usize;
     for j in 0..p {
@@ -385,9 +397,8 @@ fn find_kkt_violators(
             continue;
         }
         let w = weights[j];
-        let g = datafit.coord_grad(design, j, residual).abs();
         let bound = if w <= 0.0 { tol } else { lambda * w + tol };
-        if g > bound {
+        if grad[j].abs() > bound {
             violators.push(j);
         }
     }

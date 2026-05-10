@@ -22,7 +22,7 @@ pub use multitask::MultiTaskDesign;
 pub use sparse_csc::SparseCSC;
 pub use standardized::Standardized;
 
-use ndarray::{Array1, Array2, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, ArrayViewMut1};
 
 pub trait DesignMatrix: Sync + Send {
     fn n_samples(&self) -> usize;
@@ -43,4 +43,21 @@ pub trait DesignMatrix: Sync + Send {
     /// Block of columns indexed by `cols` returned as an owned `(n, |cols|)`
     /// array. Used by group-block coordinate descent.
     fn columns(&self, cols: &[usize]) -> Array2<f64>;
+
+    /// `r += alpha * X[:, j]` in place. Hot path for coordinate descent's
+    /// residual update.
+    ///
+    /// The default implementation materialises the column via
+    /// `columns(&[j])` and is correct for any backend, but it allocates a
+    /// fresh `(n, 1)` `Array2` per call. Backends should override with a
+    /// zero-alloc impl — the inner CD loop hits this for every nonzero
+    /// coordinate update.
+    ///
+    /// `r` is taken as an `ArrayViewMut1` so backends can dispatch to
+    /// ndarray's stride-aware `scaled_add` (which routes to BLAS `daxpy`
+    /// on contiguous data and falls back to a vectorised loop otherwise).
+    fn col_axpy(&self, j: usize, alpha: f64, mut r: ArrayViewMut1<f64>) {
+        let col = self.columns(&[j]);
+        r.scaled_add(alpha, &col.column(0));
+    }
 }

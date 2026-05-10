@@ -18,7 +18,7 @@
 //! descent's per-iteration Lipschitz lookup stays O(1).
 
 use super::DesignMatrix;
-use ndarray::{Array1, Array2, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, ArrayViewMut1};
 
 pub struct SparseCSC {
     n_samples: usize,
@@ -181,6 +181,14 @@ impl DesignMatrix for SparseCSC {
             }
         }
         out
+    }
+
+    fn col_axpy(&self, j: usize, alpha: f64, mut r: ArrayViewMut1<f64>) {
+        let start = self.indptr[j];
+        let end = self.indptr[j + 1];
+        for k in start..end {
+            r[self.indices[k]] += alpha * self.data[k];
+        }
     }
 }
 

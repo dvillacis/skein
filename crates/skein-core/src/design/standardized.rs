@@ -29,7 +29,7 @@
 //! augmented intercept column).
 
 use super::DesignMatrix;
-use ndarray::{Array1, Array2, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, ArrayViewMut1};
 
 pub struct Standardized<D: DesignMatrix> {
     base: D,
@@ -114,6 +114,11 @@ impl<D: DesignMatrix> DesignMatrix for Standardized<D> {
             }
         }
         out
+    }
+
+    fn col_axpy(&self, j: usize, alpha: f64, r: ArrayViewMut1<f64>) {
+        // X̃[:, j] = X[:, j] / s_j ⇒ r += (alpha / s_j) · X[:, j].
+        self.base.col_axpy(j, alpha / self.x_scale[j], r);
     }
 }
 

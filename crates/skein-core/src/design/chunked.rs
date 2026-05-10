@@ -157,6 +157,14 @@ impl<C: DesignMatrix> DesignMatrix for Chunked<C> {
         }
         out
     }
+
+    fn col_axpy(&self, j: usize, alpha: f64, mut r: ndarray::ArrayViewMut1<f64>) {
+        for (k, c) in self.chunks.iter().enumerate() {
+            let lo = self.row_offsets[k];
+            let hi = self.row_offsets[k + 1];
+            c.col_axpy(j, alpha, r.slice_mut(ndarray::s![lo..hi]));
+        }
+    }
 }
 
 #[cfg(test)]

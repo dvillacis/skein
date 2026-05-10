@@ -12,7 +12,7 @@
 //! `Standardized` with `s_p = 1.0`).
 
 use super::DesignMatrix;
-use ndarray::{Array1, Array2, ArrayView1};
+use ndarray::{Array1, Array2, ArrayView1, ArrayViewMut1};
 
 pub struct Augmented<D: DesignMatrix> {
     base: D,
@@ -104,6 +104,16 @@ impl<D: DesignMatrix> DesignMatrix for Augmented<D> {
             }
         }
         out
+    }
+
+    fn col_axpy(&self, j: usize, alpha: f64, mut r: ArrayViewMut1<f64>) {
+        let p = self.base.n_features();
+        if j < p {
+            self.base.col_axpy(j, alpha, r);
+        } else {
+            // Intercept column = all-ones ⇒ r += alpha.
+            r += alpha;
+        }
     }
 }
 
