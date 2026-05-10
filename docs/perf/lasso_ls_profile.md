@@ -132,3 +132,52 @@ expected impact and the most predictable cost. If it lands skein in
 glmnet's neighbourhood, the M9 elevator-pitch claim is at least
 partially defensible while #2's harder algorithmic work proceeds in
 parallel.
+
+## Postscript — inner active-set CD (#2) tried, did not pay off
+
+Implemented `cd_solve_subset` with Friedman-style two-phase cycling:
+
+- **Phase 1**: cycle on an inner active set `A ⊆ features` (the
+  currently-non-zero coordinates) until `max_delta < tol`.
+- **Phase 2**: one verification sweep over `features \ A`. Any
+  coordinate whose prox produces a non-zero update joins `A` and we
+  re-enter Phase 1. Convergence is declared when a Phase 2 sweep
+  finds no growth.
+- Cold start (β = 0) does one full sweep first to populate `A`, then
+  enters the loop.
+
+Used a length-`p` boolean mask for `O(1)` membership during Phase 2.
+All 265 cargo tests passed.
+
+**Result on the medium lasso/LS bench**:
+
+| variant | medium fit |
+|---|---|
+| baseline (post-M10.3, no inner active-set) | 3.2 s |
+| active-set, history-clear on Phase 2 grow | 3.5 s (+9%) |
+| active-set, no history-clear | 4.7 s (+47%) |
+
+Why it didn't help:
+
+- The medium scenario reaches `787 / 1000` features active at the
+  smallest λ. Late-path λs are saturated — `A ≈ features`, so
+  Phase 1's cycle is the same size as plain cycling, and the per-λ
+  Phase 2 verification sweep is pure overhead.
+- At the cold-start λ where active-set CD *could* help most (`A` of
+  size 1–3 from 1000), the absolute cost is small enough that the
+  savings don't compensate later regressions.
+- Anderson interaction: clearing history on Phase 2 grow was needed
+  to prevent stale snapshots from generating bad extrapolations
+  (the obj-decrease safeguard caught them, but the rejected attempts
+  cost an extra `init_residual` matvec each — that's where the
+  +47% goes when we *don't* clear). With clearing, Anderson never
+  accumulates the 6 iterates it needs to fire on this saturated
+  problem, losing speedup it had under plain cycling.
+
+Reverted in commit *(see git log)*. The negative result narrows the
+remaining options: BLAS (#1) is the only path that doesn't require a
+deeper algorithmic redesign (sklearn's tight-loop micro-optimisations,
+celer's dual extrapolation, or a Gram-cached CD). On a sparser-regime
+benchmark (`k_active ≈ √p`, `lambda_min_ratio = 0.05`, well short of
+saturation) inner active-set CD might still pay off; revisit when
+that scenario lands in M9.3.
