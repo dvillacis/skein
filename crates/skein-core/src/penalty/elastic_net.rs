@@ -94,6 +94,24 @@ impl Penalty for ElasticNet {
     fn weights(&self) -> ArrayView1<'_, f64> {
         self.weights_l1.view()
     }
+
+    fn dual_correction(&self, beta: ArrayView1<'_, f64>) -> f64 {
+        // celer's `dual_enet`: subtract `α(1−l1_ratio)/2 · Σ w_j · β_j²`
+        // (their α / l1_ratio map to skein's λ / α). For α = 1 the
+        // ridge term vanishes — pure lasso, no correction needed.
+        if self.alpha >= 1.0 {
+            return 0.0;
+        }
+        let factor = 0.5 * self.lambda * (1.0 - self.alpha);
+        let mut s = 0.0_f64;
+        for (j, &b) in beta.iter().enumerate() {
+            let w = self.weights[j];
+            if w > 0.0 && w.is_finite() {
+                s += w * b * b;
+            }
+        }
+        factor * s
+    }
 }
 
 #[cfg(test)]

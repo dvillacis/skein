@@ -82,4 +82,36 @@ pub trait Datafit: Sync + Send {
 
     /// Per-sample weights (length = n_samples). `None` = uniform 1.
     fn sample_weights(&self) -> Option<ArrayView1<'_, f64>>;
+
+    /// Lasso-form dual objective at `θ_scaled = scale · θ_naive`, where
+    /// `θ_naive` is the datafit's natural unscaled dual point (`-r/n`
+    /// for LS). The "lasso form" name reflects that the formula
+    /// assumes the constraint set has the shape `{θ : ‖Xᵀ θ‖_∞ ≤ λ · w_j}`
+    /// — i.e., an L1-ball dual. For LS it works out to
+    ///
+    /// ```text
+    ///     D(θ_scaled) = ‖r‖²/n · scale · (1 − scale/2) − scale · βᵀ grad
+    /// ```
+    ///
+    /// (after eliminating `y` via `‖y‖² − ‖Xβ‖² = ‖r‖² − 2 nβᵀ grad`).
+    /// `grad` must be the loss gradient `Xᵀ r / n`, supplied by the
+    /// caller to avoid a duplicate `rmatvec`.
+    ///
+    /// Returns `None` for datafits that don't have a closed-form
+    /// lasso-style dual (logistic, Poisson, Cox via prox-Newton):
+    /// the path solver then falls back to the prox-gradient
+    /// stationarity criterion for outer convergence and skips dual
+    /// extrapolation. LS overrides; weighted-LS (`sample_weights`
+    /// set) currently also returns `None` because the formula needs
+    /// adjustment for the diagonal weight.
+    fn lasso_dual_obj(
+        &self,
+        _design: &dyn DesignMatrix,
+        _beta: ArrayView1<'_, f64>,
+        _residual: ArrayView1<'_, f64>,
+        _grad: ArrayView1<'_, f64>,
+        _scale: f64,
+    ) -> Option<f64> {
+        None
+    }
 }

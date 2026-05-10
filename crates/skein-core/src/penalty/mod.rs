@@ -33,8 +33,30 @@ pub trait Penalty: Sync + Send {
     /// Scalar prox at coordinate `j`.
     fn prox_coord(&self, j: usize, z: f64, step: f64) -> f64;
 
-    /// Per-feature penalty multipliers (length = n_features).
+    /// Per-feature L1-effective penalty multipliers (length = n_features).
+    /// These are the multipliers on the L1 part of the penalty — i.e.,
+    /// the threshold values that the gradient must respect at β = 0
+    /// (`|grad_j| ≤ λ · w_j` for stationarity). For pure lasso /
+    /// MCP / SCAD this is the user-supplied per-feature weight; for
+    /// elastic net it's `α · w_raw` since the L2 part contributes 0
+    /// to the active-set boundary at β = 0.
     fn weights(&self) -> ArrayView1<'_, f64>;
+
+    /// Smooth-penalty correction subtracted from the LS-form dual obj.
+    ///
+    /// ```text
+    ///     gap = primal − (D_datafit(scaled_θ) − dual_correction(β))
+    /// ```
+    ///
+    /// For penalties that are pure-L1 over their support
+    /// (lasso, and the LLA-linearised surrogates of MCP / SCAD that
+    /// the path solver actually solves at each LLA step), the
+    /// correction is `0`. Elastic net at α < 1 returns
+    /// `½ · λ · (1−α) · Σ w_raw_j · β_j²` — the smooth-quadratic
+    /// part of the primal that the L1 dual can't account for.
+    fn dual_correction(&self, _beta: ArrayView1<'_, f64>) -> f64 {
+        0.0
+    }
 }
 
 pub trait GroupPenalty: Sync + Send {

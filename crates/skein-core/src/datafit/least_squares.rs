@@ -111,4 +111,23 @@ impl Datafit for LeastSquares {
     fn sample_weights(&self) -> Option<ArrayView1<'_, f64>> {
         self.sample_weights.as_ref().map(|w| w.view())
     }
+
+    fn lasso_dual_obj(
+        &self,
+        design: &dyn DesignMatrix,
+        beta: ArrayView1<'_, f64>,
+        residual: ArrayView1<'_, f64>,
+        grad: ArrayView1<'_, f64>,
+        scale: f64,
+    ) -> Option<f64> {
+        // Sample-weighted LS would need the formula adjusted for the
+        // diagonal weight; skip until that's worked out.
+        if self.sample_weights.is_some() {
+            return None;
+        }
+        let n = design.n_samples() as f64;
+        let r_sq: f64 = residual.dot(&residual);
+        let beta_dot_grad: f64 = beta.dot(&grad);
+        Some((r_sq / n) * scale * (1.0 - 0.5 * scale) - scale * beta_dot_grad)
+    }
 }

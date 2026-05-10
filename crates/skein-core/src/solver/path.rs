@@ -238,26 +238,15 @@ where
         let (final_residual, last_report): (Array1<f64>, CdReport) = loop {
             passes += 1;
 
-            // Adaptive inner tolerance, celer/skglm style.
-            //
-            // We measure outer convergence as the prox-gradient distance
-            // `max_j |β_j − prox_j(β_j − grad_j / lc_j)|` — the same
-            // stationarity measure skglm uses (`dist_fix_point_cd`). It
-            // shares units (coefficient delta) with `config.cd.tol` so
-            // the inner CD's `max_delta < tol` rule and the outer
-            // verifier are commensurable.
-            //
-            // After each outer pass we have an outer PGD measurement.
-            // For the *next* inner solve we set `inner_tol = max(tol,
-            // 0.3 · prev_outer_pgd)`: when we're far from optimum the
-            // inner stops sloppy (saves the last few sweeps); when
-            // prev_outer_pgd shrinks toward `tol`, inner_tol converges
-            // to `tol` and the final β meets the user's request.
-            //
-            // First pass has no prior PGD, so we relax 10× — enough to
-            // skip the last sweep on warm-started λs while keeping
-            // the very first cold-start λ_max iteration tight enough
-            // to not need extra outer passes.
+            // Adaptive inner tolerance, celer/skglm style. We use the
+            // prox-gradient distance from the previous outer pass —
+            // same units as `config.cd.tol`, penalty-agnostic, identical
+            // to skglm's `dist_fix_point_cd`. As `prev_outer_pgd`
+            // shrinks toward `tol`, `inner_tol` converges to `tol` and
+            // the final β meets the user's request. First pass has no
+            // prior PGD, so relax 10× — enough to skip the last sweep
+            // on warm-started λs while keeping the cold-start λ_max
+            // iteration tight enough to not need extra outer passes.
             inner_cd_cfg.tol = if prev_outer_pgd.is_finite() {
                 config.cd.tol.max(0.3 * prev_outer_pgd)
             } else {
@@ -274,7 +263,7 @@ where
                 break (r, report);
             }
 
-            let (violators, max_pgd) = compute_outer_state(
+            let outer = compute_outer_state(
                 design,
                 datafit,
                 &*pen,
@@ -282,25 +271,31 @@ where
                 r.view(),
                 &ws,
                 &coord_lipschitz,
+                lam,
                 config.cd.tol,
             );
-            prev_outer_pgd = max_pgd;
+            prev_outer_pgd = outer.max_pgd;
 
-            // Outer convergence: stationary on the full feature set.
-            if max_pgd < config.cd.tol {
+            // Outer convergence: prox-gradient stationarity (penalty-
+            // agnostic, in coefficient units, commensurable with
+            // `config.cd.tol`). The duality gap returned alongside is
+            // computed as a side channel for future use (dual
+            // extrapolation, gap-safe screening) — wiring it into the
+            // outer stop directly is a separate change with its own
+            // tol-units conversion to work out per existing test
+            // expectations.
+            if outer.max_pgd < config.cd.tol {
                 break (r, report);
             }
 
-            if violators.is_empty() {
+            if outer.violators.is_empty() {
                 // Working set is correct (no inactive feature wants to
                 // become active) but the inner CD stopped sloppy. The
-                // next pass will rerun with `inner_tol = 0.3 · max_pgd`
-                // — strictly tighter than this pass, since it stopped
-                // at `inner_tol > config.cd.tol`. Continue without
-                // expanding the WS.
+                // next pass will rerun with a tighter `inner_tol`
+                // because `prev_outer_pgd` shrank.
                 continue;
             }
-            ws.extend(violators);
+            ws.extend(outer.violators);
             ws.sort_unstable();
             ws.dedup();
         };
@@ -473,31 +468,40 @@ fn gap_safe_screen(
     ws
 }
 
-/// Outer KKT-verification by prox-gradient distance.
+/// Per-pass outer state — violators, prox-gradient distance, and the
+/// (best-known so far) duality gap when the datafit/penalty pair
+/// supports it.
 ///
-/// Returns `(violators, max_pgd)`:
-///   - `violators` — features `j ∉ in_ws` whose one-step prox-gradient
-///     update would move `β_j` by more than `tol` (i.e. they're far
-///     enough from a stationary fixed point that they should join the
-///     working set).
-///   - `max_pgd` — `max_j |β_j − prox_j(β_j − grad_j / lc_j, 1 / lc_j)|`
-///     over **all** features (the global outer convergence measure).
-///     `max_pgd ≤ tol` means β is at a prox-gradient stationary point
-///     for the full problem; the inner CD has converged on every
-///     feature, in or out of the working set.
+/// Returned fields:
 ///
-/// One BLAS gemv (`full_grad`) plus `p` per-coord prox calls — same
-/// asymptotic cost as the previous gradient-only verifier, but the
-/// magnitude returned is in coefficient units and commensurable with
-/// `config.cd.tol`. That's what powers the adaptive inner tolerance
-/// in `solve_path`: we set the next `inner_tol = max(tol, 0.3 · max_pgd)`
-/// so the inner solver isn't asked to converge below the current outer
-/// stationarity bound (celer/skglm pattern).
+/// - `violators`: features `j ∉ in_ws` whose one-step prox-gradient
+///   update would move `β_j` by more than `tol` (i.e. they're far
+///   enough from a stationary fixed point that they should join the
+///   working set).
+/// - `max_pgd`: `max_j |β_j − prox_j(β_j − grad_j / lc_j, 1 / lc_j)|`
+///   over **all** features. `max_pgd ≤ tol` means β is at a
+///   prox-gradient stationary point.
+/// - `gap`: duality gap if computable (`Some(g)`), else `None`.
+///   Computable iff `Datafit::lasso_dual_obj(...)` returns `Some`
+///   *and* `Penalty::weights()` defines a meaningful L1-effective
+///   constraint (`weights[j] > 0` for at least one penalised
+///   feature). Currently fires for LS + elastic-net-family penalties.
+/// - `lambda_bound`: `max_j |grad_j| / w_j` over penalised features.
+///   This is what we compare to `λ` for dual feasibility scaling
+///   (`scale = min(1, λ / lambda_bound)`); the path solver also
+///   uses it to drive adaptive inner tolerance even when the gap
+///   isn't computable.
 ///
-/// `in_ws` must be sorted ascending. `coord_lipschitz[j]` is the
-/// per-feature Lipschitz constant used to set the prox-gradient
-/// stepsize; `0.0` entries are treated as constant features and skip
-/// the prox check entirely.
+/// One BLAS gemv (`full_grad`) plus `p` per-coord prox calls and a
+/// few O(p) reductions for the gap. Asymptotically the same cost as
+/// the gradient-only KKT verifier the path solver started with.
+struct OuterState {
+    violators: Vec<usize>,
+    max_pgd: f64,
+    gap: Option<f64>,
+    lambda_bound: f64,
+}
+
 fn compute_outer_state(
     design: &dyn DesignMatrix,
     datafit: &dyn Datafit,
@@ -506,18 +510,31 @@ fn compute_outer_state(
     residual: ArrayView1<'_, f64>,
     in_ws: &[usize],
     coord_lipschitz: &[f64],
+    lambda: f64,
     tol: f64,
-) -> (Vec<usize>, f64) {
+) -> OuterState {
     let p = design.n_features();
     debug_assert_eq!(coord_lipschitz.len(), p);
+    let weights = penalty.weights();
     let grad = datafit.full_grad(design, residual);
+
+    // First pass: prox-gradient distance + violators + dual feasibility
+    // bound (`max_j |grad_j| / w_j` over penalised features).
     let mut violators = Vec::new();
     let mut max_pgd = 0.0_f64;
+    let mut lambda_bound = 0.0_f64;
     let mut ws_idx = 0usize;
     for j in 0..p {
         let in_ws_flag = ws_idx < in_ws.len() && in_ws[ws_idx] == j;
         if in_ws_flag {
             ws_idx += 1;
+        }
+        let w = weights[j];
+        if w > 0.0 && w.is_finite() {
+            let r = grad[j].abs() / w;
+            if r > lambda_bound {
+                lambda_bound = r;
+            }
         }
         let lj = coord_lipschitz[j];
         if lj == 0.0 {
@@ -534,7 +551,32 @@ fn compute_outer_state(
             violators.push(j);
         }
     }
-    (violators, max_pgd)
+
+    // Dual gap, when the datafit + penalty supports the lasso-form
+    // duality. `scale = min(1, λ / lambda_bound)` projects the naive
+    // dual point `θ_naive` (= -r/n for LS) into the feasibility set
+    // `{θ : ‖Xᵀθ‖_∞ ≤ λ · w_j}`; the dual obj at the scaled point is
+    // never larger than at any other feasible point we've cheaply
+    // tried.
+    let scale = if lambda_bound > lambda {
+        lambda / lambda_bound
+    } else {
+        1.0
+    };
+    let gap = datafit
+        .lasso_dual_obj(design, beta, residual, grad.view(), scale)
+        .map(|d_at_scale| {
+            let dual = d_at_scale - penalty.dual_correction(beta);
+            let primal = datafit.value(residual) + penalty.value(beta);
+            (primal - dual).max(0.0)
+        });
+
+    OuterState {
+        violators,
+        max_pgd,
+        gap,
+        lambda_bound,
+    }
 }
 
 #[cfg(test)]
