@@ -198,6 +198,7 @@ where
             acceleration,
         },
         screening: parse_screening(screening)?,
+        p0: 10,
     };
 
     let design = DenseMatrix::new(xs);
@@ -4282,6 +4283,7 @@ where
             acceleration,
         },
         screening: parse_screening(screening)?,
+        p0: 10,
     };
 
     let datafit = LeastSquares::new(y_arr);
@@ -9003,6 +9005,7 @@ where
             acceleration,
         },
         screening: parse_screening(screening)?,
+        p0: 10,
     };
     let datafit = LeastSquares::new(y_arr);
     let make_pen = move |lam: f64| -> Box<dyn Penalty> {

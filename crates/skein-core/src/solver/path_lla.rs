@@ -211,6 +211,7 @@ mod tests {
             lambdas: Some(report_lla.lambdas.clone()),
             cd: cd_cfg.clone(),
             screening: Screening::Off,
+            p0: 10,
         };
         let make_pen_ref = |lam: f64| -> Box<dyn Penalty> { Box::new(Mcp::new(lam, 1e9, p)) };
         let (betas_ref, _) = solve_path(&design, &datafit_ref, make_pen_ref, &cfg);

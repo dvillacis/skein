@@ -117,6 +117,7 @@ fn main() {
             acceleration: Some(5),
         },
         screening: Screening::Strong,
+        p0: 10,
     };
 
     let make_pen = |lam: f64| -> Box<dyn Penalty> {

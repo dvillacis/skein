@@ -99,6 +99,13 @@ pub struct PathConfig {
     pub cd: CdConfig,
     /// Working-set screening strategy. Default `Strong`.
     pub screening: Screening,
+    /// Initial working-set size when `Screening::Strong` is used and
+    /// the previous-λ support is empty (cold start at λ_max). Mirrors
+    /// celer's `p0` and skglm's `p0`. Larger values approach the
+    /// "full sweep" behaviour the strong rule used to fall back to;
+    /// smaller values trade off more KKT-verify passes for cheaper
+    /// cold-start sweeps. Default `10` matches skglm.
+    pub p0: usize,
 }
 
 impl Default for PathConfig {
@@ -109,6 +116,7 @@ impl Default for PathConfig {
             lambdas: None,
             cd: CdConfig::default(),
             screening: Screening::default(),
+            p0: 10,
         }
     }
 }
@@ -161,7 +169,6 @@ where
 
     let mut warm = Array1::<f64>::zeros(p);
     let mut prev_residual: Option<Array1<f64>> = None;
-    let mut prev_lambda: Option<f64> = None;
 
     for (k, &lam) in lambdas.iter().enumerate() {
         let pen = make_penalty(lam);
@@ -169,26 +176,38 @@ where
 
         // Initial working set per screening strategy.
         // - Off: full feature set, single pass.
-        // - Strong: sequential strong rule, requires monotone-decreasing λ
-        //   and a previous residual; falls back to full set otherwise.
-        // - GapSafe: gap-safe sphere screen; works at every λ, including the
-        //   first (uses the cold-start residual = -y).
+        // - Strong: priority-based active-set rule (celer/skglm pattern).
+        //   Ranks features by KKT-violation magnitude `|grad_j| / w_j` and
+        //   picks the top `max(p0, 2 × |support|)`. Active and
+        //   unpenalised features are pinned in. At λ_max with no prior
+        //   support this gives a `p0`-sized WS instead of the previous
+        //   "fall back to full feature set"; the KKT verifier catches
+        //   anything missed.
+        // - GapSafe: gap-safe sphere screen; works at every λ, including
+        //   the first (uses the cold-start residual = -y).
         let mut ws: Vec<usize> = match config.screening {
             Screening::Off => (0..p).collect(),
             Screening::Strong => {
-                if k == 0 || lam >= prev_lambda.unwrap() {
-                    (0..p).collect()
+                // Use the previous λ's residual when available; cold-start
+                // at λ_0 falls back to `r = init_residual(0)` = `−y` for
+                // LS. Skipping the cold-residual matvec for k > 0 is the
+                // whole point of warm-starting.
+                let r_owned;
+                let r_view = if let Some(pr) = &prev_residual {
+                    pr.view()
                 } else {
-                    strong_rule_screen(
-                        design,
-                        datafit,
-                        prev_residual.as_ref().unwrap().view(),
-                        weights.view(),
-                        warm.view(),
-                        lam,
-                        prev_lambda.unwrap(),
-                    )
-                }
+                    r_owned = datafit.init_residual(design, warm.view());
+                    prev_residual = Some(r_owned);
+                    prev_residual.as_ref().unwrap().view()
+                };
+                priority_rule_screen(
+                    design,
+                    datafit,
+                    r_view,
+                    weights.view(),
+                    warm.view(),
+                    config.p0,
+                )
             }
             Screening::GapSafe => {
                 let res_view = if k == 0 {
@@ -294,7 +313,6 @@ where
         kkt_passes_out.push(passes);
 
         prev_residual = Some(final_residual);
-        prev_lambda = Some(lam);
     }
 
     (
@@ -310,45 +328,74 @@ where
     )
 }
 
-/// Tibshirani sequential strong rule for separable L1-like penalties.
+/// Priority-based active-set rule (celer/skglm pattern).
 ///
-/// Drops feature `j` when:
-///   - it's penalized (`w_j > 0`), AND
-///   - it's currently inactive (`β_j == 0`), AND
-///   - `|X_jᵀ r_{k-1}| / n < (2 λ_k − λ_{k-1}) · w_j`.
+/// For each feature, computes a violation score
+/// `s_j = |X_jᵀ r / n| / w_j` (= `|grad_j| / w_j`); active features
+/// (`β_j ≠ 0`) and unpenalised features (`w_j ≤ 0`) get `s_j = ∞` so
+/// they're always pinned in. Returns the indices of the
+/// `max(p0, 2 × |support|)` features with the largest scores, capped
+/// to `n_features`.
 ///
-/// Currently-active features (`β_j ≠ 0`) are always kept: holding them
-/// fixed at non-zero outside the working set would break the KKT
-/// verification step, which only checks the inactive-feature condition.
-/// This matters most for MCP/SCAD in the saturated regime, where an active
-/// feature can have gradient ≈ 0 and would otherwise be wrongly screened.
-fn strong_rule_screen(
+/// **Why this replaces the strong rule**:
+///
+/// The Tibshirani strong rule passes-or-rejects features against a
+/// threshold `(2 λ_k − λ_{k-1}) · w_j`, which has two degenerate
+/// behaviours skein used to fall back from: (a) at λ_max no previous
+/// λ exists, so the rule degrades to "include everything"; (b) the
+/// threshold can stay loose enough to leave many irrelevant features
+/// in the WS during the saturated tail. The priority rule fixes both:
+/// at the cold-start λ_max we use a small `p0` WS and let the KKT
+/// verifier pull in violators, and the WS size grows monotonically
+/// with the support, matching the actual active-set dynamics.
+///
+/// One BLAS gemv to compute the gradient; one O(p) scan to rank.
+/// Argpartition (`select_nth_unstable_by`) avoids a full sort.
+fn priority_rule_screen(
     design: &dyn DesignMatrix,
     datafit: &dyn Datafit,
     residual: ArrayView1<'_, f64>,
     weights: ArrayView1<'_, f64>,
     beta: ArrayView1<'_, f64>,
-    lambda_k: f64,
-    lambda_prev: f64,
+    p0: usize,
 ) -> Vec<usize> {
     let p = design.n_features();
-    let threshold = 2.0 * lambda_k - lambda_prev;
-    // One BLAS gemv (`Xᵀ r / n` for LS) instead of `p` per-coord
-    // `coord_grad(j, r)` calls. Same numerical result; orders of
-    // magnitude faster on dense backends because gemv is fully
-    // BLAS-vectorised over the whole matrix.
-    let grad = datafit.full_grad(design, residual);
-    let mut ws = Vec::new();
-    for j in 0..p {
-        let w = weights[j];
-        if w <= 0.0 || beta[j] != 0.0 {
-            ws.push(j);
-            continue;
-        }
-        if grad[j].abs() >= threshold * w {
-            ws.push(j);
-        }
+    let n_support = beta.iter().filter(|&&b| b != 0.0).count();
+    let ws_size = (n_support * 2).max(p0).min(p);
+
+    if ws_size == 0 {
+        return Vec::new();
     }
+    if ws_size >= p {
+        return (0..p).collect();
+    }
+
+    let grad = datafit.full_grad(design, residual);
+    // `score[j]` is the priority; INFINITY for pinned features, else
+    // `|grad_j| / w_j`. We sort by score descending and take the top
+    // `ws_size`.
+    let mut scored: Vec<(usize, f64)> = (0..p)
+        .map(|j| {
+            let w = weights[j];
+            let score = if w <= 0.0 || beta[j] != 0.0 {
+                f64::INFINITY
+            } else {
+                grad[j].abs() / w
+            };
+            (j, score)
+        })
+        .collect();
+
+    // Argpartition: descending order by score. The top `ws_size`
+    // entries (by some permutation) end up in `scored[..ws_size]`.
+    scored.select_nth_unstable_by(ws_size - 1, |a, b| {
+        // Reverse so largest score sorts first; treat NaN as smallest
+        // (it shouldn't appear, but be defensive).
+        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut ws: Vec<usize> = scored[..ws_size].iter().map(|&(j, _)| j).collect();
+    ws.sort_unstable();
     ws
 }
 
@@ -623,6 +670,7 @@ mod tests {
             lambdas: Some(vec![lam_max]),
             cd: CdConfig::default(),
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas, _) = solve_path(
             &design,
@@ -649,6 +697,7 @@ mod tests {
             lambdas: Some(vec![1.5 * lam_max]),
             cd: CdConfig::default(),
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas, _) = solve_path(
             &design,
@@ -698,6 +747,7 @@ mod tests {
                 acceleration: Some(5),
             },
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas, _) = solve_path(
             &design,
@@ -729,6 +779,7 @@ mod tests {
             lambdas: None,
             cd: CdConfig::default(),
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas, report) = solve_path(
             &design,
@@ -757,6 +808,7 @@ mod tests {
             lambdas: None,
             cd: CdConfig::default(),
             screening: Screening::Strong,
+            p0: 10,
         };
         let (_, report) = solve_path(
             &design,
@@ -783,6 +835,7 @@ mod tests {
             lambdas: Some(custom.clone()),
             cd: CdConfig::default(),
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas, report) = solve_path(
             &design,
@@ -819,6 +872,7 @@ mod tests {
                 acceleration: Some(5),
             },
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas, report) = solve_path(
             &design,
@@ -862,6 +916,7 @@ mod tests {
                 acceleration: Some(5),
             },
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas, _) = solve_path(
             &design,
@@ -905,6 +960,7 @@ mod tests {
                 acceleration: Some(5),
             },
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas, report) = solve_path(
             &design,
@@ -952,6 +1008,7 @@ mod tests {
             lambdas: None,
             cd: CdConfig::default(),
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas, _) = solve_path(
             &design,
@@ -980,6 +1037,7 @@ mod tests {
             lambdas: Some(vec![1.5 * lam_max]),
             cd: CdConfig::default(),
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas, _) = solve_path(
             &design,
@@ -1005,6 +1063,7 @@ mod tests {
             lambdas: None,
             cd: CdConfig::default(),
             screening: Screening::Off,
+            p0: 10,
         };
         let (_, report) = solve_path(
             &design,
@@ -1037,6 +1096,7 @@ mod tests {
             lambdas: None,
             cd: cd_cfg.clone(),
             screening: s,
+            p0: 10,
         };
         let (b_off, _) = solve_path(
             &design,
@@ -1084,6 +1144,10 @@ mod tests {
         let design = DenseMatrix::new(x);
         let datafit = LeastSquares::new(y);
 
+        // Use a small `p0` so the priority rule's lower bound for the
+        // working set isn't dictated by the seed-WS size on this 20-
+        // feature toy problem. Real-size problems use the default
+        // `p0 = 10`.
         let cfg = PathConfig {
             n_lambdas: 15,
             lambda_min_ratio: 5e-2,
@@ -1094,6 +1158,7 @@ mod tests {
                 acceleration: Some(5),
             },
             screening: Screening::Strong,
+            p0: 3,
         };
         let (_, report) = solve_path(
             &design,
@@ -1101,8 +1166,9 @@ mod tests {
             |lam| Box::new(Mcp::new(lam, 3.0, p)),
             &cfg,
         );
-        // Mid-path, the strong rule should have shrunk the working set well
-        // below p. Use a generous bound to absorb run-to-run variation.
+        // Mid-path, the priority rule should have kept the working set
+        // close to the support (3 truly-active features), not the full
+        // p=20.
         let mid = report.working_set_sizes.len() / 2;
         let mid_ws = report.working_set_sizes[mid];
         assert!(
@@ -1134,6 +1200,7 @@ mod tests {
             lambdas: None,
             cd: cd_cfg.clone(),
             screening: s,
+            p0: 10,
         };
         let (b_strong, _) = solve_path(
             &design,
@@ -1187,6 +1254,7 @@ mod tests {
                 acceleration: Some(5),
             },
             screening: Screening::GapSafe,
+            p0: 10,
         };
         let (_, report) = solve_path(
             &design,
@@ -1281,6 +1349,7 @@ mod tests {
                 acceleration: Some(5),
             },
             screening: Screening::Off,
+            p0: 10,
         };
         let datafit_d = LeastSquares::new(y.clone());
         let datafit_s = LeastSquares::new(y.clone());

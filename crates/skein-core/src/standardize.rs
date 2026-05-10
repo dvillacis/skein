@@ -443,6 +443,7 @@ mod tests {
             lambdas: Some(vec![lam_max]),
             cd: CdConfig::default(),
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas_std, _) = solve_path(
             &design,
@@ -496,6 +497,7 @@ mod tests {
                 acceleration: Some(5),
             },
             screening: Screening::Strong,
+            p0: 10,
         };
         let (betas_std, _) = solve_path(
             &design,
@@ -638,6 +640,7 @@ mod tests {
                 acceleration: Some(5),
             },
             screening: Screening::Strong,
+            p0: 10,
         };
         let pen1 = w_orig.clone();
         let (b_raw, _) = solve_path(

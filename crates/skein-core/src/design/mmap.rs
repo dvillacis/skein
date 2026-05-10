@@ -352,6 +352,7 @@ mod tests {
                 acceleration: Some(5),
             },
             screening: Screening::Off,
+            p0: 10,
         };
         let datafit_a = LeastSquares::new(y.clone());
         let datafit_b = LeastSquares::new(y);
