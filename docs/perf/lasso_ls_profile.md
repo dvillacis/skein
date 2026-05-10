@@ -279,3 +279,73 @@ adaptive PGD work. skglm uses numba @njit for the inner CD; we use
 ndarray's pure-Rust dot path. Numba's BLAS dispatch on
 `X[:, j].dot(Xw)` apparently isn't meaningfully faster than
 `dot_generic` here — both packages cluster in the 3–5 s range.
+
+## Postscript — `blas-accelerate` feature landed
+
+Added the `blas-accelerate` Cargo feature on `skein-core` and a
+`blas-accelerate` passthrough on `skein-py`:
+
+  ndarray = { workspace = true, features = ["blas"] }   (gated)
+  blas-src   = "0.11"  (default-features = false, optional)
+  accelerate-src = "0.3"  (optional, anchors the linker directive)
+
+Build the wheel with `maturin develop --release --features
+blas-accelerate` to route ndarray's `dot` / `scaled_add` /
+`gemv` through Apple's Accelerate framework on macOS — zero
+install cost, the framework ships with the OS. The hot path is
+`col_dot` inside the inner CD, which is now BLAS `ddot` instead
+of `matrixmultiply`'s generic loop.
+
+(For Linux / Windows, add a sibling feature like
+`blas-openblas = ["ndarray/blas", "blas-src/openblas"]` and
+ensure `libopenblas-dev` is present at build time. That work is
+deferred until cibuildwheel / CI integration; the local-dev
+macOS path is what enabled the M10.1 prediction to be tested.)
+
+**Results (medium lasso/LS, n=10k, p=1k, 100-λ path)**:
+
+| package        | deep before | deep with BLAS | sparse before | sparse with BLAS |
+|---|---|---|---|---|
+| sklearn        | 188 ms      | 181 ms         | 147 ms        | 147 ms |
+| glmnet (R)     | 950 ms      | 883 ms         | 707 ms        | 810 ms |
+| **skein**      | **3.32 s**  | **1.75 s** ← 1.9× | **2.50 s**    | **0.96 s** ← 2.6× |
+| celer          | 3.97 s      | 3.97 s         | 466 ms        | 466 ms |
+| skglm          | 5.24 s      | 5.28 s         | 3.47 s        | 3.46 s |
+
+skein-relative-to-comparators (medium, with BLAS):
+
+- vs sklearn:  **9.6× deep, 6.5× sparse** (was 18× / 17×)
+- vs glmnet:   **2.0× deep, 1.18× sparse** (was 3.5× / 3.5× — sparse is essentially matched!)
+- vs celer:    0.44× deep (we're 2.3× faster), 2.1× sparse (was 0.84× / 5.4×)
+- vs skglm:    0.33× deep (we're 3× faster), 0.28× sparse (3.6× faster)
+
+**Read-out**:
+
+The M10.1 prediction was ~3× from BLAS dispatch on `col_dot`. The
+realised speedup (1.9× deep / 2.6× sparse) is somewhat below that but
+qualitatively correct — the BLAS replaces the per-call `dot_generic`
+floor with `ddot`, and the extra 0.4× to 1.4× went to other parts of
+the path solver (the prox-grad-distance verifier, the priority-WS
+ranking) that haven't been BLAS-accelerated.
+
+The biggest practical change: **skein is now within striking distance
+of glmnet** (essentially matched in sparse, 2× off in deep). We still
+sit ~10× behind sklearn's `lasso_path` Cython — that's a tight inner
+loop with no path-level structural overhead, hard to match without a
+similar Cython-grade rewrite. But for the niche this library targets
+(nonconvex group penalties, weighted formulations, Rust-native
+extension surface), being a stone's throw from glmnet is more than
+defensible.
+
+Order of remaining levers, post-BLAS:
+
+  E. Anderson on residual instead of β       — small change, ~1.05–1.2×.
+  F. Dual extrapolation (celer's lever)      — significant new code; would
+                                                close the celer-sparse gap
+                                                where their priority screen
+                                                + dual coastlines beat us 2×.
+  G. Tighter inner loop (sklearn-level Cython-equivalent in Rust) — unclear
+                                                if there's room beyond
+                                                BLAS dispatch given LLVM is
+                                                already vectorising what we
+                                                have.

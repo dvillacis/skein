@@ -4,6 +4,14 @@
 //! impls used by the solver. Everything is `Sync` so the solver can dispatch
 //! group-wise work across Rayon threads.
 
+// Anchor the BLAS provider so its build-script `cargo:rustc-link-lib`
+// directive reaches the final binary. Without an explicit `use`, rustc's
+// dead-code prune skips emitting the link line even though the crate is in
+// `Cargo.toml`. `accelerate-src` itself is empty — its only job is the
+// build-script directive — so this `use` is purely a linkage anchor.
+#[cfg(feature = "blas-accelerate")]
+use accelerate_src as _;
+
 pub mod datafit;
 pub mod design;
 pub mod groups;

@@ -15,3 +15,10 @@ skein-core = { path = "../skein-core" }
 ndarray = { workspace = true }
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py310"] }
 numpy = "0.22"
+
+[features]
+default = []
+# Forwards to `skein-core/blas-accelerate`. Build the Python wheel with
+# this feature enabled to get the BLAS-accelerated solver:
+#   maturin develop --release --features blas-accelerate
+blas-accelerate = ["skein-core/blas-accelerate"]
