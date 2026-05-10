@@ -19,3 +19,7 @@ thiserror = "1"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+# line-tables-only adds enough debug info for samply / cargo-flamegraph to
+# resolve Rust frame names (~5% bigger binary, no perf impact). Strip when
+# packaging release wheels if size becomes an issue.
+debug = "line-tables-only"
