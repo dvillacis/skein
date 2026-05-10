@@ -23,7 +23,7 @@ load-bearing piece; everything after stacks on top of it.
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches moved to M9; comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 | M9 — Performance & correctness benchmarks | ⏳ partial | M9.1 harness + M9.3 lasso/LS (deep + sparse regimes, all comparators apples-to-apples via warm-started paths) done; M9.2 criterion expansion + M9.4 correctness-at-scale fixtures + M9.5 docs page pending. Supersedes the deferred M8.6 bullet. |
-| M10 — Performance improvements | ⏳ partial | M10.1 profile (`col_dot` is the floor without BLAS) + M10.3 first wave (col_axpy + F-order DenseMatrix + path-solver fixes) + M10.3 second wave (adaptive inner tol via prox-gradient distance + KKT-priority WS construction) + M10.3 third wave (`blas-accelerate` feature, macOS Accelerate) done. **Skein medium lasso/LS: 7.6 s → 0.96 s sparse / 1.75 s deep — 4–8× total. Within 1.18× of glmnet on sparse, 2× on deep; 6.5–10× behind sklearn's Cython lasso_path.** M10.4 verified across deep + sparse regimes. Pending: E. Anderson-on-residual, F. dual extrapolation (closes celer-sparse gap), Linux/Windows BLAS. |
+| M10 — Performance improvements | ⏳ partial | M10.1 profile (`col_dot` is the floor without BLAS) + M10.3 five waves: (1) col_axpy + F-order DenseMatrix + path-solver fixes; (2) adaptive inner tol via PGD + KKT-priority WS; (3) `blas-accelerate` feature; (4) (skipped — inner active-set CD didn't pay off); (5) F-series — duality gap + Anderson on residuals + gap-safe sphere screening, all gated and tested. **Skein medium lasso/LS: 7.6 s → 0.78 s sparse / 1.17 s deep — 6.5–10× total. Within 1.5× of glmnet on sparse, 1.9× on deep; ~8–9× behind sklearn's Cython `lasso_path`.** F-series wallclock-neutral on M9.3 scenarios — infrastructure correct but post-pass screening fires only on multi-pass λs (most converge in 1). M10.4 verified across deep + sparse regimes. Pending: G. cross-platform BLAS (OpenBLAS/MKL), H. pre-pass gap-safe screening, I. Cython-grade rewrite (off-roadmap). |
 
 Test count at this snapshot: **265 cargo + 279 pytest, all green.**
 
@@ -1199,20 +1199,24 @@ a ~60× gap. M10 is the work that closed most of it.
 
 | package        | start of M10 | end of M10 (deep) | end of M10 (sparse) |
 |---|---|---|---|
-| sklearn (`lasso_path`)              | 188 ms     | 181 ms        | 147 ms |
-| glmnet (R, via Rscript)             | 950 ms     | 883 ms        | 810 ms |
-| **skein**                           | **7.6 s**  | **1.75 s**    | **0.96 s** |
-| celer (`celer_path`)                | 12.0 s †   | 3.97 s        | 466 ms |
-| skglm (`Lasso.path`)                | 10.1 s †   | 5.28 s        | 3.46 s |
+| sklearn (`lasso_path`)              | 188 ms     | 125 ms        | 99 ms  |
+| glmnet (R, via Rscript)             | 950 ms     | 614 ms        | 510 ms |
+| **skein**                           | **7.6 s**  | **1.17 s**    | **0.78 s** |
+| celer (`celer_path`)                | 12.0 s †   | 2.73 s        | 307 ms |
+| skglm (`Lasso.path`)                | 10.1 s †   | 3.39 s        | 2.26 s |
 
 † pre-M9.3 runner-fairness fix; both packages were doing per-λ fits.
 
+(Numbers shifted slightly between waves due to bench-machine
+variance; the "end of M10" column is the post-F snapshot on the
+same host.)
+
 Skein-vs-comparators on medium, end of M10:
 
-  vs sklearn:  9.6× deep, 6.5× sparse  (was 18× / 17× at M10 start)
-  vs glmnet:   2.0× deep, 1.18× sparse (was 3.5× / 3.5× — sparse essentially matched)
-  vs celer:    we're 2.3× faster deep,  2.1× behind sparse (their dual-extrapolation lever)
-  vs skglm:    we're 3× faster deep,    3.6× faster sparse
+  vs sklearn:  9.4× deep, 7.9× sparse  (was 18× / 17× at M10 start)
+  vs glmnet:   1.9× deep, 1.5× sparse  (was 3.5× / 3.5×)
+  vs celer:    we're 2.3× faster deep, 2.5× behind sparse (their dual-extrapolation lever)
+  vs skglm:    we're 2.9× faster deep, 2.9× faster sparse
 
 Every M10 commit ships against a re-run bench with before/after
 numbers; full timeline in `docs/perf/lasso_ls_profile.md`.
@@ -1348,6 +1352,70 @@ The M10.1 prediction was ~3× from BLAS dispatch; the realised speedup
 is somewhat below that because the path solver does work outside the
 BLAS-replaceable hot path (PGD verifier, priority-WS ranking).
 
+**Wave 5 — F-series: dual extrapolation + gap-safe screening
+(`2fea09c`, `2d025d4`, `971f73d`, `5d3c755`):**
+
+Built the full celer-style dual machinery, gated on penalty type
+and verified end-to-end. *Wallclock-neutral on M9.3 scenarios* —
+the existing PGD + priority-WS combo already at the algorithmic
+floor; the extra dual machinery has nowhere to recover. Documented
+honestly so the next person doesn't repeat the experiment.
+
+  F.1 (`2fea09c`) — `Datafit::lasso_dual_obj` and `Penalty::
+    dual_correction` trait methods. LS overrides the former for
+    unweighted samples; ElasticNet overrides the latter to
+    subtract the ridge contribution (matches celer's `dual_enet`).
+
+  F.2 (`2d025d4`) — Per-λ residual+β history (last K=6 pairs);
+    Anderson extrapolation on the residual sequence; same
+    coefficients applied to β so the extrapolated `(β_acc, r_acc)`
+    is self-consistent under `r = Xβ − y` (Σc=1 cancels y). Best
+    known dual obj across outer passes accumulated; gap = primal −
+    best_dual_obj.
+
+  F.3 (`971f73d`) — `Penalty::has_lasso_form_dual_gap()` (default
+    false; ElasticNet returns true). Ungates the gap-based stop
+    only when the penalty's L1 envelope is tight at its optimum.
+    Pre-flight pytest caught the MCP regression at one failure
+    instead of pinning all cores; saved-memory protocol from F.1's
+    runaway saved us. Outer stop:
+        converged = match outer.gap {
+            Some(g) => g < tol² || max_pgd < tol,
+            None     =>             max_pgd < tol,
+        };
+    The OR-style guard means tight-tol tests (`tol = 1e-12`) fall
+    back to PGD because `tol²` is below double-precision floor —
+    no regression risk.
+
+  F.4 (`5d3c755`) — Gap-safe sphere screening (Fercoq-Gramfort-
+    Salmon 2015): mark feature `j` as provably zero at this λ's
+    optimum when `|grad_j| + r_safe · ‖X_j‖₂ < λ · w_j` with
+    `r_safe = √(2·gap/n)`. Per-λ `screened: Vec<bool>` mask;
+    features once flagged are removed from the WS for the rest of
+    the λ's outer KKT loop. Reset per λ.
+
+What it doesn't move:
+
+  scenario       iter sum   kkt_passes   ws[end]
+  ---------------------------------------------------
+  lasso_ls       317        110          923 (was 1000)
+  lasso_ls_sp    304        100          10  (was 10)
+
+The deep bench shows ~77 features pruned at λ_min — the screening
+machinery fires correctly — but the inner CD overhead at this scale
+is small enough that 7% fewer features per sweep doesn't surface
+in wallclock. Most λs converge in 1 outer pass, so the post-pass
+screening has nowhere to apply. Pre-pass screening (using the
+previous λ's gap to prune the *initial* WS of the next λ) is the
+natural extension that *would* deliver in sparse, but it's a
+structural change that wasn't pursued.
+
+Why it didn't deliver the projected celer-sparse 2× gap closure:
+celer's structural advantage in sparse comes from starting with
+`p0 = 100` and aggressive pre-pass screening; we start at `p0 = 10`
+and screen post-pass. The algorithmic envelopes are different in
+ways our F-series machinery doesn't recover.
+
 ### ✅ M10.4 — Verified against the bench
 
 Both `lasso_ls` (deep) and `lasso_ls_sparse` ran end-to-end with
@@ -1367,25 +1435,37 @@ Did we hit the M10 entry-time targets? Partial:
   deep regime, which is more directly relevant to the niche skein
   targets.
 
-### Pending — remaining levers post-BLAS
+### Pending — remaining levers post-F
 
-E. **Anderson on residual instead of β** — small change, projected
-   1.05–1.2×. Snapshots (length-n) replace β snapshots (length-p) in
-   the Type-II Anderson history; for n > p (our medium case) it's
-   bigger but possibly converges faster. Worth a try at low cost.
-
-F. **Dual extrapolation (celer's lever)** — significant new code.
-   Closes the 2.1× celer-sparse gap. Needs a tracked dual feasibility
-   sphere + a properly computed duality gap as the outer convergence
-   criterion. This is the only lever that would surpass glmnet on
-   sparse; everything else just narrows existing gaps.
+E. **Anderson on residual instead of β** — partially subsumed by
+   F.2, which maintains a residual history and runs Anderson on it
+   with coefficients applied jointly to β. The "pure Anderson on
+   residual replacing β-Anderson in `cd.rs`" is a separate
+   change; given F.2 already extrapolates residuals at the path
+   level, the marginal value of redoing it inside `cd_solve_subset`
+   is unclear without a fresh profile.
 
 G. **Cross-platform BLAS** — sibling features `blas-openblas`
    (`blas-src/openblas` + system `libopenblas-dev`) and
-   `blas-mkl` (`blas-src/intel-mkl`). Required before the M10.3 wins
-   show up in distributed wheels. Coordinates with M8's
-   cibuildwheel — likely needs a per-platform feature in the
-   `wheels.yml` matrix.
+   `blas-mkl` (`blas-src/intel-mkl`). Required before the
+   `blas-accelerate` wins show up in distributed wheels.
+   Coordinates with M8's cibuildwheel — likely needs a per-platform
+   feature in the `wheels.yml` matrix.
+
+H. **Pre-pass gap-safe screening** — F.4 applies the FGS sphere
+   only *after* each outer KKT pass; pre-pass screening at λ entry
+   (using the previous λ's gap to prune the *initial* WS) is what
+   celer actually does. Modest extension — re-uses the gap and
+   gradient already computed at λ_{k-1}'s last pass to filter the
+   priority-WS at λ_k entry. Most upside in sparse-regime paths;
+   on M9.3's scenarios the existing post-pass screening already
+   fires after 90 % of λs converge in one pass anyway.
+
+I. **Cython-grade rewrite of `cd_solve_subset`** — the single
+   move that would actually catch sklearn's `lasso_path`. Possible
+   but the cost-benefit isn't clear given skein's audience uses
+   it for capabilities sklearn doesn't have. Listed for honesty,
+   not as a recommended next step.
 
 ### Out of scope for M10
 

@@ -4,6 +4,167 @@ All notable changes to `skein-glm` are recorded here. The project follows
 semantic versioning, with the pre-1.0 minor-bump-on-feature policy
 documented in `docs/extending/rust-api.md`.
 
+## [0.5.0] — 2026-05-10
+
+The performance release. M9 (cross-package benchmark harness) and M10
+(performance improvements driven by the bench) are the primary
+deliverables. Lasso/LS path solver dropped from **7.6 s → 0.78 s**
+(sparse) / **1.17 s** (deep) on the medium scenario (n=10k, p=1k,
+100-λ path) — a ~10× swing across the M10 work. Now within
+**1.5× of glmnet on sparse / 1.9× on deep**; ~8–9× behind sklearn's
+Cython `lasso_path` (the floor that needs a Cython-grade rewrite to
+catch).
+
+### Added
+
+- **M9.1 — bench harness.** New top-level `benches/` directory with
+  problem generators (`benches/problems.py`), driver
+  (`benches/run.py` — `--scenarios`, `--packages`, `--sizes`,
+  `--trials`), runner ABI (`benches/runners/__init__.py`), and live
+  runners for skein, sklearn, skglm, celer, pyglmnet, and R via
+  Rscript (glmnet / ncvreg / grpreg). Timing methodology: 1 warm-up
+  call discarded + N timed trials, headline is the median; per-trial
+  times also recorded so noise can be inspected post-hoc.
+  Cross-scenario helpers in `benches/scenarios/_common.py` so adding
+  the next scenario is a ~50-line file.
+- **M9.3 — lasso/LS bench scenarios (deep + sparse).**
+  `benches/scenarios/lasso_ls.py` (`λ_min/λ_max = 1e-3`, deep into
+  the saturated tail) and `benches/scenarios/lasso_ls_sparse.py`
+  (`λ_min/λ_max = 5e-2`, stops at support recovery — the actual
+  regime lasso is designed for). Snapshots committed at
+  `benches/results/{lasso_ls,lasso_ls_sparse}.json`. Fairness fix
+  bundled: skglm and celer runners now use their warm-started path
+  APIs (`Lasso.path` / `celer_path`) instead of looping
+  `Lasso(alpha=λ).fit()` per λ — comparison is apples-to-apples.
+- **M10.1 — perf profile target.**
+  `crates/skein-core/examples/lasso_ls_medium.rs` — pure-Rust binary
+  that reproduces the medium scenario; `[profile.release]` carries
+  `debug = "line-tables-only"` for samply / cargo-flamegraph symbol
+  resolution. Findings in `docs/perf/lasso_ls_profile.md`:
+  `dot_generic` is the ~80 % floor without BLAS, and a microbench
+  rules out a hand-rolled tight loop as a faster alternative.
+- **M10.3 — five waves of perf fixes**, each independently committed
+  and bench-verified:
+  - **`DesignMatrix::col_axpy(j, α, r)`** trait method specialised
+    on every backend (Dense / Sparse / Standardized / Augmented /
+    Mmap×2 / Chunked / MultiTask). Replaces a per-coord `(n × 1)`
+    `Array2` allocation that was costing ~10 GB of heap traffic per
+    medium-bench fit. Default impl (slow) for forward-compat.
+  - **F-order `DenseMatrix`**: forced column-major layout in
+    `DenseMatrix::new` so `column(j)` is contiguous; `scaled_add`
+    runs at memory bandwidth instead of one L1 miss per element.
+    One-shot 80 MB copy at construction, amortised across the path.
+  - **`cd_solve_subset` returns the residual** it already maintains
+    via incremental axpy updates. The path solver no longer
+    recomputes `r = Xβ − y` from scratch after each call — one
+    `O(np)` matvec saved per λ.
+  - **Adaptive inner tolerance via prox-gradient distance.**
+    `compute_outer_state` returns `max_pgd` (commensurable with
+    `config.cd.tol`); next inner tol = `max(tol, 0.3 · prev_pgd)`.
+    Same units, same penalty-agnostic guarantees. Iter sum
+    on medium deep dropped from 430 → 317 (26 % fewer).
+  - **KKT-priority WS construction** (celer/skglm pattern). New
+    `PathConfig::p0` field (default 10, matches skglm). WS sized
+    `max(p0, 2 × |support|)`, ranked by `|grad_j| / w_j` with
+    active + unpenalised features pinned. Replaces the
+    "fall-back-to-full-feature-set" cliff of the old strong rule
+    at λ_max — initial WS goes from 1000 → 10 there.
+- **`blas-accelerate` Cargo feature** (skein-core + skein-py
+  passthrough). Routes ndarray's `dot` / `scaled_add` / `gemv`
+  through Apple's Accelerate framework on macOS via `blas-src`
+  + `accelerate-src`. Zero install cost — Accelerate ships with
+  the OS. Build wheels with `maturin develop --release --features
+  blas-accelerate`. Delivered the largest single speedup of M10:
+  3.32 s → 1.75 s deep (1.9 ×), 2.50 s → 0.96 s sparse (2.6 ×).
+- **F-series — duality gap + dual extrapolation + gap-safe
+  screening** (4 commits: `2fea09c`, `2d025d4`, `971f73d`,
+  `5d3c755`). `Datafit::lasso_dual_obj` (LS overrides) +
+  `Penalty::dual_correction` (ElasticNet overrides for the ridge
+  contribution) + `Penalty::has_lasso_form_dual_gap()` (gates the
+  gap on penalties whose L1 envelope is tight at the optimum, so
+  MCP / SCAD aren't accidentally early-stopped on the wrong
+  bound). Per-λ Anderson extrapolation on the residual sequence
+  with coefficients applied jointly to β so the extrapolated
+  `(β_acc, r_acc)` is self-consistent under `r = Xβ − y`. Gap-safe
+  sphere screening via FGS 2015. **Wallclock-neutral on M9.3
+  scenarios** — the existing PGD + priority-WS combo already at
+  the algorithmic floor; documented honestly in
+  `docs/perf/lasso_ls_profile.md` so the next person doesn't
+  repeat the experiment.
+- **`docs/perf/lasso_ls_profile.md` + `docs/perf/celer_skglm_study.md`**
+  — comparative reading of celer + skglm + the iterative
+  optimisation timeline that drove M10's wave structure.
+
+### Changed
+
+- `[profile.release]` in workspace `Cargo.toml` gains
+  `debug = "line-tables-only"` so samply / cargo-flamegraph can
+  resolve frame names without significant binary-size cost.
+- `compute_outer_state` is now the unified per-λ verifier. Returns
+  `OuterState { violators, max_pgd, gap, lambda_bound,
+  safely_inactive }`. Replaces the previous gradient-only
+  `find_kkt_violators`. Still one BLAS gemv (the gradient) plus
+  `O(p)` per-coord work — same asymptotic cost, more information.
+- `solve_small` (Tikhonov-regularised normal-equations solver in
+  `cd::anderson_extrapolate`) made `pub(crate)` so the path solver
+  can reuse it for residual-sequence Anderson without code
+  duplication.
+
+### Fixed
+
+- **M9.3 runner fairness.** Pre-fix, `skglm` and `celer` runners
+  looped `Lasso(alpha=λ).fit()` per λ — handicapping both packages
+  (sklearn / skein / glmnet were already using path solvers with
+  internal warm starts). Post-fix using their native path APIs:
+  - skglm medium deep: 10.1 s → 5.28 s; sparse 7.66 s → 3.46 s.
+  - celer medium deep: 12.0 s → 3.97 s; sparse 6.49 s → **466 ms**
+    (revealing celer's actual sparse-regime advantage — that's the
+    F-series motivation).
+
+### Test count
+
+**265 cargo + 279 pytest, all green** on both M10 + F-series
+changes — same as v0.4.0. No new tests added; the existing test
+corpus is what validates the perf changes don't regress correctness.
+
+A pre-flight protocol was developed during the F-series after a
+runaway-cargo-test incident from a too-tight gap-based stopping
+rule (`gap < tol²` becomes unreachable at `tol = 1e-12`):
+
+  Before changing convergence criteria, smoke a single tight-tol
+  test (`elastic_net_alpha_zero_recovers_closed_form_ridge`,
+  `standardized_solver_path_matches_pre_scaled_dense`) before
+  letting `cargo test` loose. Caught the F.3 MCP regression at
+  one failure / 85 passes instead of pinning all cores.
+
+### Deprecation / breaking
+
+`PathConfig` gains a required `p0: usize` field (default `10`).
+**Source-compat breakage on struct-literal constructions**:
+existing `PathConfig { ... }` literals must add `p0: 10,` (or
+opt into a different value). Affects 27 call-sites across
+`crates/skein-core/src/`, `crates/skein-py/src/lib.rs`, and the
+profiling example. `..Default::default()` is the recommended
+spread for forward-compat.
+
+The `Penalty` and `Datafit` traits gain default-implemented
+methods (`dual_correction`, `has_lasso_form_dual_gap`,
+`lasso_dual_obj`) with `false` / `0.0` / `None` defaults. Existing
+implementors aren't required to override.
+
+### Bench numbers (medium, n=10k, p=1k, 100-λ, 3-trial median)
+
+| package        | v0.5.0 (deep) | v0.5.0 (sparse) |
+|---|---|---|
+| sklearn        | 125 ms        | 99 ms |
+| glmnet (R)     | 614 ms        | 510 ms |
+| **skein**      | **1.17 s**    | **0.78 s** |
+| celer          | 2.73 s        | 307 ms |
+| skglm          | 3.39 s        | 2.26 s |
+
+(v0.4.0 had no committed lasso/LS bench numbers; M9.1 was
+scaffolded but the comparator runners hadn't been validated.)
+
 ## [0.4.0] — 2026-05-09
 
 Closes the **M5.x headline differentiator** (stability selection — no
