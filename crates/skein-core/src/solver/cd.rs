@@ -248,7 +248,7 @@ fn anderson_extrapolate(iterates: &[Array1<f64>]) -> Option<Array1<f64>> {
 /// Solve a small `n × n` system `A x = b` by Gaussian elimination with
 /// partial pivoting. Returns `None` when the system is numerically singular.
 /// Intended for the K × K Anderson normal equations (K small).
-fn solve_small(mut a: Array2<f64>, mut b: Array1<f64>) -> Option<Array1<f64>> {
+pub(crate) fn solve_small(mut a: Array2<f64>, mut b: Array1<f64>) -> Option<Array1<f64>> {
     let n = a.nrows();
     debug_assert_eq!(a.ncols(), n);
     debug_assert_eq!(b.len(), n);

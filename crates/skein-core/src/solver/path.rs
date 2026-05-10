@@ -13,7 +13,7 @@
 use crate::datafit::Datafit;
 use crate::design::DesignMatrix;
 use crate::penalty::Penalty;
-use crate::solver::cd::{cd_solve_subset, CdConfig, CdReport};
+use crate::solver::cd::{cd_solve_subset, solve_small, CdConfig, CdReport};
 use ndarray::{Array1, Array2, ArrayView1};
 
 /// Smallest λ at which β = 0 satisfies the KKT conditions for a separable
@@ -235,6 +235,22 @@ where
         let mut inner_cd_cfg = config.cd.clone();
         let mut prev_outer_pgd: f64 = f64::INFINITY;
 
+        // Dual extrapolation history (celer pattern). Stores the last
+        // `K_MAX` (β, r) pairs from this λ's outer KKT loop. Anderson
+        // on the residual sequence yields a candidate dual point whose
+        // dual obj — when feasible — is often a tighter lower bound
+        // than the naive `θ_naive = -r/n`, shrinking the gap. We
+        // maintain β alongside r so the dual obj formula
+        // `D = ‖r‖²/n · scale·(1−scale/2) − scale · βᵀ grad` still
+        // applies after extrapolation: linear combinations of (β, r)
+        // with coefficients summing to 1 stay self-consistent
+        // (`r_acc = X β_acc − y` automatically), so we don't need to
+        // expose y on the `Datafit` trait.
+        const DUAL_HISTORY_MAX: usize = 6;
+        let mut beta_history: Vec<Array1<f64>> = Vec::with_capacity(DUAL_HISTORY_MAX);
+        let mut residual_history: Vec<Array1<f64>> = Vec::with_capacity(DUAL_HISTORY_MAX);
+        let mut best_dual_obj: f64 = f64::NEG_INFINITY;
+
         let (final_residual, last_report): (Array1<f64>, CdReport) = loop {
             passes += 1;
 
@@ -263,6 +279,23 @@ where
                 break (r, report);
             }
 
+            // Push current (β, r) into dual-extrapolation history. Cap
+            // to DUAL_HISTORY_MAX entries (drop the oldest when full).
+            if beta_history.len() == DUAL_HISTORY_MAX {
+                beta_history.remove(0);
+                residual_history.remove(0);
+            }
+            beta_history.push(warm.clone());
+            residual_history.push(r.clone());
+
+            // Try Anderson on the residual sequence. When successful,
+            // gives `(β_acc, r_acc)` consistent with `r = Xβ − y`.
+            let extrapolation = if residual_history.len() >= 3 {
+                anderson_extrapolate_pair(&residual_history, &beta_history)
+            } else {
+                None
+            };
+
             let outer = compute_outer_state(
                 design,
                 datafit,
@@ -273,17 +306,19 @@ where
                 &coord_lipschitz,
                 lam,
                 config.cd.tol,
+                extrapolation.as_ref().map(|(r_acc, beta_acc)| (r_acc.view(), beta_acc.view())),
+                &mut best_dual_obj,
             );
             prev_outer_pgd = outer.max_pgd;
 
             // Outer convergence: prox-gradient stationarity (penalty-
             // agnostic, in coefficient units, commensurable with
-            // `config.cd.tol`). The duality gap returned alongside is
-            // computed as a side channel for future use (dual
-            // extrapolation, gap-safe screening) — wiring it into the
-            // outer stop directly is a separate change with its own
-            // tol-units conversion to work out per existing test
-            // expectations.
+            // `config.cd.tol`). The duality gap (now potentially
+            // tightened by dual extrapolation) is computed as a side
+            // channel for future use (gap-safe screening); switching
+            // the outer stop to gap-based is a separate change with
+            // its own tol-units conversion to work out against the
+            // existing test corpus.
             if outer.max_pgd < config.cd.tol {
                 break (r, report);
             }
@@ -499,6 +534,7 @@ struct OuterState {
     violators: Vec<usize>,
     max_pgd: f64,
     gap: Option<f64>,
+    #[allow(dead_code)] // surfaced for callers that want the dual-feasibility ratio
     lambda_bound: f64,
 }
 
@@ -512,6 +548,8 @@ fn compute_outer_state(
     coord_lipschitz: &[f64],
     lambda: f64,
     tol: f64,
+    extrapolation: Option<(ArrayView1<'_, f64>, ArrayView1<'_, f64>)>,
+    best_dual_obj: &mut f64,
 ) -> OuterState {
     let p = design.n_features();
     debug_assert_eq!(coord_lipschitz.len(), p);
@@ -556,20 +594,76 @@ fn compute_outer_state(
     // duality. `scale = min(1, λ / lambda_bound)` projects the naive
     // dual point `θ_naive` (= -r/n for LS) into the feasibility set
     // `{θ : ‖Xᵀθ‖_∞ ≤ λ · w_j}`; the dual obj at the scaled point is
-    // never larger than at any other feasible point we've cheaply
-    // tried.
-    let scale = if lambda_bound > lambda {
+    // a valid lower bound on primal optimum.
+    //
+    // If the caller supplied an Anderson-extrapolated `(r_acc, β_acc)`
+    // pair, we *also* evaluate the dual obj there (with its own
+    // feasibility scaling) and take whichever is larger as the best
+    // known dual. This is celer's trick: the Anderson trajectory
+    // often lies closer to the dual optimum than the most recent
+    // iterate, so the projected dual obj is bigger → tighter gap.
+    //
+    // `best_dual_obj` is monotone-non-decreasing across outer passes
+    // (we keep the previous best and only replace if we found
+    // something better this pass). At the cost of one extra rmatvec
+    // when the extrapolation is supplied.
+    let scale_naive = if lambda_bound > lambda {
         lambda / lambda_bound
     } else {
         1.0
     };
-    let gap = datafit
-        .lasso_dual_obj(design, beta, residual, grad.view(), scale)
-        .map(|d_at_scale| {
-            let dual = d_at_scale - penalty.dual_correction(beta);
-            let primal = datafit.value(residual) + penalty.value(beta);
-            (primal - dual).max(0.0)
-        });
+
+    let dual_correction_naive = penalty.dual_correction(beta);
+    let dual_naive = datafit
+        .lasso_dual_obj(design, beta, residual, grad.view(), scale_naive)
+        .map(|d| d - dual_correction_naive);
+
+    let dual_extrapolated = match (extrapolation, dual_naive) {
+        (Some((r_acc, beta_acc)), Some(_)) => {
+            // Compute extrapolated grad + feasibility ratio.
+            let grad_acc = datafit.full_grad(design, r_acc);
+            let mut lambda_bound_acc = 0.0_f64;
+            for j in 0..p {
+                let w = weights[j];
+                if w > 0.0 && w.is_finite() {
+                    let r_ratio = grad_acc[j].abs() / w;
+                    if r_ratio > lambda_bound_acc {
+                        lambda_bound_acc = r_ratio;
+                    }
+                }
+            }
+            let scale_acc = if lambda_bound_acc > lambda {
+                lambda / lambda_bound_acc
+            } else {
+                1.0
+            };
+            datafit
+                .lasso_dual_obj(design, beta_acc, r_acc, grad_acc.view(), scale_acc)
+                .map(|d| d - penalty.dual_correction(beta_acc))
+        }
+        _ => None,
+    };
+
+    // best_dual_obj tracks the largest D we've ever seen across this
+    // λ's outer passes. Update with both this pass's naive and (if
+    // available) extrapolated points.
+    if let Some(d) = dual_naive {
+        if d > *best_dual_obj {
+            *best_dual_obj = d;
+        }
+    }
+    if let Some(d) = dual_extrapolated {
+        if d > *best_dual_obj {
+            *best_dual_obj = d;
+        }
+    }
+
+    let gap = if best_dual_obj.is_finite() && dual_naive.is_some() {
+        let primal = datafit.value(residual) + penalty.value(beta);
+        Some((primal - *best_dual_obj).max(0.0))
+    } else {
+        None
+    };
 
     OuterState {
         violators,
@@ -577,6 +671,85 @@ fn compute_outer_state(
         gap,
         lambda_bound,
     }
+}
+
+/// Anderson extrapolation on a *pair* of parallel sequences.
+///
+/// Solves the K × K Anderson normal equations on the first sequence
+/// (the "primary" one — typically the residual `r`, mirroring celer's
+/// `last_K_R`), then applies the same coefficients to both. Returns
+/// `(seq_a_acc, seq_b_acc)` where each is `seq[K] − U_seq · c` with
+/// `c` normalised so `Σc = 1`.
+///
+/// The pair-form matters when the two sequences are linearly related
+/// — for the path solver, `r_i = X β_i − y`, so the extrapolated
+/// `(r_acc, β_acc)` automatically satisfies `r_acc = X β_acc − y`
+/// and the dual obj formula in `lasso_dual_obj` (which assumes
+/// residual ↔ parameter consistency) is still valid. Coefficients
+/// summing to 1 cancel the `y` term — that's the algebraic guarantee.
+///
+/// Both sequences must be the same length and have ≥ 3 entries.
+/// Returns `None` if the normal equations are numerically singular
+/// (degenerate input — typical when the trajectory has stalled).
+fn anderson_extrapolate_pair(
+    seq_a: &[Array1<f64>],
+    seq_b: &[Array1<f64>],
+) -> Option<(Array1<f64>, Array1<f64>)> {
+    debug_assert_eq!(seq_a.len(), seq_b.len(), "parallel sequences must align");
+    if seq_a.len() < 3 {
+        return None;
+    }
+    let n_diff = seq_a.len() - 1;
+    let p_a = seq_a[0].len();
+    let p_b = seq_b[0].len();
+
+    // U_a (p_a × K) — primary sequence's difference matrix; drives the
+    // normal equations.
+    let mut u_a = Array2::<f64>::zeros((p_a, n_diff));
+    for i in 0..n_diff {
+        for j in 0..p_a {
+            u_a[[j, i]] = seq_a[i + 1][j] - seq_a[i][j];
+        }
+    }
+
+    let mut m = u_a.t().dot(&u_a);
+    // Same Tikhonov regularisation as `cd::anderson_extrapolate`: the
+    // normal-equation matrix is severely ill-conditioned on a
+    // converging trajectory; ` reg = 1e-10 · max_diag` keeps the
+    // system solvable while biasing the result negligibly when
+    // well-conditioned. The acceptance check (whether `D` improves)
+    // guards against bad extrapolations.
+    let max_diag = (0..n_diff).map(|i| m[[i, i]]).fold(0.0_f64, f64::max);
+    if max_diag < 1e-30 {
+        return None;
+    }
+    let reg = 1e-10 * max_diag;
+    for i in 0..n_diff {
+        m[[i, i]] += reg;
+    }
+    let rhs = Array1::<f64>::ones(n_diff);
+    let c_unnorm = solve_small(m, rhs)?;
+    let sum: f64 = c_unnorm.sum();
+    if !sum.is_finite() || sum.abs() < 1e-14 {
+        return None;
+    }
+    let c = &c_unnorm / sum;
+
+    // Apply c to both sequences. Same Anderson formula as for a single
+    // sequence (`last - U · c`), independently for each.
+    let last_a = seq_a.last().unwrap();
+    let a_acc = last_a - &u_a.dot(&c);
+
+    let mut u_b = Array2::<f64>::zeros((p_b, n_diff));
+    for i in 0..n_diff {
+        for j in 0..p_b {
+            u_b[[j, i]] = seq_b[i + 1][j] - seq_b[i][j];
+        }
+    }
+    let last_b = seq_b.last().unwrap();
+    let b_acc = last_b - &u_b.dot(&c);
+
+    Some((a_acc, b_acc))
 }
 
 #[cfg(test)]
