@@ -251,6 +251,13 @@ where
         let mut residual_history: Vec<Array1<f64>> = Vec::with_capacity(DUAL_HISTORY_MAX);
         let mut best_dual_obj: f64 = f64::NEG_INFINITY;
 
+        // Gap-safe screening mask. Once a feature is marked screened,
+        // it's provably zero at this λ's optimum (FGS 2015); we keep
+        // it out of the working set for all subsequent passes at this
+        // λ. Reset per λ — the path can re-activate features at
+        // smaller λ.
+        let mut screened: Vec<bool> = vec![false; p];
+
         let (final_residual, last_report): (Array1<f64>, CdReport) = loop {
             passes += 1;
 
@@ -311,6 +318,17 @@ where
             );
             prev_outer_pgd = outer.max_pgd;
 
+            // Update the gap-safe screening mask, then prune the WS.
+            // A feature added here is provably zero at the optimum
+            // for this λ; we keep it out for all subsequent passes
+            // (`screened` is reset per λ in the outer loop).
+            if !outer.safely_inactive.is_empty() {
+                for &j in &outer.safely_inactive {
+                    screened[j] = true;
+                }
+                ws.retain(|&j| !screened[j]);
+            }
+
             // Outer convergence — gap-based early-out OR
             // prox-gradient stationarity fallback.
             //
@@ -348,7 +366,15 @@ where
                 // because `prev_outer_pgd` shrank.
                 continue;
             }
-            ws.extend(outer.violators);
+            // Filter violators by gap-safe screening (these are the
+            // features `compute_outer_state` flagged as wanting to
+            // join the WS, but if they're provably inactive at this
+            // λ's optimum we skip them).
+            for j in outer.violators {
+                if !screened[j] {
+                    ws.push(j);
+                }
+            }
             ws.sort_unstable();
             ws.dedup();
         };
@@ -554,6 +580,12 @@ struct OuterState {
     gap: Option<f64>,
     #[allow(dead_code)] // surfaced for callers that want the dual-feasibility ratio
     lambda_bound: f64,
+    /// Indices of features that are provably zero at the optimum
+    /// (`β*_j = 0`) by the gap-safe sphere theorem (Fercoq–Gramfort–
+    /// Salmon 2015). Empty when the gap isn't available — sphere
+    /// screening only applies on penalties whose lasso-form dual is
+    /// tight at the optimum.
+    safely_inactive: Vec<usize>,
 }
 
 fn compute_outer_state(
@@ -694,11 +726,48 @@ fn compute_outer_state(
         None
     };
 
+    // Gap-safe sphere screening (Fercoq–Gramfort–Salmon 2015).
+    // The optimal dual θ* lies within radius `r_safe = √(2·gap/n)` of
+    // the current θ in `ℓ_2`. Cauchy–Schwarz gives
+    //   |X_jᵀ θ*| ≤ |X_jᵀ θ| + r_safe · ‖X_j‖_2.
+    // If that upper bound is `< λ · w_j`, KKT slackness forces
+    // `β*_j = 0` — the feature is provably zero at the optimum and can
+    // be removed from the working set forever (for this λ). On the
+    // sparse-regime lasso bench this pulls features out of the WS as
+    // the gap shrinks, which is celer's main lever in that regime.
+    let n_f = design.n_samples() as f64;
+    let safely_inactive: Vec<usize> = match gap {
+        Some(g) if g > 0.0 && lambda > 0.0 => {
+            let r_safe = (2.0 * g / n_f).sqrt();
+            (0..p)
+                .filter(|&j| {
+                    let w = weights[j];
+                    if w <= 0.0 || !w.is_finite() {
+                        return false;
+                    }
+                    if beta[j] != 0.0 {
+                        // Active features can't be screened out — even
+                        // if the bound suggests inactivity, β being
+                        // non-zero here means CD will (eventually)
+                        // shrink it; we don't shortcut that. Could
+                        // also bail to β_j = 0 + adjust r in place,
+                        // but that's a bigger structural change.
+                        return false;
+                    }
+                    let col_norm = design.col_sq_norm(j).sqrt();
+                    grad[j].abs() + r_safe * col_norm < lambda * w
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+
     OuterState {
         violators,
         max_pgd,
         gap,
         lambda_bound,
+        safely_inactive,
     }
 }
 
