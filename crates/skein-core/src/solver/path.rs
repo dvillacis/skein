@@ -311,15 +311,33 @@ where
             );
             prev_outer_pgd = outer.max_pgd;
 
-            // Outer convergence: prox-gradient stationarity (penalty-
-            // agnostic, in coefficient units, commensurable with
-            // `config.cd.tol`). The duality gap (now potentially
-            // tightened by dual extrapolation) is computed as a side
-            // channel for future use (gap-safe screening); switching
-            // the outer stop to gap-based is a separate change with
-            // its own tol-units conversion to work out against the
-            // existing test corpus.
-            if outer.max_pgd < config.cd.tol {
+            // Outer convergence — gap-based early-out OR
+            // prox-gradient stationarity fallback.
+            //
+            // The unit relationship at near-optimum (LS + lasso):
+            //   gap ≈ ½ |β − β*|² · L     (objective, quadratic in coef)
+            //   max_pgd ≈ |β − β*|         (coefficient, linear)
+            //
+            // So `gap < tol²` fires roughly when `|β − β*| < tol`,
+            // matching the coefficient-tol contract `max_pgd < tol`
+            // gives — but possibly *earlier* if the dual obj has been
+            // tightened by extrapolation. For default `tol = 1e-6`
+            // the threshold `tol² = 1e-12` is reachable on
+            // well-conditioned LS problems and tends to fire ahead of
+            // the linear PGD criterion. For tight tests
+            // (`tol = 1e-12`, `1e-14`) the threshold `1e-24` /
+            // `1e-28` is below double-precision floor — gap-based
+            // exit never fires, PGD path takes over. No regression
+            // risk on tight-tol asserts; pure upside at default tol.
+            //
+            // When the gap isn't computable (logistic / Poisson /
+            // Cox / weighted LS) the conditional collapses to the
+            // existing PGD-only check.
+            let converged = match outer.gap {
+                Some(g) => g < config.cd.tol * config.cd.tol || outer.max_pgd < config.cd.tol,
+                None => outer.max_pgd < config.cd.tol,
+            };
+            if converged {
                 break (r, report);
             }
 
@@ -613,10 +631,21 @@ fn compute_outer_state(
         1.0
     };
 
-    let dual_correction_naive = penalty.dual_correction(beta);
-    let dual_naive = datafit
-        .lasso_dual_obj(design, beta, residual, grad.view(), scale_naive)
-        .map(|d| d - dual_correction_naive);
+    // Only compute the gap when the penalty actually has a lasso-form
+    // dual that's tight at its optimum. For concave penalties
+    // (MCP / SCAD / bridge with q < 1) the L1 envelope strictly
+    // upper-bounds the penalty, so `primal − D_lasso(θ)` doesn't
+    // collapse to zero at `β*` — a "gap" computed there would
+    // mislead the outer convergence check, exiting before β has
+    // actually converged.
+    let dual_naive = if penalty.has_lasso_form_dual_gap() {
+        let dual_correction_naive = penalty.dual_correction(beta);
+        datafit
+            .lasso_dual_obj(design, beta, residual, grad.view(), scale_naive)
+            .map(|d| d - dual_correction_naive)
+    } else {
+        None
+    };
 
     let dual_extrapolated = match (extrapolation, dual_naive) {
         (Some((r_acc, beta_acc)), Some(_)) => {

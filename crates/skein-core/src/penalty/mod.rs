@@ -57,6 +57,26 @@ pub trait Penalty: Sync + Send {
     fn dual_correction(&self, _beta: ArrayView1<'_, f64>) -> f64 {
         0.0
     }
+
+    /// Whether the lasso-form duality gap (built from this penalty's
+    /// `weights()` and `dual_correction()`) is a valid stopping
+    /// criterion for the path solver.
+    ///
+    /// `true` ⇒ `Penalty(β) ≤ λ · Σ w_j |β_j|` is **tight at the
+    /// solution** for any `β` — i.e. the penalty's effective L1
+    /// envelope coincides with the penalty itself in a neighbourhood
+    /// of the optimum, so `primal − D_lasso(θ)` collapses to zero at
+    /// the true `β*`. Holds for lasso / elastic net (where the
+    /// penalty *is* the L1 + L2 envelope).
+    ///
+    /// `false` ⇒ the L1 envelope is a strict upper bound on the
+    /// penalty (concave penalties: MCP / SCAD / bridge with q < 1),
+    /// so `primal − D_lasso` doesn't go to zero at `β*` and the
+    /// "gap" is misleading as a convergence test. The path solver
+    /// falls back to prox-gradient stationarity for these.
+    fn has_lasso_form_dual_gap(&self) -> bool {
+        false
+    }
 }
 
 pub trait GroupPenalty: Sync + Send {

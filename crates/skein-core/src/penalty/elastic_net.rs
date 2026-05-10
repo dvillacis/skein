@@ -112,6 +112,14 @@ impl Penalty for ElasticNet {
         }
         factor * s
     }
+
+    fn has_lasso_form_dual_gap(&self) -> bool {
+        // Elastic net's primal *is* the L1 + L2 envelope, so the
+        // lasso-form dual is tight at the solution. Pure lasso
+        // (α = 1) and pure ridge (α = 0) are both special cases of
+        // this same envelope.
+        true
+    }
 }
 
 #[cfg(test)]

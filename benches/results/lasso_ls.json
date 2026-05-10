@@ -5,17 +5,146 @@
     {
       "package": "skein",
       "version": "0.4.0",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.011211707998882048,
+      "fit_time_min_s": 0.011153540999657707,
+      "fit_time_max_s": 0.011353500001860084,
+      "trials": [
+        0.011353500001860084,
+        0.011153540999657707,
+        0.011211707998882048
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 93,
+      "size": "small",
+      "extra": {
+        "screening": "strong",
+        "info_keys": [
+          "converged",
+          "final_objs",
+          "iters",
+          "kkt_passes",
+          "working_set_sizes"
+        ],
+        "lambda_min_ratio": 0.001
+      },
+      "timestamp": "2026-05-10T14:41:10.849426+00:00"
+    },
+    {
+      "package": "sklearn",
+      "version": "1.8.0",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.0033315830005449243,
+      "fit_time_min_s": 0.0032932909998635296,
+      "fit_time_max_s": 0.00347058300030767,
+      "trials": [
+        0.00347058300030767,
+        0.0033315830005449243,
+        0.0032932909998635296
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 93,
+      "size": "small",
+      "extra": {
+        "lambda_min_ratio": 0.001
+      },
+      "timestamp": "2026-05-10T14:41:10.849426+00:00"
+    },
+    {
+      "package": "skglm",
+      "version": "0.5",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.05509133300074609,
+      "fit_time_min_s": 0.05477804200199898,
+      "fit_time_max_s": 0.055307874998106854,
+      "trials": [
+        0.055307874998106854,
+        0.05477804200199898,
+        0.05509133300074609
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 94,
+      "size": "small",
+      "extra": {
+        "lambda_min_ratio": 0.001
+      },
+      "timestamp": "2026-05-10T14:41:10.849426+00:00"
+    },
+    {
+      "package": "celer",
+      "version": "0.7.4",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.05921720900005312,
+      "fit_time_min_s": 0.05903137500354205,
+      "fit_time_max_s": 0.059456250000948785,
+      "trials": [
+        0.05903137500354205,
+        0.05921720900005312,
+        0.059456250000948785
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 93,
+      "size": "small",
+      "extra": {
+        "lambda_min_ratio": 0.001
+      },
+      "timestamp": "2026-05-10T14:41:10.849426+00:00"
+    },
+    {
+      "package": "glmnet",
+      "version": "5.0",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.007,
+      "fit_time_min_s": 0.007,
+      "fit_time_max_s": 0.007,
+      "trials": [
+        0.007,
+        0.007,
+        0.007
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 93,
+      "size": "small",
+      "extra": {
+        "via": "Rscript",
+        "lambda_min_ratio": 0.001
+      },
+      "timestamp": "2026-05-10T14:41:10.849426+00:00"
+    },
+    {
+      "package": "skein",
+      "version": "0.4.0",
       "n": 10000,
       "p": 1000,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 1.1744902079990425,
-      "fit_time_min_s": 1.1738304579994292,
-      "fit_time_max_s": 1.1749818329990376,
+      "fit_time_s": 1.2267181249990244,
+      "fit_time_min_s": 1.2121586249995744,
+      "fit_time_max_s": 1.3290067080015433,
       "trials": [
-        1.1744902079990425,
-        1.1738304579994292,
-        1.1749818329990376
+        1.2267181249990244,
+        1.2121586249995744,
+        1.3290067080015433
       ],
       "n_iter": null,
       "final_obj": null,
@@ -32,7 +161,7 @@
         ],
         "lambda_min_ratio": 0.001
       },
-      "timestamp": "2026-05-10T14:27:36.103194+00:00"
+      "timestamp": "2026-05-10T14:41:10.849426+00:00"
     },
     {
       "package": "sklearn",
@@ -41,13 +170,13 @@
       "p": 1000,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 0.12369766700066975,
-      "fit_time_min_s": 0.12267583400171134,
-      "fit_time_max_s": 0.12646295900049154,
+      "fit_time_s": 0.14917433299706317,
+      "fit_time_min_s": 0.14095737499883398,
+      "fit_time_max_s": 0.15500770900325733,
       "trials": [
-        0.12646295900049154,
-        0.12267583400171134,
-        0.12369766700066975
+        0.15500770900325733,
+        0.14917433299706317,
+        0.14095737499883398
       ],
       "n_iter": null,
       "final_obj": null,
@@ -56,7 +185,55 @@
       "extra": {
         "lambda_min_ratio": 0.001
       },
-      "timestamp": "2026-05-10T14:27:36.103194+00:00"
+      "timestamp": "2026-05-10T14:41:10.849426+00:00"
+    },
+    {
+      "package": "skglm",
+      "version": "0.5",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 3.4582355409984302,
+      "fit_time_min_s": 3.404839457998605,
+      "fit_time_max_s": 3.489299791999656,
+      "trials": [
+        3.4582355409984302,
+        3.489299791999656,
+        3.404839457998605
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 792,
+      "size": "medium",
+      "extra": {
+        "lambda_min_ratio": 0.001
+      },
+      "timestamp": "2026-05-10T14:41:10.849426+00:00"
+    },
+    {
+      "package": "celer",
+      "version": "0.7.4",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 2.7756411250011297,
+      "fit_time_min_s": 2.721972249997634,
+      "fit_time_max_s": 2.7925813750007364,
+      "trials": [
+        2.721972249997634,
+        2.7925813750007364,
+        2.7756411250011297
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 786,
+      "size": "medium",
+      "extra": {
+        "lambda_min_ratio": 0.001
+      },
+      "timestamp": "2026-05-10T14:41:10.849426+00:00"
     },
     {
       "package": "glmnet",
@@ -65,13 +242,13 @@
       "p": 1000,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 0.609,
-      "fit_time_min_s": 0.608,
-      "fit_time_max_s": 0.626,
+      "fit_time_s": 0.604,
+      "fit_time_min_s": 0.58,
+      "fit_time_max_s": 0.621,
       "trials": [
-        0.626,
-        0.609,
-        0.608
+        0.604,
+        0.621,
+        0.58
       ],
       "n_iter": null,
       "final_obj": null,
@@ -81,7 +258,7 @@
         "via": "Rscript",
         "lambda_min_ratio": 0.001
       },
-      "timestamp": "2026-05-10T14:27:36.103194+00:00"
+      "timestamp": "2026-05-10T14:41:10.849426+00:00"
     }
   ]
 }
