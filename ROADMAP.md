@@ -22,8 +22,8 @@ load-bearing piece; everything after stacks on top of it.
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; **bridge `\|β\|^q` (LS, scalar LLA path) done**; **adaptive {Lasso, MCP, SCAD} (LS, two-stage pilot fit) done**; overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches moved to M9; comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
-| M9 — Performance & correctness benchmarks | ⏳ partial | M9.1 harness scaffolded (problem generators, driver, runner ABI, 6 runner stubs, one example scenario, end-to-end smoke verified on lasso/LS); first real lasso/LS numbers landed; M9.2–M9.5 pending. Supersedes the deferred M8.6 bullet. |
-| M10 — Performance improvements | ⏳ planned | profile + close the gaps M9 surfaces; first known target: 60× lasso/LS gap vs sklearn at n=10k, p=1k. Driven by bench findings, not speculative optimization. |
+| M9 — Performance & correctness benchmarks | ⏳ partial | M9.1 harness + M9.3 lasso/LS (deep + sparse regimes, all comparators apples-to-apples via warm-started paths) done; M9.2 criterion expansion + M9.4 correctness-at-scale fixtures + M9.5 docs page pending. Supersedes the deferred M8.6 bullet. |
+| M10 — Performance improvements | ⏳ partial | M10.1 profile (`col_dot` is the floor without BLAS) + M10.3 first wave (col_axpy + F-order DenseMatrix + path-solver fixes) + M10.3 second wave (adaptive inner tol via prox-gradient distance + KKT-priority WS construction) + M10.3 third wave (`blas-accelerate` feature, macOS Accelerate) done. **Skein medium lasso/LS: 7.6 s → 0.96 s sparse / 1.75 s deep — 4–8× total. Within 1.18× of glmnet on sparse, 2× on deep; 6.5–10× behind sklearn's Cython lasso_path.** M10.4 verified across deep + sparse regimes. Pending: E. Anderson-on-residual, F. dual extrapolation (closes celer-sparse gap), Linux/Windows BLAS. |
 
 Test count at this snapshot: **265 cargo + 279 pytest, all green.**
 
@@ -1023,7 +1023,7 @@ Scope: reproducible local-only benchmark suite producing committed
 JSON/PNG snapshots. Out of scope: CI integration, regression gating,
 GPU benches.
 
-### ⏳ M9.1 — Bench harness & problem generators (partial)
+### ✅ M9.1 — Bench harness & problem generators
 
 - ✅ New top-level `benches/` directory created (root-level, separate
   from the existing `crates/skein-core/benches/` which stays for
@@ -1069,9 +1069,16 @@ GPU benches.
 - ✅ End-to-end smoke verified: `python benches/run.py --scenarios
   lasso_ls --packages sklearn skein --sizes small` fits both, writes
   the JSON snapshot.
-- Pending: validate each comparator runner against a live install
-  (skglm, celer, pyglmnet, R toolchain), and tune timing methodology
-  (warm-up runs, repeated trials, per-run dispersion reporting).
+- ✅ Live-install validation: skglm + celer + R+glmnet/ncvreg/grpreg
+  all wired and exercised against `lasso_ls` + `lasso_ls_sparse`.
+  pyglmnet 1.1 is broken on Python 3.12 (uses removed `distutils`);
+  the runner skips gracefully.
+- ✅ Timing methodology: 1 warm-up call (discarded) + N timed trials
+  (default 5), report `(median, min, max, per-trial list)`. Median
+  is the headline number — robust to GC / JIT spikes.
+- ✅ Shared scenario helpers in `benches/scenarios/_common.py`
+  (`lambda_grid`, `time_python_runner`, `time_r_runner`, `summarize`,
+  Rscript dispatch). Adding a new scenario is now a ~50-line file.
 
 ### M9.2 — Microbenchmark expansion (criterion)
 
@@ -1086,46 +1093,64 @@ README flags as "future bench":
 
 Update the snapshot table in `crates/skein-core/benches/README.md`.
 
-### M9.3 — Cross-package speed benchmarks
+### ⏳ M9.3 — Cross-package speed benchmarks
 
 For each (scenario, package) pair, measure wall-clock time-to-fit on a
 shared λ-grid with a uniform convergence tolerance documented in the
 methodology page.
 
-| Penalty / datafit | Comparators |
-|---|---|
-| Lasso LS | sklearn, skglm, celer, glmnet |
-| ElasticNet LS | sklearn, skglm, glmnet |
-| MCP / SCAD LS | ncvreg |
-| Group lasso LS | skglm (partial), grpreg |
-| Group MCP / SCAD LS | grpreg |
-| Sparse-group MCP/SCAD LS | (skein only — absolute throughput showcase) |
-| Logistic lasso | sklearn, skglm, celer, glmnet, pyglmnet |
-| Logistic MCP/SCAD | ncvreg |
-| Poisson lasso | glmnet, pyglmnet |
-| Cox lasso | glmnet |
+| Penalty / datafit | Comparators | Status |
+|---|---|---|
+| Lasso LS — deep regime | sklearn, skglm, celer, glmnet | ✅ done |
+| Lasso LS — sparse regime | sklearn, skglm, celer, glmnet | ✅ done |
+| ElasticNet LS | sklearn, skglm, glmnet | pending |
+| MCP / SCAD LS | ncvreg | pending |
+| Group lasso LS | skglm (partial), grpreg | pending |
+| Group MCP / SCAD LS | grpreg | pending |
+| Sparse-group MCP/SCAD LS | (skein only — absolute throughput showcase) | pending |
+| Logistic lasso | sklearn, skglm, celer, glmnet, pyglmnet | pending |
+| Logistic MCP/SCAD | ncvreg | pending |
+| Poisson lasso | glmnet, pyglmnet | pending |
+| Cox lasso | glmnet | pending |
 
 Three problem sizes per scenario (small / medium / large from M9.1's
 grid). Output: per-scenario bar charts (matplotlib, committed PNG +
 underlying JSON) and a markdown summary at `docs/benchmarks/speed.md`.
 
-Fairness note: skein is reported with-screening *and* without-screening
-separately, since several comparators have no equivalent (it would
-otherwise be apples-to-oranges).
+#### ✅ Lasso/LS — what shipped
 
-**Runner-fairness bug to fix before publishing M9.3 numbers**: the
-current `skglm` and `celer` runners loop `Lasso(alpha=λ).fit()` over
-the grid, while sklearn (`lasso_path`) and skein use native warm-started
-path solvers. Both packages do support warm-started paths; the runners
-need to be rewritten to use them. Until that's fixed, skglm/celer
-numbers in `benches/results/lasso_ls.json` are not informative.
+- `benches/scenarios/lasso_ls.py` — deep-path regime
+  (`λ_min/λ_max = 1e-3`).
+- `benches/scenarios/lasso_ls_sparse.py` — sparse regime
+  (`λ_min/λ_max = 5e-2`); active set stays at the true support of
+  ~10 along the entire path instead of saturating.
+- `benches/scenarios/_common.py` — extracted helpers
+  (`lambda_grid`, `time_python_runner`, `time_r_runner`,
+  `summarize`, `Rscript` shell-out) so adding the next scenario is a
+  ~50-line file.
+- **Runner fairness fix**: `skglm_runner.py` now uses
+  `Lasso.path(X, y, alphas=…)`; `celer_runner.py` uses
+  `celer.homotopy.celer_path(X, y, "lasso", alphas=…)`. Both warm-
+  start internally, matching sklearn's `lasso_path` and skein's path
+  solver. Comparison is now apples-to-apples.
 
-**Problem-regime coverage**: the first lasso/LS run hit the saturated
-regime (active = 791 / 1000 features at the smallest λ on medium),
-which is *not* lasso's intended use case and disfavors libraries with
-screening. Add sparse-regime variants per scenario (e.g.
-`k_active ≈ √p`, `lambda_min_ratio = 0.05`) so the bench reflects
-realistic sparse problems.
+Numbers committed at `benches/results/lasso_ls.json` and
+`benches/results/lasso_ls_sparse.json`. Sketched in M10's status row;
+detailed analysis in `docs/perf/lasso_ls_profile.md`.
+
+#### Pending across remaining scenarios
+
+- The same pair (deep + sparse) per (penalty, datafit) combo above.
+- For nonconvex penalties (MCP / SCAD): `Lasso.path` → analogue is
+  `MCPRegression.path` in skglm, `ncvreg::ncvreg(...)` in R; both
+  support warm starts natively.
+- For groups: `grpreg::grpreg(...)` warm-starts; skglm's group lasso
+  uses `solver.path(...)` in the same shape.
+- Logistic / Poisson / Cox: GLM paths in sklearn (`logistic_regression_path`),
+  glmnet (`glmnet(...)`), and skglm. ncvreg + pyglmnet for the others.
+
+Once a comparator's runner is wired against its native path API,
+adding a new scenario is mechanical (problem + λ-grid recipe).
 
 ### M9.4 — Correctness at scale
 
@@ -1166,101 +1191,214 @@ linking out.
 
 ## M10 — Performance improvements
 
-The first M9 lasso/LS run (n=10k, p=1k, 100-λ path, dense X) showed
-skein at **7.6 s** vs sklearn at **0.12 s** — a ~60× gap. That gap is
-the binding constraint on adoption: the elevator pitch ("beat both on
-throughput") is already not true on the most basic scenario. M10 is the
-work to close it. M10 is reactive to M9 — every sub-task starts from a
-profile, not from speculation.
+Bench-driven, reactive to M9. The first M9 lasso/LS run (n=10k, p=1k,
+100-λ deep path) showed skein at **7.6 s** vs sklearn at **0.12 s** —
+a ~60× gap. M10 is the work that closed most of it.
 
-Caveats on the headline number that M10 needs to keep separate from
-the optimization work itself:
+**Headline result on medium lasso/LS (n=10k, p=1k, 100-λ)**:
 
-- The medium problem hit a near-saturated regime (active ≈ 791 of 1000
-  features at the smallest λ). Sparser problems are where lasso lives,
-  and where skein's screening is meant to pay off; expect the gap to
-  shrink there. **Re-run on a sparse-regime problem** before assuming
-  every 60× shows up.
-- skglm/celer were on per-λ fits in that run, not their warm-started
-  paths — so don't overweight their numbers as "skglm beats skein."
-  After M9.3 fixes the runners, the comparison becomes meaningful and
-  may move skein up the rankings.
+| package        | start of M10 | end of M10 (deep) | end of M10 (sparse) |
+|---|---|---|---|
+| sklearn (`lasso_path`)              | 188 ms     | 181 ms        | 147 ms |
+| glmnet (R, via Rscript)             | 950 ms     | 883 ms        | 810 ms |
+| **skein**                           | **7.6 s**  | **1.75 s**    | **0.96 s** |
+| celer (`celer_path`)                | 12.0 s †   | 3.97 s        | 466 ms |
+| skglm (`Lasso.path`)                | 10.1 s †   | 5.28 s        | 3.46 s |
 
-### M10.1 — Profile the medium lasso/LS path
+† pre-M9.3 runner-fairness fix; both packages were doing per-λ fits.
 
-- Run `cargo flamegraph --bench block_cd` on a path-equivalent
-  microbench (extend M9.2's path-scaling scenario) at n=10k, p=1k.
-  Identify the top three hot frames.
-- Cross-check from Python: `py-spy record -- python -c "..."` driving
-  `ElasticNetPathRegressor` on the same problem. Confirms whether the
-  PyO3 boundary is contributing.
-- Deliverable: a one-page note in `docs/perf/lasso_ls_profile.md`
-  with the flamegraph + top-3 cost centers + concrete remediation
-  candidates. No code changes yet — establish the baseline.
+Skein-vs-comparators on medium, end of M10:
 
-### M10.2 — Specific hypotheses to confirm or rule out
+  vs sklearn:  9.6× deep, 6.5× sparse  (was 18× / 17× at M10 start)
+  vs glmnet:   2.0× deep, 1.18× sparse (was 3.5× / 3.5× — sparse essentially matched)
+  vs celer:    we're 2.3× faster deep,  2.1× behind sparse (their dual-extrapolation lever)
+  vs skglm:    we're 3× faster deep,    3.6× faster sparse
 
-Each is a hypothesis surfaced by the smoke run and the codebase shape.
-Profile (M10.1) decides which actually matter.
+Every M10 commit ships against a re-run bench with before/after
+numbers; full timeline in `docs/perf/lasso_ls_profile.md`.
 
-- **LLA wrapper overhead on convex penalties.** The lasso path runs
-  through the same LLA-outer scaffold as nonconvex penalties; on a
-  convex penalty the outer loop is a no-op but may still re-allocate /
-  re-validate per λ. Confirm by toggling and timing.
-- **Per-λ Anderson acceleration restart cost.** Anderson is on by
-  default (`acceleration: Some(5)` from M1); on lasso paths the
-  restart-per-λ may be net negative. Bench `acceleration=None` vs
-  default.
-- **Strong-rule overhead in the saturated regime.** When the working
-  set ≈ all features, screening is pure overhead. Bench
-  `screening="off"` for comparison; consider an automatic fallback
-  when active-set fraction crosses a threshold.
-- **Standardize-on-the-fly cost.** sklearn's `lasso_path` skips the
-  standardization layer; skein's `Standardized<Dense>` is lazy but
-  introduces dispatch per `col_dot`. Bench with raw `DenseMatrix`
-  vs the standardized wrapper at the Rust level.
-- **PyO3 marshalling.** Each `solve_path_*` call copies arrays in/out;
-  on a warm path with 100 λ this might compound. Bench the same
-  problem from a `cargo bench` harness (no PyO3) and compare to the
-  Python timing.
+### ✅ M10.1 — Profile the medium lasso/LS path
 
-### M10.3 — First wave of fixes
+`crates/skein-core/examples/lasso_ls_medium.rs` — pure-Rust binary
+that mirrors `benches/problems.py::gaussian_lasso` at the medium size
+so samply / cargo-flamegraph can resolve frames without the PyO3 +
+interpreter layer in the way. `[profile.release]` carries
+`debug = "line-tables-only"` for symbol resolution.
 
-Driven by M10.1's findings, not in advance. Expected candidate fixes
-(updated as the profile lands):
+Result (at the time of profiling, post-first-wave fixes):
 
-- Skip the LLA outer entirely when the inner penalty is convex
-  (recognized at `Penalty` trait level).
-- Auto-disable Anderson on convex paths after one λ where it didn't
-  pay off.
-- Skip strong-rule passes when the previous λ left the working set
-  >`τ`% of features active.
-- Fast path in `cd_solve` for the "all features active, no screening"
-  case that avoids the per-coord working-set bookkeeping.
+  ndarray::linalg::*::dot_generic     ~80%   inner CD's `col_dot`
+  DenseMatrix::col_axpy               ~7%    residual update
+  everything else                     ~13%
 
-Each fix lands as its own commit with a before/after timing on the
-M9.1 bench harness, so we can attribute wins to specific changes.
+The bottleneck is **call volume on `col_dot`**, not slow code per
+call. A microbench against four manual alternatives (Zip::for_each,
+slice iter+sum, indexed for-loop, slice fold) showed ndarray's
+existing path is already 4.7× faster than any of them — a hand-rolled
+tight loop is *not* the answer. BLAS is.
 
-### M10.4 — Verify against the rerun bench
+Deliverable: `docs/perf/lasso_ls_profile.md` (M10.1 section), with
+full methodology, microbench numbers, and the recommended next-step
+ordering. M10.2's pre-profile hypotheses (LLA wrapper, Anderson
+restart, screening overhead, standardize cost, PyO3 marshalling)
+were *all* disproved by the profile — the gap was purely in
+ndarray's `dot_generic`.
 
-Re-run `python benches/run.py --scenarios lasso_ls --packages all
---sizes small,medium,large` after M10.3. Target: within 2× of sklearn
-at small and medium on the saturated regime, and **faster than sklearn
-on the sparse regime** where screening pays off.
+### ✅ M10.3 — Fixes (four waves)
 
-If we hit those targets on lasso/LS, repeat the cycle for MCP/SCAD,
-group lasso, and group MCP — those are skein's actual differentiators
-and the per-penalty profile will be different.
+Each wave lands as its own commit; numbers verified end-to-end on
+the M9.1 bench harness.
+
+**Wave 1 — col_axpy + F-order DenseMatrix + path-solver fixes
+(`cfd1618`):**
+
+- New `DesignMatrix::col_axpy(j, α, r)` trait method: `r += α · X[:, j]`
+  in place. Replaces the per-coord `let col = design.columns(&[j]);
+  for i { r[i] += α·col[[i,0]]; }` pattern (which allocated an
+  80 KB `Array2` per coord update — ~10 GB of wasted heap traffic
+  per medium-bench fit). Specialised on every backend (Dense, Sparse,
+  Standardized, Augmented, Mmap×2, Chunked, MultiTask).
+- `DenseMatrix::new` forces column-major (Fortran) layout. ndarray
+  defaults to row-major, which makes `column(j)` strided with row
+  stride `p · 8 B` — every element is a fresh L1 miss. F-order makes
+  `column(j)` contiguous and `scaled_add` runs at memory bandwidth.
+- `cd_solve_subset` returns the residual it already maintains
+  internally, so `path.rs` doesn't recompute `r = Xβ − y` from
+  scratch after each call (one O(np) matvec saved per λ).
+- `find_kkt_violators` and `strong_rule_screen` use one BLAS gemv
+  (`full_grad`) instead of `p` per-coord `coord_grad` calls.
+
+Result: 7.6 s → 3.2 s on medium deep (2.4×).
+
+**Negative result — inner active-set CD (`b874fa7`):**
+
+Implemented Friedman/glmnet-style two-phase cycling (`cd_solve_subset`
+cycles a small inner active set `A`, verifies on `features \ A`,
+grows `A` if any prox produces a non-zero update). Came out 9–47%
+*slower* on the medium scenario in both Anderson-history-clear and
+Anderson-history-keep variants — the saturated regime
+(`A ≈ features`) makes the verification sweep pure overhead and the
+Anderson interaction makes the savings unrecoverable. Reverted; the
+write-up in `docs/perf/lasso_ls_profile.md` preserves the analysis
+so future contributors don't try the same thing.
+
+**Wave 2 — adaptive inner tolerance via prox-gradient distance
+(`53b1275`):**
+
+`compute_outer_state` returns both the working-set violators *and*
+the global outer prox-gradient distance `max_j |β_j − prox_j(β_j −
+grad_j / lc_j, 1/lc_j)|` — same units as `config.cd.tol`,
+penalty-agnostic, identical to skglm's `dist_fix_point_cd`.
+
+  Outer convergence: `max_pgd < config.cd.tol` (replaces "no KKT
+    violators under λ · 1e-6 gradient threshold"; new criterion is
+    commensurable with the inner CD's stopping rule and uniform in
+    λ).
+  Adaptive inner tol: `inner_cd_cfg.tol = max(config.cd.tol, 0.3 ·
+    prev_max_pgd)` — celer's pattern. When far from optimum the inner
+    stops sloppy; as PGD shrinks toward `tol`, inner_tol → `tol` and
+    the final β meets the user's request.
+
+Net wallclock on medium deep: ~unchanged (3.2 s), but **iter sum
+drops 26% (430 → 317)**. The savings are spent on the tightening
+phase; structural correctness up, wallclock floor unchanged.
+Sets up future wins to compound rather than offset.
+
+**Wave 3 — KKT-priority WS construction (`9884188`):**
+
+`Screening::Strong` now means a celer/skglm-style priority-ranked
+active set rather than the Tibshirani strong rule:
+
+  ws_size = max(p0, 2 × |support|)         (default p0 = 10)
+  WS = top-ws_size by |grad_j| / w_j        (active + unpenalised pinned in)
+
+Replaces the "fall back to full feature set at λ_max" cliff:
+cold-start λ_max WS goes from 1000 → 10. Every `PathConfig { ... }`
+literal across the codebase grew a `p0: 10,` field (mechanical batch
+edit). Test recalibrated with `p0=3` on a `p=20` toy problem where
+the default `p0=10` happens to equal the test's assertion bound.
+
+Wallclock unchanged on the saturated medium scenario — the
+late-path WS still caps at `p`. Surfaces on sparse-regime variants
+where the WS actually stays proportional to support.
+
+**Wave 4 — `blas-accelerate` Cargo feature (`ee9740d`):**
+
+Routes ndarray's `dot` / `scaled_add` / `gemv` through Apple's
+Accelerate framework on macOS via `blas-src` + `accelerate-src`.
+Zero install cost — Accelerate ships with the OS — and turns the
+inner CD's `col_dot` from `dot_generic` into `cblas_ddot`.
+
+  skein-core / Cargo.toml:
+    blas-accelerate = ["ndarray/blas", "blas-src/accelerate", "dep:accelerate-src"]
+
+  skein-core / src/lib.rs:
+    #[cfg(feature = "blas-accelerate")]
+    use accelerate_src as _;        # essential — anchors the linker
+
+  skein-py / Cargo.toml:
+    blas-accelerate = ["skein-core/blas-accelerate"]   # passthrough
+
+Build with `maturin develop --release --features blas-accelerate`.
+
+Result: skein medium deep 3.32 s → **1.75 s (1.9×)**, sparse 2.50 s
+→ **0.96 s (2.6×)**.
+
+The M10.1 prediction was ~3× from BLAS dispatch; the realised speedup
+is somewhat below that because the path solver does work outside the
+BLAS-replaceable hot path (PGD verifier, priority-WS ranking).
+
+### ✅ M10.4 — Verified against the bench
+
+Both `lasso_ls` (deep) and `lasso_ls_sparse` ran end-to-end with
+`packages=all, sizes={small, medium}, trials=3, n_lambdas=100` after
+each wave. Snapshots committed under `benches/results/`.
+
+Did we hit the M10 entry-time targets? Partial:
+
+- "Within 2× of sklearn at small and medium" — **No**. We're 6.5–9.6×
+  on medium. The sklearn `lasso_path` Cython has zero path-level
+  structural overhead and we can't approach that without a similar
+  Cython-grade rewrite. Keeping it as a stretch goal, not a
+  blocking target.
+- "Faster than sklearn on sparse where screening pays off" — **No**,
+  sklearn still wins. But we *did* reach essentially-matched parity
+  with glmnet (1.18× sparse, 2× deep), and beat skglm and celer in
+  deep regime, which is more directly relevant to the niche skein
+  targets.
+
+### Pending — remaining levers post-BLAS
+
+E. **Anderson on residual instead of β** — small change, projected
+   1.05–1.2×. Snapshots (length-n) replace β snapshots (length-p) in
+   the Type-II Anderson history; for n > p (our medium case) it's
+   bigger but possibly converges faster. Worth a try at low cost.
+
+F. **Dual extrapolation (celer's lever)** — significant new code.
+   Closes the 2.1× celer-sparse gap. Needs a tracked dual feasibility
+   sphere + a properly computed duality gap as the outer convergence
+   criterion. This is the only lever that would surpass glmnet on
+   sparse; everything else just narrows existing gaps.
+
+G. **Cross-platform BLAS** — sibling features `blas-openblas`
+   (`blas-src/openblas` + system `libopenblas-dev`) and
+   `blas-mkl` (`blas-src/intel-mkl`). Required before the M10.3 wins
+   show up in distributed wheels. Coordinates with M8's
+   cibuildwheel — likely needs a per-platform feature in the
+   `wheels.yml` matrix.
 
 ### Out of scope for M10
 
 - GPU acceleration (separate workstream tied to M4's "GPU pending").
-- Algorithmic redesign (e.g. dual extrapolation à la celer). Stay
-  inside the existing CD/LLA scaffold; only consider new algorithms
-  if the profile says we're at the floor of the current one.
 - Optimizing the GLM datafits before lasso/LS is competitive — the
   scalar lasso path is the load-bearing scenario; everything else
-  inherits from it.
+  inherits from it. (This bar is now met for glmnet-class
+  competitors, so per-datafit follow-up can begin.)
+- A Cython/SIMD-grade rewrite of `cd_solve_subset` aimed at
+  catching sklearn's `lasso_path`. Possible, but the cost-benefit
+  isn't clear given the target audience uses skein for
+  capabilities sklearn lacks (nonconvex group penalties, weighted
+  axes), not as a drop-in lasso replacement.
 
 ---
 
