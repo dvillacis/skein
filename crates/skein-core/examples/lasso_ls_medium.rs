@@ -34,9 +34,7 @@ struct Xorshift {
 
 impl Xorshift {
     fn new(seed: u64) -> Self {
-        Self {
-            state: seed.max(1),
-        }
+        Self { state: seed.max(1) }
     }
 
     fn next_f64(&mut self) -> f64 {

@@ -35,7 +35,7 @@ def fit(
     tol: float,
     **_: object,
 ) -> RunResult:
-    from sklearn.linear_model import ElasticNet, Lasso, LogisticRegression, lasso_path, enet_path
+    from sklearn.linear_model import LogisticRegression, lasso_path, enet_path
 
     n = problem.x.shape[0]
     # sklearn parameterises by alpha = lambda (with the 1/(2n) loss); we pass the

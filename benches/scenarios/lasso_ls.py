@@ -17,7 +17,6 @@ calls with the same problem and λ-grid. Median is the headline number.
 
 from __future__ import annotations
 
-import numpy as np
 
 from benches.problems import SIZES, gaussian_lasso
 

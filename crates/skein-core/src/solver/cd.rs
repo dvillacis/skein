@@ -50,13 +50,8 @@ pub fn cd_solve(
     config: &CdConfig,
 ) -> (Array1<f64>, CdReport) {
     let p = design.n_features();
-    let (beta, _, report) = cd_solve_warm_with_residual(
-        Array1::<f64>::zeros(p),
-        design,
-        datafit,
-        penalty,
-        config,
-    );
+    let (beta, _, report) =
+        cd_solve_warm_with_residual(Array1::<f64>::zeros(p), design, datafit, penalty, config);
     (beta, report)
 }
 

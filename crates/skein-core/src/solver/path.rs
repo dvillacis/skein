@@ -227,9 +227,8 @@ where
         // GLM datafits compute it via a column scan, so caching avoids
         // O(p · n) work when we evaluate the prox-gradient distance over
         // the full feature set in the verifier loop below.
-        let coord_lipschitz: Vec<f64> = (0..p)
-            .map(|j| datafit.coord_lipschitz(design, j))
-            .collect();
+        let coord_lipschitz: Vec<f64> =
+            (0..p).map(|j| datafit.coord_lipschitz(design, j)).collect();
 
         let mut passes = 0usize;
         let mut inner_cd_cfg = config.cd.clone();
@@ -313,7 +312,9 @@ where
                 &coord_lipschitz,
                 lam,
                 config.cd.tol,
-                extrapolation.as_ref().map(|(r_acc, beta_acc)| (r_acc.view(), beta_acc.view())),
+                extrapolation
+                    .as_ref()
+                    .map(|(r_acc, beta_acc)| (r_acc.view(), beta_acc.view())),
                 &mut best_dual_obj,
             );
             prev_outer_pgd = outer.max_pgd;
@@ -588,6 +589,10 @@ struct OuterState {
     safely_inactive: Vec<usize>,
 }
 
+#[allow(clippy::too_many_arguments)] // Path-solver inner helper; eleven
+// args read as a single pass-through of the per-λ outer state. Wrapping
+// them in a struct just for clippy's threshold isn't worth the
+// indirection here.
 fn compute_outer_state(
     design: &dyn DesignMatrix,
     datafit: &dyn Datafit,
