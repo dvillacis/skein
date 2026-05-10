@@ -181,3 +181,44 @@ celer's dual extrapolation, or a Gram-cached CD). On a sparser-regime
 benchmark (`k_active ≈ √p`, `lambda_min_ratio = 0.05`, well short of
 saturation) inner active-set CD might still pay off; revisit when
 that scenario lands in M9.3.
+
+## Postscript — sparse-regime bench (`lasso_ls_sparse`)
+
+Added `benches/scenarios/lasso_ls_sparse.py` with `λ_min/λ_max =
+5e-2` (vs the deep-path `1e-3`). Same problem generator (`k_active=10,
+n=10k, p=1k, snr=5`); the only thing that changes is how far the path
+runs before λ stops shrinking. With the sparse grid the active set at
+the smallest λ stays at the true support size (10) instead of
+saturating to 791.
+
+This is the regime priority-WS + adaptive inner tol were designed for,
+so it's the right test of whether the M10.3 structural changes are
+delivering wallclock value the saturated regime hides.
+
+**Results (medium, n=10k, p=1k)**:
+
+| comparator | deep regime | sparse regime |
+|---|---|---|
+| sklearn (`lasso_path`)        | 18.3× slower | **17.3× slower** |
+| glmnet (R, via Rscript)       |  3.6× slower | **3.1× slower** |
+| skglm (per-λ runner — unfair) |  0.3× (we're faster) | 0.3× |
+| celer (per-λ runner — unfair) |  0.3× | 0.4× |
+
+skein medium drops from 3.29 s (deep) to **2.53 s (sparse)** — the
+priority WS keeps the working set at 10–20 features along the entire
+path (vs growing to 1000 in the deep regime), and the adaptive inner
+tol's iteration savings finally compound:
+
+  ws across path:  10–20 features   (was 10 → 1000)
+  iter sum:        304               (was 317)
+  kkt_passes sum:  100               (was 110 — every λ converges in 1 outer pass)
+
+**Honest takeaway**: the gap to glmnet narrows by ~14% and the gap to
+sklearn by ~5%. Real improvements but not the order-of-magnitude
+move. The remaining ~17× to sklearn lives in `dot_generic` per the
+M10.1 profile; sparser regimes don't change that floor.
+
+skglm and celer numbers in this table are not informative — both
+runners do per-λ `Lasso(alpha=λ).fit()` fresh, while sklearn /
+skein / glmnet use native warm-started path solvers. The comparison
+becomes meaningful once the M9.3 runner fairness fix lands.

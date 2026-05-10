@@ -1,18 +1,19 @@
-"""Lasso on Gaussian LS, *deep-path* regime.
+"""Lasso on Gaussian LS, *sparse* regime.
 
-  λ_min / λ_max = 1e-3
+  λ_min / λ_max = 5e-2
 
-This pushes the path deep enough that the active set saturates near
-λ_min — typical of "I want the entire regularisation path including
-the over-fit tail" usage. For the active-set-stays-small regime, see
-`lasso_ls_sparse`.
+The path stops near support recovery rather than running into the
+saturated tail. This is the regime lasso is actually designed for —
+small support relative to `p`, λ chosen via cross-validation in a
+range where most features stay zero. It's also where celer/skglm-style
+priority working-set CD shines (the WS stays proportional to support
+along the entire path), so it's the right scenario to verify that
+M10.3's structural changes (col_axpy + F-order DenseMatrix + adaptive
+inner tol via prox-gradient distance + KKT-priority WS construction)
+deliver on the wallclock front.
 
-Each scenario module exposes `run(runner, package, size, tol, n_lambdas,
-trials)` returning the dict that gets appended to
-`results/<scenario>.json`.
-
-Timing methodology: 1 warm-up call (discarded) + `trials` measured
-calls with the same problem and λ-grid. Median is the headline number.
+Same problem generator, runner ABI, timing methodology, and result
+schema as `lasso_ls`. Only `LAMBDA_MIN_RATIO` differs.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from . import _common
 
 PENALTY = "lasso"
 FAMILY = "gaussian"
-LAMBDA_MIN_RATIO = 1e-3
+LAMBDA_MIN_RATIO = 5e-2
 R_PACKAGES = {"r": "glmnet"}
 
 

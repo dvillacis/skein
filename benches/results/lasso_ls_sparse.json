@@ -1,5 +1,5 @@
 {
-  "scenario": "lasso_ls",
+  "scenario": "lasso_ls_sparse",
   "host_id": "darwin-arm64-MacBook-Pro-de-David-5.local",
   "runs": [
     {
@@ -9,17 +9,17 @@
       "p": 100,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 0.026958042000842397,
-      "fit_time_min_s": 0.026948374999847147,
-      "fit_time_max_s": 0.02698199999940698,
+      "fit_time_s": 0.01849808299994038,
+      "fit_time_min_s": 0.01840533399990818,
+      "fit_time_max_s": 0.01856450000013865,
       "trials": [
-        0.026948374999847147,
-        0.02698199999940698,
-        0.026958042000842397
+        0.01840533399990818,
+        0.01849808299994038,
+        0.01856450000013865
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 93,
+      "active_set_size": 10,
       "size": "small",
       "extra": {
         "screening": "strong",
@@ -30,7 +30,7 @@
           "kkt_passes",
           "working_set_sizes"
         ],
-        "lambda_min_ratio": 0.001
+        "lambda_min_ratio": 0.05
       },
       "timestamp": "2026-05-10T13:05:51.869325+00:00"
     },
@@ -41,20 +41,20 @@
       "p": 100,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 0.005417458000010811,
-      "fit_time_min_s": 0.005308458999934373,
-      "fit_time_max_s": 0.005474957999467733,
+      "fit_time_s": 0.004602332999638747,
+      "fit_time_min_s": 0.004571707999275532,
+      "fit_time_max_s": 0.004681666001488338,
       "trials": [
-        0.005474957999467733,
-        0.005417458000010811,
-        0.005308458999934373
+        0.004681666001488338,
+        0.004602332999638747,
+        0.004571707999275532
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 93,
+      "active_set_size": 10,
       "size": "small",
       "extra": {
-        "lambda_min_ratio": 0.001
+        "lambda_min_ratio": 0.05
       },
       "timestamp": "2026-05-10T13:05:51.869325+00:00"
     },
@@ -65,20 +65,20 @@
       "p": 100,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 0.14330837499983318,
-      "fit_time_min_s": 0.1431180840008892,
-      "fit_time_max_s": 0.1449328750004497,
+      "fit_time_s": 0.0936145409996243,
+      "fit_time_min_s": 0.09274133399958373,
+      "fit_time_max_s": 0.09379004200127383,
       "trials": [
-        0.1431180840008892,
-        0.14330837499983318,
-        0.1449328750004497
+        0.0936145409996243,
+        0.09274133399958373,
+        0.09379004200127383
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 93,
+      "active_set_size": 10,
       "size": "small",
       "extra": {
-        "lambda_min_ratio": 0.001
+        "lambda_min_ratio": 0.05
       },
       "timestamp": "2026-05-10T13:05:51.869325+00:00"
     },
@@ -89,20 +89,20 @@
       "p": 100,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 0.182959125000707,
-      "fit_time_min_s": 0.18208162500013714,
-      "fit_time_max_s": 0.18530933300098695,
+      "fit_time_s": 0.07802320900009363,
+      "fit_time_min_s": 0.07623637500000768,
+      "fit_time_max_s": 0.07833470800142095,
       "trials": [
-        0.18530933300098695,
-        0.182959125000707,
-        0.18208162500013714
+        0.07623637500000768,
+        0.07802320900009363,
+        0.07833470800142095
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 93,
+      "active_set_size": 10,
       "size": "small",
       "extra": {
-        "lambda_min_ratio": 0.001
+        "lambda_min_ratio": 0.05
       },
       "timestamp": "2026-05-10T13:05:51.869325+00:00"
     },
@@ -113,21 +113,21 @@
       "p": 100,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 0.011,
-      "fit_time_min_s": 0.011,
-      "fit_time_max_s": 0.012,
+      "fit_time_s": 0.009,
+      "fit_time_min_s": 0.008,
+      "fit_time_max_s": 0.009,
       "trials": [
-        0.011,
-        0.012,
-        0.011
+        0.009,
+        0.009,
+        0.008
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 93,
+      "active_set_size": 10,
       "size": "small",
       "extra": {
         "via": "Rscript",
-        "lambda_min_ratio": 0.001
+        "lambda_min_ratio": 0.05
       },
       "timestamp": "2026-05-10T13:05:51.869325+00:00"
     },
@@ -138,17 +138,17 @@
       "p": 1000,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 3.2866900829994847,
-      "fit_time_min_s": 3.286186584000461,
-      "fit_time_max_s": 3.2917642920001526,
+      "fit_time_s": 2.5292535420012427,
+      "fit_time_min_s": 2.5035595830013335,
+      "fit_time_max_s": 2.5585465419990214,
       "trials": [
-        3.2866900829994847,
-        3.286186584000461,
-        3.2917642920001526
+        2.5585465419990214,
+        2.5292535420012427,
+        2.5035595830013335
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 791,
+      "active_set_size": 10,
       "size": "medium",
       "extra": {
         "screening": "strong",
@@ -159,7 +159,7 @@
           "kkt_passes",
           "working_set_sizes"
         ],
-        "lambda_min_ratio": 0.001
+        "lambda_min_ratio": 0.05
       },
       "timestamp": "2026-05-10T13:05:51.869325+00:00"
     },
@@ -170,20 +170,20 @@
       "p": 1000,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 0.17933104199983063,
-      "fit_time_min_s": 0.178587417000017,
-      "fit_time_max_s": 0.18120770899986383,
+      "fit_time_s": 0.14589566700124124,
+      "fit_time_min_s": 0.14472758299962152,
+      "fit_time_max_s": 0.15022049999970477,
       "trials": [
-        0.178587417000017,
-        0.18120770899986383,
-        0.17933104199983063
+        0.15022049999970477,
+        0.14589566700124124,
+        0.14472758299962152
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 786,
+      "active_set_size": 10,
       "size": "medium",
       "extra": {
-        "lambda_min_ratio": 0.001
+        "lambda_min_ratio": 0.05
       },
       "timestamp": "2026-05-10T13:05:51.869325+00:00"
     },
@@ -194,20 +194,20 @@
       "p": 1000,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 10.136184957998921,
-      "fit_time_min_s": 10.071643458000835,
-      "fit_time_max_s": 10.156916665999233,
+      "fit_time_s": 7.663708250000127,
+      "fit_time_min_s": 7.644333750000442,
+      "fit_time_max_s": 7.69500062500083,
       "trials": [
-        10.071643458000835,
-        10.156916665999233,
-        10.136184957998921
+        7.69500062500083,
+        7.663708250000127,
+        7.644333750000442
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 791,
+      "active_set_size": 10,
       "size": "medium",
       "extra": {
-        "lambda_min_ratio": 0.001
+        "lambda_min_ratio": 0.05
       },
       "timestamp": "2026-05-10T13:05:51.869325+00:00"
     },
@@ -218,20 +218,20 @@
       "p": 1000,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 12.025060709000172,
-      "fit_time_min_s": 11.896207375000813,
-      "fit_time_max_s": 12.467116208999869,
+      "fit_time_s": 6.494077290999485,
+      "fit_time_min_s": 6.479613083000004,
+      "fit_time_max_s": 6.4972867500000575,
       "trials": [
-        12.025060709000172,
-        11.896207375000813,
-        12.467116208999869
+        6.479613083000004,
+        6.4972867500000575,
+        6.494077290999485
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 791,
+      "active_set_size": 10,
       "size": "medium",
       "extra": {
-        "lambda_min_ratio": 0.001
+        "lambda_min_ratio": 0.05
       },
       "timestamp": "2026-05-10T13:05:51.869325+00:00"
     },
@@ -242,21 +242,21 @@
       "p": 1000,
       "n_groups": null,
       "lambda_grid_len": 100,
-      "fit_time_s": 0.914,
-      "fit_time_min_s": 0.844,
-      "fit_time_max_s": 0.935,
+      "fit_time_s": 0.815,
+      "fit_time_min_s": 0.688,
+      "fit_time_max_s": 0.823,
       "trials": [
-        0.914,
-        0.844,
-        0.935
+        0.688,
+        0.815,
+        0.823
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 792,
+      "active_set_size": 10,
       "size": "medium",
       "extra": {
         "via": "Rscript",
-        "lambda_min_ratio": 0.001
+        "lambda_min_ratio": 0.05
       },
       "timestamp": "2026-05-10T13:05:51.869325+00:00"
     }
