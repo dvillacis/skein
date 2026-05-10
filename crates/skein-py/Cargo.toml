@@ -18,7 +18,13 @@ numpy = "0.22"
 
 [features]
 default = []
-# Forwards to `skein-core/blas-accelerate`. Build the Python wheel with
-# this feature enabled to get the BLAS-accelerated solver:
-#   maturin develop --release --features blas-accelerate
+# Forwards to `skein-core/blas-*`. Build the Python wheel with the
+# feature that matches the build platform's BLAS provider:
+#   macOS:    maturin develop --release --features blas-accelerate
+#   Linux:    maturin develop --release --features blas-openblas
+# (cibuildwheel sets these per-platform via MATURIN_PEP517_ARGS in
+# .github/workflows/wheels.yml; default build keeps the no-BLAS
+# fallback path so source-installs from PyPI still compile without
+# system BLAS.)
 blas-accelerate = ["skein-core/blas-accelerate"]
+blas-openblas = ["skein-core/blas-openblas"]

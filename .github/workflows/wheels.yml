@@ -63,9 +63,46 @@ jobs:
           CIBW_BUILD: "cp310-*"
           CIBW_SKIP: "*-musllinux_*"
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
-          # Rust toolchain inside the manylinux container.
-          CIBW_BEFORE_ALL_LINUX: "curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable"
-          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
+
+          # ---- BLAS dispatch on the inner CD's hot path -----------
+          #
+          # ndarray's pure-Rust `dot_generic` (the no-BLAS fallback)
+          # is ~3× slower than hardware BLAS on the M10.1 profile.
+          # cibuildwheel sets `MATURIN_PEP517_ARGS` per-platform so
+          # the wheel built for each OS routes through the right
+          # BLAS provider:
+          #
+          #   macOS:    `--features=blas-accelerate`  (Apple
+          #             Accelerate, ships with the OS — zero
+          #             install).
+          #   Linux:    `--features=blas-openblas`    (system
+          #             OpenBLAS via `openblas-devel`, installed in
+          #             the manylinux container by
+          #             `CIBW_BEFORE_ALL_LINUX` below). `auditwheel`
+          #             then bundles `libopenblas.so.*` into the
+          #             wheel so the installed package is
+          #             self-contained.
+          #   Windows:  no BLAS feature for now — easy
+          #             cross-platform OpenBLAS distribution on
+          #             Windows is its own project. Wheel still
+          #             works (uses `dot_generic`), just slower.
+          CIBW_ENVIRONMENT_MACOS: 'MATURIN_PEP517_ARGS="--features=blas-accelerate"'
+          CIBW_ENVIRONMENT_LINUX: |
+            PATH="$HOME/.cargo/bin:$PATH"
+            MATURIN_PEP517_ARGS="--features=blas-openblas"
+            PKG_CONFIG_PATH="/usr/lib64/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig"
+
+          # Rust toolchain + OpenBLAS inside the manylinux container.
+          # `openblas-devel` provides `libopenblas.so` and the
+          # CBLAS headers `openblas-src` looks up via pkg-config.
+          # CentOS 7 (manylinux2014) and AlmaLinux 8 / 9
+          # (manylinux_2_28) both ship the package under that name.
+          CIBW_BEFORE_ALL_LINUX: |
+            curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+            (yum install -y openblas-devel pkgconfig 2>/dev/null) \
+              || (dnf install -y openblas-devel pkgconf-pkg-config) \
+              || (apt-get update && apt-get install -y libopenblas-dev pkg-config)
+
           # Smoke-test the wheel post-build.
           CIBW_TEST_REQUIRES: "pytest numpy scipy scikit-learn"
           CIBW_TEST_COMMAND: "pytest {project}/tests"

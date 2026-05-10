@@ -69,13 +69,25 @@ catch).
     active + unpenalised features pinned. Replaces the
     "fall-back-to-full-feature-set" cliff of the old strong rule
     at λ_max — initial WS goes from 1000 → 10 there.
-- **`blas-accelerate` Cargo feature** (skein-core + skein-py
-  passthrough). Routes ndarray's `dot` / `scaled_add` / `gemv`
-  through Apple's Accelerate framework on macOS via `blas-src`
-  + `accelerate-src`. Zero install cost — Accelerate ships with
-  the OS. Build wheels with `maturin develop --release --features
-  blas-accelerate`. Delivered the largest single speedup of M10:
-  3.32 s → 1.75 s deep (1.9 ×), 2.50 s → 0.96 s sparse (2.6 ×).
+- **`blas-accelerate` + `blas-openblas` Cargo features**
+  (skein-core + skein-py passthrough). Routes ndarray's `dot` /
+  `scaled_add` / `gemv` through hardware BLAS:
+  - `blas-accelerate` — Apple's Accelerate framework on macOS via
+    `blas-src` + `accelerate-src`. Zero install cost; ships with
+    the OS.
+  - `blas-openblas` — system OpenBLAS via `blas-src` +
+    `openblas-src/system`. Used by Linux wheels (the manylinux
+    container installs `openblas-devel`); cibuildwheel + auditwheel
+    bundles `libopenblas.so` into the wheel so the installed
+    package is self-contained.
+  Distributed wheels are built with the matching feature per
+  platform (macOS arm64 = accelerate, Linux x86_64 = openblas);
+  Windows ships without BLAS for now — wheel still works, ~3×
+  slower path. Locally, build with
+  `maturin develop --release --features blas-accelerate` (macOS)
+  or `--features blas-openblas` (Linux). Delivered the largest
+  single speedup of M10: 3.32 s → 1.75 s deep (1.9×),
+  2.50 s → 0.96 s sparse (2.6×).
 - **F-series — duality gap + dual extrapolation + gap-safe
   screening** (4 commits: `2fea09c`, `2d025d4`, `971f73d`,
   `5d3c755`). `Datafit::lasso_dual_obj` (LS overrides) +

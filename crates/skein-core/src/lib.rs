@@ -7,10 +7,12 @@
 // Anchor the BLAS provider so its build-script `cargo:rustc-link-lib`
 // directive reaches the final binary. Without an explicit `use`, rustc's
 // dead-code prune skips emitting the link line even though the crate is in
-// `Cargo.toml`. `accelerate-src` itself is empty — its only job is the
-// build-script directive — so this `use` is purely a linkage anchor.
+// `Cargo.toml`. The `*-src` crates are empty — their only job is the
+// build-script directive — so these `use`s are purely linkage anchors.
 #[cfg(feature = "blas-accelerate")]
 use accelerate_src as _;
+#[cfg(feature = "blas-openblas")]
+use openblas_src as _;
 
 pub mod datafit;
 pub mod design;

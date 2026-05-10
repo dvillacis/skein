@@ -14,15 +14,32 @@ thiserror = { workspace = true }
 memmap2 = "0.9"
 blas-src = { version = "0.11", default-features = false, optional = true }
 accelerate-src = { version = "0.3", optional = true }
+openblas-src = { version = "0.10", default-features = false, optional = true }
 
 [features]
 default = []
-# Route ndarray's `dot` / `scaled_add` / `gemv` through hardware BLAS on
-# macOS via Apple's Accelerate framework (ships with the OS, zero install
-# cost). On the medium lasso/LS bench this is roughly a 3× speedup on
-# `col_dot` per the M10.1 profile. For Linux / Windows, add a sibling
-# feature that selects a different `blas-src` provider (e.g. openblas).
+# Route ndarray's `dot` / `scaled_add` / `gemv` through hardware BLAS.
+#
+# Pick the feature that matches the platform's available BLAS:
+#
+#   blas-accelerate — macOS Accelerate framework (ships with the OS,
+#                     zero install). Used by the macOS wheel build.
+#   blas-openblas   — OpenBLAS via the system shared library. Used by
+#                     the Linux wheel build (manylinux container
+#                     installs `openblas-devel`); on a dev box install
+#                     `libopenblas-dev` (Debian/Ubuntu) or
+#                     `brew install openblas` (mac, if you don't want
+#                     Accelerate). cibuildwheel + auditwheel bundles
+#                     the libopenblas .so into the wheel so the
+#                     installed package is self-contained.
+#
+# Default build (no feature) falls back to ndarray's `matrixmultiply`
+# pure-Rust path. Correct, but ~3× slower on the M10.1 bench than
+# either BLAS path. The Windows wheel currently ships without BLAS
+# (no easy system OpenBLAS path); add a `blas-mkl-static` sibling
+# feature when there's user demand.
 blas-accelerate = ["ndarray/blas", "blas-src/accelerate", "dep:accelerate-src"]
+blas-openblas = ["ndarray/blas", "blas-src/openblas", "dep:openblas-src", "openblas-src/system"]
 
 [dev-dependencies]
 approx = "0.5"
