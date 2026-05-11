@@ -164,7 +164,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datafit::{BinomialLogit, CoxPH, PoissonLog};
+    use crate::datafit::{BinomialLogit, CoxPH, Huber, PoissonLog};
     use crate::design::{DenseMatrix, Standardized};
     use crate::penalty::Mcp;
     use approx::assert_abs_diff_eq;
@@ -753,6 +753,139 @@ mod tests {
                 k,
                 last_beta[k]
             );
+        }
+    }
+
+    // ---- Huber regression (M3.7) -----------------------------------
+
+    fn huber_problem(seed: u64) -> (DenseMatrix, Array1<f64>, Array1<f64>) {
+        // Sparse truth, then add a few large outliers to motivate Huber.
+        let n = 200;
+        let p = 10;
+        let mut state = seed.max(1);
+        let mut sample = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            ((state as f64) / (u64::MAX as f64)) * 2.0 - 1.0
+        };
+        let x = Array2::<f64>::from_shape_fn((n, p), |_| sample());
+        let mut true_beta = Array1::<f64>::zeros(p);
+        true_beta[0] = 2.0;
+        true_beta[1] = -1.5;
+        true_beta[2] = 1.0;
+        let signal = x.dot(&true_beta);
+        let mut y = signal;
+        for i in 0..n {
+            y[i] += 0.1 * sample();
+        }
+        // Inject 10 large outliers (5% contamination) at amplitude 20× noise.
+        for i in (0..10).map(|k| k * 17 % n) {
+            y[i] += 5.0 * sample().signum();
+        }
+        (DenseMatrix::new(x), y, true_beta)
+    }
+
+    #[test]
+    fn huber_prox_newton_recovers_signal_at_small_lambda() {
+        let (design, y, true_beta) = huber_problem(11);
+        // δ ≈ 1.345·σ recovers the 95%-efficient setting at the normal.
+        let glm = Huber::new(y, 1.345);
+        let p = design.n_features();
+        let (beta, report) = prox_newton_solve(
+            &design,
+            &glm,
+            // Mcp at γ=1e6 ≈ lasso (convex inner, easier to converge).
+            &Mcp::new(0.01, 1e6, p),
+            Array1::<f64>::zeros(p),
+            &CdConfig {
+                max_iter: 5000,
+                tol: 1e-10,
+                acceleration: None,
+            },
+            20,
+            1e-7,
+        );
+        assert!(
+            report.outer_converged,
+            "Huber prox-Newton should converge in ≤ 20 outer iters (got {})",
+            report.outer_iters
+        );
+        for k in 0..3 {
+            assert_eq!(
+                beta[k].signum(),
+                true_beta[k].signum(),
+                "feature {} sign mismatch: β = {}",
+                k,
+                beta[k]
+            );
+        }
+    }
+
+    #[test]
+    fn huber_prox_newton_at_lambda_max_returns_zero() {
+        let (design, y, _) = huber_problem(12);
+        let glm = Huber::new(y, 1.345);
+        let p = design.n_features();
+        // λ_max from the Huber surrogate at β = 0.
+        let surr0 = glm.surrogate_at(&design, Array1::<f64>::zeros(p).view());
+        let weights = Array1::<f64>::ones(p);
+        let lam_max = lambda_max(&design, &surr0, weights.view());
+        let (beta, _) = prox_newton_solve(
+            &design,
+            &glm,
+            &Mcp::new(lam_max, 1e6, p),
+            Array1::<f64>::zeros(p),
+            &CdConfig {
+                max_iter: 1000,
+                tol: 1e-8,
+                acceleration: None,
+            },
+            10,
+            1e-7,
+        );
+        for k in 0..p {
+            assert_abs_diff_eq!(beta[k], 0.0, epsilon = 1e-6);
+        }
+    }
+
+    #[test]
+    fn huber_large_delta_matches_least_squares() {
+        // δ chosen far above the largest residual ⇒ Huber ≡ LS, so the
+        // prox-Newton fit should match a direct LS solve at the same λ.
+        let (design, y, _) = huber_problem(13);
+        let p = design.n_features();
+        let glm = Huber::new(y.clone(), 1e3);
+        let (beta_huber, report) = prox_newton_solve(
+            &design,
+            &glm,
+            &Mcp::new(0.01, 1e6, p),
+            Array1::<f64>::zeros(p),
+            &CdConfig {
+                max_iter: 5000,
+                tol: 1e-10,
+                acceleration: None,
+            },
+            10,
+            1e-8,
+        );
+        assert!(report.outer_converged);
+        // Direct LS at the same λ via cd_solve.
+        use crate::datafit::LeastSquares;
+        use crate::solver::cd::cd_solve;
+        let ls = LeastSquares::new(y);
+        let (beta_ls, _) = cd_solve(
+            &design,
+            &ls,
+            &Mcp::new(0.01, 1e6, p),
+            &CdConfig {
+                max_iter: 5000,
+                tol: 1e-10,
+                acceleration: None,
+            },
+        );
+        for k in 0..p {
+            assert_abs_diff_eq!(beta_huber[k], beta_ls[k], epsilon = 1e-5);
         }
     }
 }

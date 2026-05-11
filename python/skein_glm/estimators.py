@@ -50,6 +50,42 @@ def _validate_y_nonneg(y_arr):
         raise ValueError("Poisson regression requires y ≥ 0 (finite)")
 
 
+def _validate_sample_weights(sw, x):
+    """Coerce optional per-sample weights into a contiguous float64
+    array; validate length, finiteness, and non-negativity.
+
+    Returns `None` when no weights were supplied. Length is read from
+    whichever attribute the design exposes (`n_rows` for chunked/mmap,
+    `shape[0]` otherwise)."""
+    if sw is None:
+        return None
+    sw_arr = np.ascontiguousarray(sw, dtype=np.float64)
+    n = x.n_rows if (_is_chunked(x) or _is_mmap(x)) else x.shape[0]
+    if sw_arr.ndim != 1 or sw_arr.shape[0] != n:
+        raise ValueError(
+            f"sample_weights must be 1D with length {n}, got shape {sw_arr.shape}"
+        )
+    if not np.all(np.isfinite(sw_arr)) or np.any(sw_arr < 0.0):
+        raise ValueError("sample_weights must be finite and non-negative")
+    return sw_arr
+
+
+def _reject_sample_weights_on_non_dense(sw, x, *, estimator_kind: str):
+    """Per-sample weights are wired only on the dense PyO3 entries in
+    this round. Raise a helpful error if the user combines them with
+    sparse / chunked / mmap X — the latter would silently drop the
+    kwarg and return the unweighted answer, which is the original
+    "couldn't see the effect" symptom."""
+    if sw is None:
+        return
+    if _is_sparse(x) or _is_chunked(x) or _is_mmap(x):
+        raise NotImplementedError(
+            f"{estimator_kind}: sample_weights is currently supported only for "
+            "dense X (sparse / chunked / mmap pending). Convert with `x.toarray()` "
+            "or leave sample_weights unset."
+        )
+
+
 def _as_csc_arrays(x):
     """Return `(data, indices, indptr, n_rows, n_cols)` from a scipy
     sparse matrix in CSC layout. Converts other sparse formats to CSC."""
@@ -596,6 +632,7 @@ class MCPPathRegressor(_PathRegressorBase):
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
         weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
         fit_intercept: bool = True,
@@ -608,6 +645,7 @@ class MCPPathRegressor(_PathRegressorBase):
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
         self.weights = weights
+        self.sample_weights = sample_weights
         self.max_iter = max_iter
         self.tol = tol
         self.fit_intercept = fit_intercept
@@ -617,6 +655,8 @@ class MCPPathRegressor(_PathRegressorBase):
 
     def fit(self, x, y: NDArray[np.float64]) -> "MCPPathRegressor":
         y = np.ascontiguousarray(y, dtype=np.float64)
+        sw = _validate_sample_weights(self.sample_weights, x)
+        _reject_sample_weights_on_non_dense(sw, x, estimator_kind="MCPPathRegressor")
         lams = (
             np.ascontiguousarray(self.lambdas, dtype=np.float64)
             if self.lambdas is not None
@@ -708,6 +748,7 @@ class MCPPathRegressor(_PathRegressorBase):
                 n_lambdas=self.n_lambdas,
                 lambda_min_ratio=self.lambda_min_ratio,
                 weights=w,
+                sample_weights=sw,
                 max_iter=self.max_iter,
                 tol=self.tol,
                 screening=self.screening,
@@ -734,6 +775,7 @@ class SCADPathRegressor(_PathRegressorBase):
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
         weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
         fit_intercept: bool = True,
@@ -746,6 +788,7 @@ class SCADPathRegressor(_PathRegressorBase):
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
         self.weights = weights
+        self.sample_weights = sample_weights
         self.max_iter = max_iter
         self.tol = tol
         self.fit_intercept = fit_intercept
@@ -755,6 +798,8 @@ class SCADPathRegressor(_PathRegressorBase):
 
     def fit(self, x, y: NDArray[np.float64]) -> "SCADPathRegressor":
         y = np.ascontiguousarray(y, dtype=np.float64)
+        sw = _validate_sample_weights(self.sample_weights, x)
+        _reject_sample_weights_on_non_dense(sw, x, estimator_kind="SCADPathRegressor")
         lams = (
             np.ascontiguousarray(self.lambdas, dtype=np.float64)
             if self.lambdas is not None
@@ -796,6 +841,7 @@ class SCADPathRegressor(_PathRegressorBase):
                 n_lambdas=self.n_lambdas,
                 lambda_min_ratio=self.lambda_min_ratio,
                 weights=w,
+                sample_weights=sw,
                 max_iter=self.max_iter,
                 tol=self.tol,
                 screening=self.screening,
@@ -877,6 +923,7 @@ class ElasticNetPathRegressor(_PathRegressorBase):
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
         weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
         fit_intercept: bool = True,
@@ -889,6 +936,7 @@ class ElasticNetPathRegressor(_PathRegressorBase):
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
         self.weights = weights
+        self.sample_weights = sample_weights
         self.max_iter = max_iter
         self.tol = tol
         self.fit_intercept = fit_intercept
@@ -898,6 +946,8 @@ class ElasticNetPathRegressor(_PathRegressorBase):
 
     def fit(self, x, y: NDArray[np.float64]) -> "ElasticNetPathRegressor":
         y = np.ascontiguousarray(y, dtype=np.float64)
+        sw = _validate_sample_weights(self.sample_weights, x)
+        _reject_sample_weights_on_non_dense(sw, x, estimator_kind="ElasticNetPathRegressor")
         lams = (
             np.ascontiguousarray(self.lambdas, dtype=np.float64)
             if self.lambdas is not None
@@ -938,6 +988,7 @@ class ElasticNetPathRegressor(_PathRegressorBase):
                 n_lambdas=self.n_lambdas,
                 lambda_min_ratio=self.lambda_min_ratio,
                 weights=w,
+                sample_weights=sw,
                 max_iter=self.max_iter,
                 tol=self.tol,
                 screening=self.screening,
@@ -1152,6 +1203,17 @@ def _glm_dispatch_inputs(
     offset = getattr(estimator, "offset", None)
     if offset is not None:
         common["offset"] = np.ascontiguousarray(offset, dtype=np.float64)
+
+    # Per-sample weights — opt-in per estimator. Validated against the
+    # design's row count; only forwarded into the `_core` call when
+    # actually set, since most estimators won't accept the kwarg yet.
+    sample_weights = getattr(estimator, "sample_weights", None)
+    sw_arr = _validate_sample_weights(sample_weights, x)
+    if sw_arr is not None:
+        _reject_sample_weights_on_non_dense(
+            sw_arr, x, estimator_kind=type(estimator).__name__
+        )
+        common["sample_weights"] = sw_arr
 
     if _is_sparse(x):
         y_arr = np.ascontiguousarray(y, dtype=np.float64)
@@ -2381,6 +2443,7 @@ class LogisticMCPPathRegressor(_LogisticPathRegressorBase):
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
         weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
         fit_intercept: bool = True,
@@ -2394,6 +2457,7 @@ class LogisticMCPPathRegressor(_LogisticPathRegressorBase):
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
         self.weights = weights
+        self.sample_weights = sample_weights
         self.max_iter = max_iter
         self.tol = tol
         self.fit_intercept = fit_intercept
@@ -2403,6 +2467,9 @@ class LogisticMCPPathRegressor(_LogisticPathRegressorBase):
         self.outer_tol = outer_tol
 
     def fit(self, x, y) -> "LogisticMCPPathRegressor":
+        _reject_sample_weights_on_non_dense(
+            self.sample_weights, x, estimator_kind="LogisticMCPPathRegressor"
+        )
         if _is_chunked(x):
             y_arr = np.ascontiguousarray(y, dtype=np.float64)
             if y_arr.ndim != 1 or y_arr.shape[0] != x.n_rows:
@@ -2560,6 +2627,7 @@ class LogisticSCADPathRegressor(_LogisticPathRegressorBase):
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
         weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
         fit_intercept: bool = True,
@@ -2573,6 +2641,7 @@ class LogisticSCADPathRegressor(_LogisticPathRegressorBase):
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
         self.weights = weights
+        self.sample_weights = sample_weights
         self.max_iter = max_iter
         self.tol = tol
         self.fit_intercept = fit_intercept
@@ -3339,6 +3408,7 @@ class PoissonMCPPathRegressor(_PoissonPathRegressorBase):
         lambda_min_ratio: float = 1e-3,
         offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
         fit_intercept: bool = True,
@@ -3353,6 +3423,7 @@ class PoissonMCPPathRegressor(_PoissonPathRegressorBase):
         self.lambda_min_ratio = lambda_min_ratio
         self.offset = offset
         self.weights = weights
+        self.sample_weights = sample_weights
         self.max_iter = max_iter
         self.tol = tol
         self.fit_intercept = fit_intercept
@@ -3446,6 +3517,7 @@ class PoissonSCADPathRegressor(_PoissonPathRegressorBase):
         lambda_min_ratio: float = 1e-3,
         offset: NDArray[np.float64] | None = None,
         weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
         max_iter: int = 100,
         tol: float = 1e-6,
         fit_intercept: bool = True,
@@ -3460,6 +3532,7 @@ class PoissonSCADPathRegressor(_PoissonPathRegressorBase):
         self.lambda_min_ratio = lambda_min_ratio
         self.offset = offset
         self.weights = weights
+        self.sample_weights = sample_weights
         self.max_iter = max_iter
         self.tol = tol
         self.fit_intercept = fit_intercept
@@ -4970,6 +5043,297 @@ class CoxSparseGroupSCADPathRegressor(_CoxGroupPathBase):
                 x_arr, t_arr, e_arr, g_arr, **common
             )
         self.coefs_ = coefs
+        self.lambdas_ = lambdas_used
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
+# =====================================================================
+# Huber regression via prox-Newton (M3.7)
+# =====================================================================
+#
+# Huber is robust LS: the loss is quadratic for residuals within ±δ
+# and linear outside, downweighting outliers. Under prox-Newton this
+# is iteratively re-weighted least squares with weights `1` if
+# `|r_i| ≤ δ` else `δ/|r_i|`, so the M1/M2 inner CD machinery applies
+# unchanged via the GlmDatafit trait.
+#
+# δ is required (no default): users should set it to a robust scale
+# estimate of the residual, e.g. 1.345 · σ_MAD(y) for 95% asymptotic
+# efficiency at the normal (Huber, 1981). It is a *fixed* hyperparameter
+# during a single fit; cross-validating over a few δ values is common.
+
+
+def _validate_y_finite(y_arr):
+    if not np.all(np.isfinite(y_arr)):
+        raise ValueError("Huber regression requires finite y (no NaN, no ±∞)")
+
+
+class _HuberRegressorBase(BaseEstimator, RegressorMixin):
+    """Single-λ Huber estimator; subclasses pick the penalty."""
+
+    coef_: NDArray[np.float64]
+    intercept_: float
+    info_: dict[str, Any]
+    n_features_in_: int
+
+    def decision_function(self, x) -> NDArray[np.float64]:
+        if _is_sparse(x):
+            return np.asarray(x @ self.coef_).ravel() + self.intercept_
+        x = np.ascontiguousarray(x, dtype=np.float64)
+        return x @ self.coef_ + self.intercept_
+
+    def predict(self, x) -> NDArray[np.float64]:
+        return self.decision_function(x)
+
+
+class _HuberPathRegressorBase(BaseEstimator, RegressorMixin):
+    """λ-path Huber estimator; subclasses pick the penalty."""
+
+    coefs_: NDArray[np.float64]       # (n_lambdas, p)
+    intercepts_: NDArray[np.float64]  # (n_lambdas,)
+    lambdas_: NDArray[np.float64]
+    info_: dict[str, Any]
+    n_features_in_: int
+
+    def decision_function(self, x) -> NDArray[np.float64]:
+        """Linear scores per λ: shape (n_samples, n_lambdas)."""
+        if _is_sparse(x):
+            return np.asarray(x @ self.coefs_.T) + self.intercepts_[None, :]
+        x = np.ascontiguousarray(x, dtype=np.float64)
+        return x @ self.coefs_.T + self.intercepts_[None, :]
+
+    def predict(self, x) -> NDArray[np.float64]:
+        """ŷ per λ: shape (n_samples, n_lambdas). Mean prediction is the
+        identity here — Huber uses the identity link, the difference vs. LS
+        is purely in how residuals enter the loss."""
+        return self.decision_function(x)
+
+
+def _check_huber_dense(x) -> None:
+    if _is_sparse(x):
+        raise NotImplementedError(
+            "Sparse Huber path is not yet wired (PyO3 *_sparse entry pending). "
+            "Convert to dense via `x.toarray()` for now."
+        )
+
+
+class HuberMCPRegressor(_HuberRegressorBase):
+    """Huber-robust regression with MCP penalty at a single λ.
+
+    Parameters
+    ----------
+    lambda_ : float, default 0.1
+        Penalty strength.
+    delta : float
+        Huber threshold. Recommended starting point: `1.345 · σ_MAD(y)` for
+        95% asymptotic efficiency at the normal (Huber, 1981).
+    gamma : float, default 3.0
+        MCP nonconvexity (>1). ``gamma=1e6`` is ≈ lasso.
+    """
+
+    def __init__(
+        self,
+        lambda_: float = 0.1,
+        delta: float = 1.345,
+        gamma: float = 3.0,
+        *,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.lambda_ = lambda_
+        self.delta = delta
+        self.gamma = gamma
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y) -> "HuberMCPRegressor":
+        _check_huber_dense(x)
+        common, _payload, n_features = _glm_dispatch_inputs(
+            self, x, y, validate_y=_validate_y_finite, is_path=False,
+        )
+        common["delta"] = float(self.delta)
+        common["gamma"] = self.gamma
+        x_arr = common.pop("_x")
+        y_arr = common.pop("_y")
+        coefs, intercepts, _, info = _core.solve_huber_mcp_path(
+            x_arr, y_arr, **common
+        )
+        self.coef_ = coefs[0]
+        self.intercept_ = float(intercepts[0])
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
+class HuberMCPPathRegressor(_HuberPathRegressorBase):
+    """Huber-robust regression with MCP penalty along an entire λ-path."""
+
+    def __init__(
+        self,
+        delta: float = 1.345,
+        gamma: float = 3.0,
+        *,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.delta = delta
+        self.gamma = gamma
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.sample_weights = sample_weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y) -> "HuberMCPPathRegressor":
+        _check_huber_dense(x)
+        common, _payload, n_features = _glm_dispatch_inputs(
+            self, x, y, validate_y=_validate_y_finite, is_path=True,
+        )
+        common["delta"] = float(self.delta)
+        common["gamma"] = self.gamma
+        x_arr = common.pop("_x")
+        y_arr = common.pop("_y")
+        coefs, intercepts, lambdas_used, info = _core.solve_huber_mcp_path(
+            x_arr, y_arr, **common
+        )
+        self.coefs_ = coefs
+        self.intercepts_ = intercepts
+        self.lambdas_ = lambdas_used
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
+class HuberSCADRegressor(_HuberRegressorBase):
+    """Huber-robust regression with SCAD penalty at a single λ."""
+
+    def __init__(
+        self,
+        lambda_: float = 0.1,
+        delta: float = 1.345,
+        a: float = 3.7,
+        *,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.lambda_ = lambda_
+        self.delta = delta
+        self.a = a
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y) -> "HuberSCADRegressor":
+        _check_huber_dense(x)
+        common, _payload, n_features = _glm_dispatch_inputs(
+            self, x, y, validate_y=_validate_y_finite, is_path=False,
+        )
+        common["delta"] = float(self.delta)
+        common["a"] = self.a
+        x_arr = common.pop("_x")
+        y_arr = common.pop("_y")
+        coefs, intercepts, _, info = _core.solve_huber_scad_path(
+            x_arr, y_arr, **common
+        )
+        self.coef_ = coefs[0]
+        self.intercept_ = float(intercepts[0])
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
+class HuberSCADPathRegressor(_HuberPathRegressorBase):
+    """Huber-robust regression with SCAD penalty along an entire λ-path."""
+
+    def __init__(
+        self,
+        delta: float = 1.345,
+        a: float = 3.7,
+        *,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.delta = delta
+        self.a = a
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.sample_weights = sample_weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y) -> "HuberSCADPathRegressor":
+        _check_huber_dense(x)
+        common, _payload, n_features = _glm_dispatch_inputs(
+            self, x, y, validate_y=_validate_y_finite, is_path=True,
+        )
+        common["delta"] = float(self.delta)
+        common["a"] = self.a
+        x_arr = common.pop("_x")
+        y_arr = common.pop("_y")
+        coefs, intercepts, lambdas_used, info = _core.solve_huber_scad_path(
+            x_arr, y_arr, **common
+        )
+        self.coefs_ = coefs
+        self.intercepts_ = intercepts
         self.lambdas_ = lambdas_used
         self.info_ = info
         self.n_features_in_ = n_features

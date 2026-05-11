@@ -26,7 +26,8 @@ use pyo3::types::PyDict;
 use ndarray::{Array2, ArrayView1};
 use skein_core::{
     datafit::{
-        BinomialLogit, CoxPH, GlmDatafit, LeastSquares, MultinomialLogit, PoissonLog, TieHandling,
+        BinomialLogit, CoxPH, GlmDatafit, Huber, LeastSquares, MultinomialLogit, PoissonLog,
+        TieHandling,
     },
     design::{
         Augmented, Chunked, DenseMatrix, DesignMatrix, MmapMatrix, MmapMatrixF32, MultiTaskDesign,
@@ -147,6 +148,7 @@ fn build_path_outputs<'py, F>(
     x: PyReadonlyArray2<f64>,
     y: PyReadonlyArray1<f64>,
     weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -163,6 +165,7 @@ where
 {
     let x_arr = x.as_array().to_owned();
     let y_arr = y.as_array().to_owned();
+    let n = x_arr.nrows();
     let p = x_arr.ncols();
 
     let weights_orig = match weights {
@@ -180,13 +183,28 @@ where
         None => Array1::ones(p),
     };
 
-    let std_cfg = StandardizeConfig {
-        center_x: fit_intercept,
-        scale_x: standardize_x,
-        fit_intercept,
+    // Validate optional sample_weights up front; downstream paths reuse it.
+    let sw_arr: Option<Array1<f64>> = match sample_weights {
+        Some(sw) => {
+            let arr = sw.as_array().to_owned();
+            if arr.len() != n {
+                return Err(PyValueError::new_err(format!(
+                    "sample_weights length {} does not match n_samples {}",
+                    arr.len(),
+                    n
+                )));
+            }
+            for &v in arr.iter() {
+                if !v.is_finite() || v < 0.0 {
+                    return Err(PyValueError::new_err(
+                        "sample_weights must be finite and non-negative",
+                    ));
+                }
+            }
+            Some(arr)
+        }
+        None => None,
     };
-    let (xs, ys, stats) = standardize(x_arr.view(), y_arr.view(), &std_cfg);
-    let weights_std = rescale_weights_for_standardize(weights_orig.view(), &stats);
 
     let path_cfg = PathConfig {
         n_lambdas,
@@ -200,6 +218,57 @@ where
         screening: parse_screening(screening)?,
         p0: 10,
     };
+
+    // sample_weights path: the standardize/destandardize machinery
+    // assumes unweighted column means / y mean, which conflicts with a
+    // weighted loss. Route around it via the same augmented-intercept
+    // trick the GLM solvers use: skip standardize, append a 1s column,
+    // weight=0 on it. `standardize_x=True` would need weighted scaling
+    // (deferred); we reject the combo rather than silently giving the
+    // wrong answer.
+    if let Some(sw) = sw_arr {
+        if standardize_x {
+            return Err(PyValueError::new_err(
+                "sample_weights with standardize_x=True is not yet supported; \
+                 standardize X yourself before fitting (or fit with standardize_x=False)",
+            ));
+        }
+        let x_eff = if fit_intercept {
+            append_intercept_column(&x_arr)
+        } else {
+            x_arr
+        };
+        let pen_weights = build_logistic_penalty_weights(&Some(weights_orig), p, fit_intercept);
+        let design = DenseMatrix::new(x_eff);
+        let datafit = LeastSquares::with_sample_weights(y_arr, sw);
+        let make_pen =
+            move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, pen_weights.clone()) };
+        let (betas_aug, report) = solve_path(&design, &datafit, make_pen, &path_cfg);
+        let (coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
+
+        let info = PyDict::new_bound(py);
+        info.set_item("iters", report.iters)?;
+        info.set_item("converged", report.converged)?;
+        info.set_item("final_objs", report.final_objs)?;
+        info.set_item("working_set_sizes", report.working_set_sizes)?;
+        info.set_item("kkt_passes", report.kkt_passes)?;
+        info.set_item("sample_weights", true)?;
+
+        return Ok((
+            coefs.into_pyarray_bound(py),
+            intercepts.into_pyarray_bound(py),
+            Array1::from(report.lambdas).into_pyarray_bound(py),
+            info,
+        ));
+    }
+
+    let std_cfg = StandardizeConfig {
+        center_x: fit_intercept,
+        scale_x: standardize_x,
+        fit_intercept,
+    };
+    let (xs, ys, stats) = standardize(x_arr.view(), y_arr.view(), &std_cfg);
+    let weights_std = rescale_weights_for_standardize(weights_orig.view(), &stats);
 
     let design = DenseMatrix::new(xs);
     let datafit = LeastSquares::new(ys);
@@ -229,6 +298,7 @@ where
     n_lambdas=100,
     lambda_min_ratio=1e-3,
     weights=None,
+    sample_weights=None,
     max_iter=100,
     tol=1e-6,
     screening="strong",
@@ -246,6 +316,7 @@ fn solve_mcp_ls_path<'py>(
     n_lambdas: usize,
     lambda_min_ratio: f64,
     weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
     max_iter: usize,
     tol: f64,
     screening: &str,
@@ -258,6 +329,7 @@ fn solve_mcp_ls_path<'py>(
         x,
         y,
         weights,
+        sample_weights,
         lambdas,
         n_lambdas,
         lambda_min_ratio,
@@ -278,6 +350,7 @@ fn solve_mcp_ls_path<'py>(
     n_lambdas=100,
     lambda_min_ratio=1e-3,
     weights=None,
+    sample_weights=None,
     max_iter=100,
     tol=1e-6,
     screening="strong",
@@ -295,6 +368,7 @@ fn solve_scad_ls_path<'py>(
     n_lambdas: usize,
     lambda_min_ratio: f64,
     weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
     max_iter: usize,
     tol: f64,
     screening: &str,
@@ -307,6 +381,7 @@ fn solve_scad_ls_path<'py>(
         x,
         y,
         weights,
+        sample_weights,
         lambdas,
         n_lambdas,
         lambda_min_ratio,
@@ -327,6 +402,7 @@ fn solve_scad_ls_path<'py>(
     n_lambdas=100,
     lambda_min_ratio=1e-3,
     weights=None,
+    sample_weights=None,
     max_iter=100,
     tol=1e-6,
     screening="strong",
@@ -344,6 +420,7 @@ fn solve_elastic_net_ls_path<'py>(
     n_lambdas: usize,
     lambda_min_ratio: f64,
     weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
     max_iter: usize,
     tol: f64,
     screening: &str,
@@ -361,6 +438,7 @@ fn solve_elastic_net_ls_path<'py>(
         x,
         y,
         weights,
+        sample_weights,
         lambdas,
         n_lambdas,
         lambda_min_ratio,
@@ -2050,6 +2128,18 @@ fn validate_y_nonneg(y: ndarray::ArrayView1<'_, f64>) -> PyResult<()> {
     Ok(())
 }
 
+/// Validate that y is finite (Huber regression — any real target).
+fn validate_y_finite(y: ndarray::ArrayView1<'_, f64>) -> PyResult<()> {
+    for &v in y.iter() {
+        if !v.is_finite() {
+            return Err(PyValueError::new_err(
+                "Huber regression requires finite y (no NaN, no ±∞)",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Build a `make_glm` closure for Poisson regression that wires an
 /// optional `offset` (length-`n_samples` array, typically log-exposure)
 /// into the underlying `PoissonLog::with_offset` constructor. Returns
@@ -2085,12 +2175,56 @@ fn poisson_glm_factory(
     })
 }
 
+/// Sample-weights-aware variant of [`poisson_glm_factory`]. Used by the
+/// dense scalar Poisson MCP/SCAD path where `build_glm_path_outputs`
+/// passes `(y, Option<sw>)` to the factory; the group / sparse paths
+/// keep using the original factory because they don't (yet) take
+/// `sample_weights`.
+#[allow(clippy::type_complexity)]
+fn poisson_glm_factory_with_sw(
+    offset: Option<PyReadonlyArray1<f64>>,
+    n_samples: usize,
+) -> PyResult<impl FnOnce(Array1<f64>, Option<Array1<f64>>) -> Box<dyn GlmDatafit>> {
+    let offset_arr: Option<Array1<f64>> = match offset {
+        Some(o) => {
+            let arr = o.as_array().to_owned();
+            if arr.len() != n_samples {
+                return Err(PyValueError::new_err(format!(
+                    "offset length {} does not match n_samples {}",
+                    arr.len(),
+                    n_samples
+                )));
+            }
+            for &v in arr.iter() {
+                if !v.is_finite() {
+                    return Err(PyValueError::new_err("Poisson offset must be finite"));
+                }
+            }
+            Some(arr)
+        }
+        None => None,
+    };
+    Ok(
+        move |y_arr: Array1<f64>, sw: Option<Array1<f64>>| -> Box<dyn GlmDatafit> {
+            match (offset_arr, sw) {
+                (Some(o), Some(w)) => {
+                    Box::new(PoissonLog::with_sample_weights_and_offset(y_arr, w, o))
+                }
+                (Some(o), None) => Box::new(PoissonLog::with_offset(y_arr, o)),
+                (None, Some(w)) => Box::new(PoissonLog::with_sample_weights(y_arr, w)),
+                (None, None) => Box::new(PoissonLog::new(y_arr)),
+            }
+        },
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_glm_path_outputs<'py, F, V, G>(
     py: Python<'py>,
     x: PyReadonlyArray2<f64>,
     y: PyReadonlyArray1<f64>,
     weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
     lambdas: Option<PyReadonlyArray1<f64>>,
     n_lambdas: usize,
     lambda_min_ratio: f64,
@@ -2108,7 +2242,7 @@ fn build_glm_path_outputs<'py, F, V, G>(
 where
     F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty>,
     V: Fn(ndarray::ArrayView1<'_, f64>) -> PyResult<()>,
-    G: FnOnce(ndarray::Array1<f64>) -> Box<dyn GlmDatafit>,
+    G: FnOnce(ndarray::Array1<f64>, Option<ndarray::Array1<f64>>) -> Box<dyn GlmDatafit>,
 {
     let x_arr = x.as_array().to_owned();
     let y_arr = y.as_array().to_owned();
@@ -2122,6 +2256,28 @@ where
         )));
     }
     validate_y(y_arr.view())?;
+
+    let sw_arr: Option<Array1<f64>> = match sample_weights {
+        Some(sw) => {
+            let arr = sw.as_array().to_owned();
+            if arr.len() != n {
+                return Err(PyValueError::new_err(format!(
+                    "sample_weights length {} does not match n_samples {}",
+                    arr.len(),
+                    n
+                )));
+            }
+            for &v in arr.iter() {
+                if !v.is_finite() || v < 0.0 {
+                    return Err(PyValueError::new_err(
+                        "sample_weights must be finite and non-negative",
+                    ));
+                }
+            }
+            Some(arr)
+        }
+        None => None,
+    };
 
     let user_weights = match weights {
         Some(w) => {
@@ -2163,7 +2319,7 @@ where
     }
 
     let design = DenseMatrix::new(x_eff);
-    let glm = make_glm(y_arr);
+    let glm = make_glm(y_arr, sw_arr);
 
     let make_pen = move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, pen_weights.clone()) };
 
@@ -2235,6 +2391,7 @@ where
 #[pyo3(signature = (
     x, y, *, gamma=3.0,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    sample_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
 ))]
@@ -2248,6 +2405,7 @@ fn solve_logistic_mcp_path<'py>(
     n_lambdas: usize,
     lambda_min_ratio: f64,
     weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
     max_iter: usize,
     tol: f64,
     acceleration: Option<usize>,
@@ -2261,6 +2419,7 @@ fn solve_logistic_mcp_path<'py>(
         x,
         y,
         weights,
+        sample_weights,
         lambdas,
         n_lambdas,
         lambda_min_ratio,
@@ -2272,7 +2431,10 @@ fn solve_logistic_mcp_path<'py>(
         max_outer,
         outer_tol,
         validate_y_binary,
-        |y_arr| Box::new(BinomialLogit::new(y_arr)),
+        |y_arr, sw| match sw {
+            Some(w) => Box::new(BinomialLogit::with_sample_weights(y_arr, w)),
+            None => Box::new(BinomialLogit::new(y_arr)),
+        },
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
     )
 }
@@ -2281,6 +2443,7 @@ fn solve_logistic_mcp_path<'py>(
 #[pyo3(signature = (
     x, y, *, a=3.7,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    sample_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
 ))]
@@ -2294,6 +2457,7 @@ fn solve_logistic_scad_path<'py>(
     n_lambdas: usize,
     lambda_min_ratio: f64,
     weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
     max_iter: usize,
     tol: f64,
     acceleration: Option<usize>,
@@ -2307,6 +2471,7 @@ fn solve_logistic_scad_path<'py>(
         x,
         y,
         weights,
+        sample_weights,
         lambdas,
         n_lambdas,
         lambda_min_ratio,
@@ -2318,7 +2483,132 @@ fn solve_logistic_scad_path<'py>(
         max_outer,
         outer_tol,
         validate_y_binary,
-        |y_arr| Box::new(BinomialLogit::new(y_arr)),
+        |y_arr, sw| match sw {
+            Some(w) => Box::new(BinomialLogit::with_sample_weights(y_arr, w)),
+            None => Box::new(BinomialLogit::new(y_arr)),
+        },
+        move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
+    )
+}
+
+// ---------------------------------------------------------------------
+// Huber regression (M3.7) — robust LS via prox-Newton on a re-weighted
+// quadratic surrogate. Reuses the M3.2 / M3.4 `build_glm_path_outputs`
+// machinery verbatim; only the GLM factory and y-validator differ.
+// ---------------------------------------------------------------------
+
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, *, delta, gamma=3.0,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    sample_weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_huber_mcp_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray1<f64>,
+    delta: f64,
+    gamma: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if !delta.is_finite() || delta <= 0.0 {
+        return Err(PyValueError::new_err(
+            "Huber delta must be a positive finite number",
+        ));
+    }
+    build_glm_path_outputs(
+        py,
+        x,
+        y,
+        weights,
+        sample_weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        validate_y_finite,
+        move |y_arr, sw| match sw {
+            Some(w) => Box::new(Huber::with_sample_weights(y_arr, delta, w)),
+            None => Box::new(Huber::new(y_arr, delta)),
+        },
+        move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, *, delta, a=3.7,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    sample_weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_huber_scad_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray1<f64>,
+    delta: f64,
+    a: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if !delta.is_finite() || delta <= 0.0 {
+        return Err(PyValueError::new_err(
+            "Huber delta must be a positive finite number",
+        ));
+    }
+    build_glm_path_outputs(
+        py,
+        x,
+        y,
+        weights,
+        sample_weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        validate_y_finite,
+        move |y_arr, sw| match sw {
+            Some(w) => Box::new(Huber::with_sample_weights(y_arr, delta, w)),
+            None => Box::new(Huber::new(y_arr, delta)),
+        },
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
     )
 }
@@ -2865,6 +3155,7 @@ fn solve_logistic_sparse_group_scad_path<'py>(
 #[pyo3(signature = (
     x, y, *, gamma=3.0, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    sample_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
 ))]
@@ -2879,6 +3170,7 @@ fn solve_poisson_mcp_path<'py>(
     n_lambdas: usize,
     lambda_min_ratio: f64,
     weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
     max_iter: usize,
     tol: f64,
     acceleration: Option<usize>,
@@ -2888,12 +3180,13 @@ fn solve_poisson_mcp_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     let n = x.as_array().nrows();
-    let make_glm = poisson_glm_factory(offset, n)?;
+    let make_glm = poisson_glm_factory_with_sw(offset, n)?;
     build_glm_path_outputs(
         py,
         x,
         y,
         weights,
+        sample_weights,
         lambdas,
         n_lambdas,
         lambda_min_ratio,
@@ -2914,6 +3207,7 @@ fn solve_poisson_mcp_path<'py>(
 #[pyo3(signature = (
     x, y, *, a=3.7, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    sample_weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
     fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
 ))]
@@ -2928,6 +3222,7 @@ fn solve_poisson_scad_path<'py>(
     n_lambdas: usize,
     lambda_min_ratio: f64,
     weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
     max_iter: usize,
     tol: f64,
     acceleration: Option<usize>,
@@ -2937,12 +3232,13 @@ fn solve_poisson_scad_path<'py>(
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
     let n = x.as_array().nrows();
-    let make_glm = poisson_glm_factory(offset, n)?;
+    let make_glm = poisson_glm_factory_with_sw(offset, n)?;
     build_glm_path_outputs(
         py,
         x,
         y,
         weights,
+        sample_weights,
         lambdas,
         n_lambdas,
         lambda_min_ratio,
@@ -9710,6 +10006,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_multitask_elastic_net_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_scad_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_huber_mcp_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_huber_scad_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_group_lasso_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_group_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_logistic_sparse_group_lasso_path, m)?)?;
