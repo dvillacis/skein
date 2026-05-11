@@ -75,7 +75,7 @@
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 11,
+      "active_set_size": 10,
       "size": "small",
       "extra": {
         "lambda_min_ratio": 0.05
@@ -204,7 +204,7 @@
       ],
       "n_iter": null,
       "final_obj": null,
-      "active_set_size": 11,
+      "active_set_size": 10,
       "size": "medium",
       "extra": {
         "lambda_min_ratio": 0.05
