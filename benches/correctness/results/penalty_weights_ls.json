@@ -1,0 +1,104 @@
+{
+  "scenario": "penalty_weights_ls",
+  "timestamp": "2026-05-11T21:02:46.457701+00:00",
+  "n": 1000,
+  "p": 30,
+  "n_lambdas": 30,
+  "true_active": [
+    3,
+    7,
+    15,
+    19,
+    29
+  ],
+  "penalties": {
+    "lasso (EN \u03b1=1)": [
+      {
+        "name": "uniform_weights_equivalent",
+        "max_diff": 0.0,
+        "passed": true,
+        "tol": 1e-10
+      },
+      {
+        "name": "x_scaling_identity",
+        "max_diff": 7.077671781985373e-16,
+        "passed": true,
+        "tol": 1e-06,
+        "w_min": 0.5372372919005806,
+        "w_max": 2.8185181463129174
+      },
+      {
+        "name": "entry_lambda_scales_with_weight",
+        "feature_idx": 0,
+        "weight": 2.0,
+        "entry_lambda_unweighted": 0.04982764129625217,
+        "entry_lambda_weighted": 0.026400263428017334,
+        "ratio": 1.8873918221350958,
+        "expected_ratio": 2.0,
+        "rel_err": 0.05630408893245209,
+        "passed": true
+      },
+      {
+        "name": "infinite_weight_pins_to_zero",
+        "feature_idx": 15,
+        "max_abs_coef_j_across_path": 0.0,
+        "passed": true,
+        "tol": 1e-10
+      }
+    ],
+    "MCP \u03b3=3": [
+      {
+        "name": "uniform_weights_equivalent",
+        "max_diff": 0.0,
+        "passed": true,
+        "tol": 1e-10
+      },
+      {
+        "name": "entry_lambda_scales_with_weight",
+        "feature_idx": 0,
+        "weight": 2.0,
+        "entry_lambda_unweighted": 0.04982764129625217,
+        "entry_lambda_weighted": 0.026400263428017334,
+        "ratio": 1.8873918221350958,
+        "expected_ratio": 2.0,
+        "rel_err": 0.05630408893245209,
+        "passed": true
+      },
+      {
+        "name": "infinite_weight_pins_to_zero",
+        "feature_idx": 15,
+        "max_abs_coef_j_across_path": 0.0,
+        "passed": true,
+        "tol": 1e-10
+      }
+    ],
+    "SCAD a=3.7": [
+      {
+        "name": "uniform_weights_equivalent",
+        "max_diff": 0.0,
+        "passed": true,
+        "tol": 1e-10
+      },
+      {
+        "name": "entry_lambda_scales_with_weight",
+        "feature_idx": 0,
+        "weight": 2.0,
+        "entry_lambda_unweighted": 0.04982764129625217,
+        "entry_lambda_weighted": 0.026400263428017334,
+        "ratio": 1.8873918221350958,
+        "expected_ratio": 2.0,
+        "rel_err": 0.05630408893245209,
+        "passed": true
+      },
+      {
+        "name": "infinite_weight_pins_to_zero",
+        "feature_idx": 15,
+        "max_abs_coef_j_across_path": 0.0,
+        "passed": true,
+        "tol": 1e-10
+      }
+    ]
+  },
+  "n_pass": 10,
+  "n_total": 10
+}

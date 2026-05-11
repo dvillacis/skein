@@ -95,6 +95,36 @@ Every regressor follows the same `(datafit) × (penalty)` × `({,Path}Regressor)
 naming scheme. The path variants warm-start across λ; their `coefs_` /
 `intercepts_` (where applicable) are 2D arrays indexed by λ.
 
+## Performance
+
+skein is benchmarked against sklearn / skglm / celer / glmnet / ncvreg
+on shared λ-grids via the harness under `benches/`. Headline numbers
+(Apple M1, 16 GB; median of N timed trials after a warm-up):
+
+| scenario | size | skein | next-fastest comparator |
+|---|---|---|---|
+| Lasso LS — deep   | medium (n=10k, p=1k)  | 1.17 s     | sklearn 0.125 s |
+| Lasso LS — sparse | medium                | 0.78 s     | sklearn 0.099 s |
+| MCP   LS — deep   | medium                | **1.37 s** | skglm 3.35 s    |
+| MCP   LS — sparse | medium                | **0.75 s** | ncvreg 1.17 s   |
+| MCP   LS — deep   | large (n=100k, p=10k) | **510 s**  | skglm 666 s     |
+| MCP   LS — sparse | large                 | **497 s**  | skglm 702 s     |
+| SCAD  LS — deep   | medium                | **1.78 s** | ncvreg 7.99 s   |
+| SCAD  LS — sparse | medium                | **0.90 s** | ncvreg 1.86 s   |
+
+skein is the fastest on every nonconvex row across every size; on
+convex lasso/LS the sklearn Cython `lasso_path` remains the floor at
+~8–9× faster on the medium bench. See
+[`docs/benchmarks/mcp_ls.md`](docs/benchmarks/mcp_ls.md) and
+[`docs/benchmarks/scad_ls.md`](docs/benchmarks/scad_ls.md) for the
+full nonconvex write-ups (correctness matrices + methodology +
+per-size tables) and
+[`docs/perf/lasso_ls_profile.md`](docs/perf/lasso_ls_profile.md) for
+the lasso/LS profiling work that drove M10.
+
+Reproduce with `python benches/run.py --scenarios mcp_ls
+mcp_ls_sparse --sizes small,medium`.
+
 ## Build
 
 ```bash

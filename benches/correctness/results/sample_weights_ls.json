@@ -1,0 +1,85 @@
+{
+  "scenario": "sample_weights_ls",
+  "timestamp": "2026-05-11T21:23:05.226424+00:00",
+  "n": 500,
+  "p": 30,
+  "n_lambdas": 20,
+  "true_active": [
+    3,
+    7,
+    13,
+    18,
+    22
+  ],
+  "penalties": {
+    "lasso (EN \u03b1=1)": [
+      {
+        "name": "ones_equivalent_to_no_weights",
+        "max_diff": 9.31738739051724e-07,
+        "passed": true,
+        "tol": 1e-05
+      },
+      {
+        "name": "downweighting_biased_rows_improves_recovery",
+        "n_biased": 25,
+        "bias_magnitude": 13.10679596865805,
+        "err_to_truth_unweighted": 0.6032490233905986,
+        "err_to_truth_sw0_on_biased": 0.1391308246393604,
+        "passed": true,
+        "improvement_ratio": 0.23063580585239404
+      },
+      {
+        "name": "lambda_scale_identity_uniform_weight",
+        "scale_factor": 3.0,
+        "max_diff": 9.16628503988548e-07,
+        "passed": true,
+        "tol": 0.0001
+      },
+      {
+        "name": "zero_weight_equivalent_to_dropped_rows",
+        "n_dropped": 100,
+        "n_kept": 400,
+        "lambda_scale": 1.25,
+        "max_diff": 1.0053280885546911e-06,
+        "passed": true,
+        "tol": 0.0001
+      }
+    ],
+    "MCP \u03b3=3": [
+      {
+        "name": "ones_equivalent_to_no_weights",
+        "max_diff": 7.61943123057246e-07,
+        "passed": true,
+        "tol": 1e-05
+      },
+      {
+        "name": "downweighting_biased_rows_improves_recovery",
+        "n_biased": 25,
+        "bias_magnitude": 13.10679596865805,
+        "err_to_truth_unweighted": 0.6246586004451518,
+        "err_to_truth_sw0_on_biased": 0.15431903611900605,
+        "passed": true,
+        "improvement_ratio": 0.24704540369576813
+      }
+    ],
+    "SCAD a=3.7": [
+      {
+        "name": "ones_equivalent_to_no_weights",
+        "max_diff": 2.407530970763294e-07,
+        "passed": true,
+        "tol": 1e-05
+      },
+      {
+        "name": "downweighting_biased_rows_improves_recovery",
+        "n_biased": 25,
+        "bias_magnitude": 13.10679596865805,
+        "err_to_truth_unweighted": 0.624349147990035,
+        "err_to_truth_sw0_on_biased": 0.15356662450761668,
+        "passed": true,
+        "improvement_ratio": 0.2459627357576977
+      }
+    ]
+  },
+  "n_pass": 8,
+  "n_total": 8
+}

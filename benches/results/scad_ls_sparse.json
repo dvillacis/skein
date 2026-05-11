@@ -1,0 +1,171 @@
+{
+  "scenario": "scad_ls_sparse",
+  "host_id": "darwin-arm64-MacBook-Pro-de-David-5.local",
+  "runs": [
+    {
+      "package": "skein",
+      "version": "0.5.1",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 30,
+      "fit_time_s": 0.002923687505244743,
+      "fit_time_min_s": 0.002922333005699329,
+      "fit_time_max_s": 0.002925042004790157,
+      "trials": [
+        0.002922333005699329,
+        0.002925042004790157
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "small",
+      "extra": {
+        "screening": "strong",
+        "gamma": 3.7,
+        "info_keys": [
+          "converged",
+          "final_objs",
+          "iters",
+          "kkt_passes",
+          "working_set_sizes"
+        ],
+        "lambda_min_ratio": 0.05
+      },
+      "timestamp": "2026-05-11T17:51:05.816180+00:00"
+    },
+    {
+      "package": "skglm",
+      "version": "0.5",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 30,
+      "fit_time_s": 0.026132312501431443,
+      "fit_time_min_s": 0.026124374999199063,
+      "fit_time_max_s": 0.026140250003663823,
+      "trials": [
+        0.026140250003663823,
+        0.026124374999199063
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "small",
+      "extra": {
+        "lambda_min_ratio": 0.05,
+        "gamma": 3.7
+      },
+      "timestamp": "2026-05-11T17:51:05.816180+00:00"
+    },
+    {
+      "package": "ncvreg",
+      "version": "3.16.0",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 30,
+      "fit_time_s": 0.013,
+      "fit_time_min_s": 0.013,
+      "fit_time_max_s": 0.013,
+      "trials": [
+        0.013,
+        0.013
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "small",
+      "extra": {
+        "via": "Rscript",
+        "lambda_min_ratio": 0.05,
+        "gamma": 3.7
+      },
+      "timestamp": "2026-05-11T17:51:05.816180+00:00"
+    },
+    {
+      "package": "skein",
+      "version": "0.5.1",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.9030725830089068,
+      "fit_time_min_s": 0.8760556670022197,
+      "fit_time_max_s": 0.9201279999979306,
+      "trials": [
+        0.9030725830089068,
+        0.8760556670022197,
+        0.9201279999979306
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "medium",
+      "extra": {
+        "screening": "strong",
+        "gamma": 3.7,
+        "info_keys": [
+          "converged",
+          "final_objs",
+          "iters",
+          "kkt_passes",
+          "working_set_sizes"
+        ],
+        "lambda_min_ratio": 0.05
+      },
+      "timestamp": "2026-05-11T17:51:35.050156+00:00"
+    },
+    {
+      "package": "skglm",
+      "version": "0.5",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 7.630972541999654,
+      "fit_time_min_s": 7.597850082995137,
+      "fit_time_max_s": 7.63221695899847,
+      "trials": [
+        7.597850082995137,
+        7.63221695899847,
+        7.630972541999654
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "medium",
+      "extra": {
+        "lambda_min_ratio": 0.05,
+        "gamma": 3.7
+      },
+      "timestamp": "2026-05-11T17:51:35.050156+00:00"
+    },
+    {
+      "package": "ncvreg",
+      "version": "3.16.0",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 1.859,
+      "fit_time_min_s": 1.852,
+      "fit_time_max_s": 1.875,
+      "trials": [
+        1.852,
+        1.859,
+        1.875
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "medium",
+      "extra": {
+        "via": "Rscript",
+        "lambda_min_ratio": 0.05,
+        "gamma": 3.7
+      },
+      "timestamp": "2026-05-11T17:51:35.050156+00:00"
+    }
+  ]
+}

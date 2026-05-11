@@ -22,10 +22,10 @@ load-bearing piece; everything after stacks on top of it.
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; **bridge `\|β\|^q` (LS, scalar LLA path) done**; **adaptive {Lasso, MCP, SCAD} (LS, two-stage pilot fit) done**; overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches moved to M9; comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
-| M9 — Performance & correctness benchmarks | ⏳ partial | M9.1 harness + M9.3 lasso/LS (deep + sparse regimes, all comparators apples-to-apples via warm-started paths) done; M9.2 criterion expansion + M9.4 correctness-at-scale fixtures + M9.5 docs page pending. Supersedes the deferred M8.6 bullet. |
+| M9 — Performance & correctness benchmarks | ⏳ partial | M9.1 harness + M9.3 lasso/LS + **M9.3 MCP/LS (deep + sparse, all sizes incl. n=100k, p=10k)** done, all comparators apples-to-apples via warm-started paths; M9.4 `benches/correctness/` framework live (per-λ Jaccard/sign/rel-L2 across skein/skglm/ncvreg). M9.2 criterion expansion + M9.4 at-scale `tests/fixtures/generate.R` parallel suite + M9.5 full docs page pending. Supersedes the deferred M8.6 bullet. |
 | M10 — Performance improvements | ⏳ partial | M10.1 profile (`col_dot` is the floor without BLAS) + M10.3 five waves: (1) col_axpy + F-order DenseMatrix + path-solver fixes; (2) adaptive inner tol via PGD + KKT-priority WS; (3) `blas-accelerate` feature; (4) (skipped — inner active-set CD didn't pay off); (5) F-series — duality gap + Anderson on residuals + gap-safe sphere screening, all gated and tested. **Skein medium lasso/LS: 7.6 s → 0.78 s sparse / 1.17 s deep — 6.5–10× total. Within 1.5× of glmnet on sparse, 1.9× on deep; ~8–9× behind sklearn's Cython `lasso_path`.** F-series wallclock-neutral on M9.3 scenarios — infrastructure correct but post-pass screening fires only on multi-pass λs (most converge in 1). M10.4 verified across deep + sparse regimes. Pending: G. cross-platform BLAS (OpenBLAS/MKL), H. pre-pass gap-safe screening, I. Cython-grade rewrite (off-roadmap). |
 
-Test count at this snapshot: **265 cargo + 279 pytest, all green.**
+Test count at this snapshot: **274 cargo + 289 pytest, all green.**
 
 ---
 
@@ -414,13 +414,47 @@ is the M7.1 reduction reused unchanged: every existing GLM-aware solver
   validation, EN `α ∈ [0, 1]`, EN α=1 ≡ lasso path agreement,
   string-label round trip.
 
-### M3.7 — Opportunistic GLMs
+### ⏳ M3.7 — Opportunistic GLMs
 
 Negative binomial, Huber / quantile (smoothed) — ship whichever has
 user demand. Gaussian-with-offsets is achievable today by subtracting
 the offset from `y` (LS is shift-equivariant); only GLMs need explicit
 offset support, and both **Poisson offsets** and **Cox Efron ties**
 ship now (see M3.4 / M3.5 follow-ups above).
+
+#### ✅ Huber — robust LS via IRLS surrogate
+
+- `Huber` datafit (`crates/skein-core/src/datafit/huber.rs`) implements
+  the standard piecewise loss `ρ_δ(r) = ½r²` for `|r| ≤ δ`,
+  `δ|r| − ½δ²` otherwise, and exposes the IRLS-style quadratic
+  surrogate `w_i = 1` if `|r_i| ≤ δ` else `δ/|r_i|` (floored at `1e-6`)
+  with working response `z_i = y_i`. Implements `GlmDatafit`, so the
+  M3.2 / M3.4 prox-Newton outer + M1/M2 inner CD machinery dispatches
+  through it unchanged.
+- PyO3: `solve_huber_mcp_path` / `solve_huber_scad_path` (dense, with
+  intercept, optional standardization, weights), reusing
+  `build_glm_path_outputs`.
+- Python estimators: `HuberMCP{,Path}Regressor`,
+  `HuberSCAD{,Path}Regressor` with sklearn-compatible
+  `predict` / `decision_function`; δ as a required hyperparameter
+  (recommended `1.345 · σ_MAD(y)` for 95% asymptotic efficiency at
+  the normal).
+- Tests: 9 new cargo (6 unit on the loss / surrogate / weights +
+  3 prox-Newton path) + 10 pytest (path shape, signal recovery under
+  contamination, beats LS on contaminated data, large-δ ≡ LS, λ_max
+  on clean data, validation of finite-y / positive-δ / sparse-X-NYI,
+  predict ≡ decision_function). All green (274 cargo + 289 pytest).
+- Limitations / pending: sparse-X path entry, chunked / mmap design
+  matrices, group-Huber and sparse-group-Huber. Sparse can be added
+  by wiring `build_glm_path_outputs_sparse` analogously; the rest
+  follow M3.3-style composition with `prox_newton_block_solve_path`.
+
+#### Pending (M3.7 follow-ups)
+
+Negative binomial (known dispersion `α`: standard GLM with
+`Var = (1 + α·μ)·μ`), smoothed quantile (pinball loss with `τ`
+quantile + Lipschitz-smoothed kink). Both fit the `GlmDatafit`
+framework; ship whichever surfaces user demand first.
 
 ---
 
@@ -1104,7 +1138,8 @@ methodology page.
 | Lasso LS — deep regime | sklearn, skglm, celer, glmnet | ✅ done |
 | Lasso LS — sparse regime | sklearn, skglm, celer, glmnet | ✅ done |
 | ElasticNet LS | sklearn, skglm, glmnet | pending |
-| MCP / SCAD LS | ncvreg | pending |
+| MCP LS — deep + sparse | skglm, ncvreg | ✅ done |
+| SCAD LS | ncvreg | pending |
 | Group lasso LS | skglm (partial), grpreg | pending |
 | Group MCP / SCAD LS | grpreg | pending |
 | Sparse-group MCP/SCAD LS | (skein only — absolute throughput showcase) | pending |
@@ -1138,9 +1173,73 @@ Numbers committed at `benches/results/lasso_ls.json` and
 `benches/results/lasso_ls_sparse.json`. Sketched in M10's status row;
 detailed analysis in `docs/perf/lasso_ls_profile.md`.
 
+#### ✅ MCP/LS — what shipped
+
+- `benches/scenarios/mcp_ls.py` (deep, `λ_min/λ_max = 1e-3`) and
+  `mcp_ls_sparse.py` (sparse, `5e-2`). γ = 3.0 pinned in the scenario
+  file for fairness; runners now accept a `gamma` kwarg and forward
+  it to skein's `MCPPathRegressor`, skglm's `MCPRegression`, and
+  ncvreg via the R subprocess JSON payload.
+- Runner side-fix in `skglm_runner.py`: skglm's `path()` appends the
+  intercept as the last row of the coef matrix when
+  `fit_intercept=True`, which was inflating `active_set_size` by 1
+  across all skglm runs (including the existing lasso/LS rows). The
+  intercept is now stripped and routed to `intercept_path`.
+- **Headline (medium, n=10k, p=1k, 100-λ)**: skein **1.37 s** deep /
+  **0.75 s** sparse vs skglm 3.35 s / 2.12 s vs ncvreg 5.38 s / 1.17
+  s. Skein is fastest at every size, in both regimes.
+- **First large-scale numbers for skein** (n=100k, p=10k, 100-λ):
+  skein **510 s** deep / **497 s** sparse vs skglm 666 s / 702 s.
+  Two surprises worth flagging: (1) the skein/skglm ratio compresses
+  to ~0.71–0.77× at large (raw matvec dominates over algorithmic
+  overhead at this scale, so both solvers converge on similar BLAS
+  cost), and (2) the sparse-regime advantage *collapses* at large —
+  per-λ fixed overhead (KKT eval, strong-rule scoring, working-set
+  assembly) ends up the dominant cost when the active set stays
+  tiny. The latter is a profiling target alongside M10's pending
+  levers.
+- **R-via-JSON transport is the bottleneck at large**. ncvreg fits
+  at n=100k, p=10k OOM the R subprocess on the bench host (Apple M1,
+  16 GB) because the current `r_runner.R` serializes `X` (8 GB) as
+  JSON. Tracked as a bench-infra follow-up; not a blocker on the
+  skein side. Swapping JSON → Arrow/Feather or `saveRDS` over a pipe
+  unblocks SCAD/Cox/Poisson large-size comparisons too.
+
+Correctness cross-check at small size (n=1k, p=100, 30-λ): skein and
+skglm land at **bit-identical** minima at every λ (Jaccard 1.000,
+rel-L2 0.000); skein vs ncvreg agrees on support at 23 / 30 λs with
+mean rel-L2 4 % — the expected MCP local-min divergence M9.4 calls
+out, not a bug.
+
+Numbers committed at `benches/results/mcp_ls.json`,
+`benches/results/mcp_ls_sparse.json`, and
+`benches/correctness/results/mcp_ls.json`. Full write-up in
+`docs/benchmarks/mcp_ls.md`.
+
+#### ✅ M9.4 framework — what shipped (with the MCP row)
+
+The roadmap's M9.4 listing called for a `benches/correctness/`
+directory that runs cross-package agreement *at bench time* rather
+than in pytest. That framework is now in place alongside the MCP
+row:
+
+- `benches/correctness/_common.py` — per-λ agreement metrics
+  (active-set Jaccard, sign agreement, relative L2 distance) plus
+  `PairAgreement` dataclass + JSON serialization + summary-table
+  pretty-print.
+- `benches/correctness/mcp_ls.py` — first runnable correctness
+  script. Same problem generator and λ-grid as the perf scenario;
+  fits skein / skglm / ncvreg; computes the full pairwise agreement
+  matrix; writes JSON + prints a summary. Designed to be cloned for
+  each (penalty, datafit) combo.
+
+The at-scale `tests/fixtures/generate.R` parallel suite (the *other*
+half of M9.4 — Python-side R regression fixtures at `n=1000, p=500`
+and `n=5000, p=2000`) is still pending.
+
 #### Pending across remaining scenarios
 
-- The same pair (deep + sparse) per (penalty, datafit) combo above.
+- The same pair (dense + sparse) per (penalty, datafit) combo above.
 - For nonconvex penalties (MCP / SCAD): `Lasso.path` → analogue is
   `MCPRegression.path` in skglm, `ncvreg::ncvreg(...)` in R; both
   support warm starts natively.

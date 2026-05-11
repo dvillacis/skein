@@ -1,0 +1,227 @@
+{
+  "scenario": "mcp_ls_sparse",
+  "host_id": "darwin-arm64-MacBook-Pro-de-David-5.local",
+  "runs": [
+    {
+      "package": "skein",
+      "version": "0.5.1",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 30,
+      "fit_time_s": 0.002062603998638224,
+      "fit_time_min_s": 0.001977250001800712,
+      "fit_time_max_s": 0.0021479579954757355,
+      "trials": [
+        0.001977250001800712,
+        0.0021479579954757355
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "small",
+      "extra": {
+        "screening": "strong",
+        "gamma": 3.0,
+        "info_keys": [
+          "converged",
+          "final_objs",
+          "iters",
+          "kkt_passes",
+          "working_set_sizes"
+        ],
+        "lambda_min_ratio": 0.05
+      },
+      "timestamp": "2026-05-11T13:06:15.861914+00:00"
+    },
+    {
+      "package": "skglm",
+      "version": "0.5",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 30,
+      "fit_time_s": 0.010531354499107692,
+      "fit_time_min_s": 0.01049349999811966,
+      "fit_time_max_s": 0.010569209000095725,
+      "trials": [
+        0.010569209000095725,
+        0.01049349999811966
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 11,
+      "size": "small",
+      "extra": {
+        "lambda_min_ratio": 0.05,
+        "gamma": 3.0
+      },
+      "timestamp": "2026-05-11T13:06:15.861914+00:00"
+    },
+    {
+      "package": "ncvreg",
+      "version": "3.16.0",
+      "n": 1000,
+      "p": 100,
+      "n_groups": null,
+      "lambda_grid_len": 30,
+      "fit_time_s": 0.008,
+      "fit_time_min_s": 0.008,
+      "fit_time_max_s": 0.008,
+      "trials": [
+        0.008,
+        0.008
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "small",
+      "extra": {
+        "via": "Rscript",
+        "lambda_min_ratio": 0.05,
+        "gamma": 3.0
+      },
+      "timestamp": "2026-05-11T13:06:15.861914+00:00"
+    },
+    {
+      "package": "skein",
+      "version": "0.5.1",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 0.7492595000003348,
+      "fit_time_min_s": 0.7454074580018641,
+      "fit_time_max_s": 0.7524613749992568,
+      "trials": [
+        0.7524613749992568,
+        0.7492595000003348,
+        0.7454074580018641
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "medium",
+      "extra": {
+        "screening": "strong",
+        "gamma": 3.0,
+        "info_keys": [
+          "converged",
+          "final_objs",
+          "iters",
+          "kkt_passes",
+          "working_set_sizes"
+        ],
+        "lambda_min_ratio": 0.05
+      },
+      "timestamp": "2026-05-11T13:13:05.134221+00:00"
+    },
+    {
+      "package": "skglm",
+      "version": "0.5",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 2.1224309589961194,
+      "fit_time_min_s": 2.1194547499981127,
+      "fit_time_max_s": 2.124638250003045,
+      "trials": [
+        2.1224309589961194,
+        2.124638250003045,
+        2.1194547499981127
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "medium",
+      "extra": {
+        "lambda_min_ratio": 0.05,
+        "gamma": 3.0
+      },
+      "timestamp": "2026-05-11T13:13:05.134221+00:00"
+    },
+    {
+      "package": "ncvreg",
+      "version": "3.16.0",
+      "n": 10000,
+      "p": 1000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 1.174,
+      "fit_time_min_s": 1.136,
+      "fit_time_max_s": 1.37,
+      "trials": [
+        1.37,
+        1.174,
+        1.136
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "medium",
+      "extra": {
+        "via": "Rscript",
+        "lambda_min_ratio": 0.05,
+        "gamma": 3.0
+      },
+      "timestamp": "2026-05-11T13:13:05.134221+00:00"
+    },
+    {
+      "package": "skein",
+      "version": "0.5.1",
+      "n": 100000,
+      "p": 10000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 496.7745518965021,
+      "fit_time_min_s": 490.6948403340066,
+      "fit_time_max_s": 502.8542634589976,
+      "trials": [
+        490.6948403340066,
+        502.8542634589976
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "large",
+      "extra": {
+        "screening": "strong",
+        "gamma": 3.0,
+        "info_keys": [
+          "converged",
+          "final_objs",
+          "iters",
+          "kkt_passes",
+          "working_set_sizes"
+        ],
+        "lambda_min_ratio": 0.05
+      },
+      "timestamp": "2026-05-11T14:22:37.540414+00:00"
+    },
+    {
+      "package": "skglm",
+      "version": "0.5",
+      "n": 100000,
+      "p": 10000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 702.4341072079987,
+      "fit_time_min_s": 611.835392790992,
+      "fit_time_max_s": 793.0328216250055,
+      "trials": [
+        793.0328216250055,
+        611.835392790992
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "large",
+      "extra": {
+        "lambda_min_ratio": 0.05,
+        "gamma": 3.0
+      },
+      "timestamp": "2026-05-11T14:22:37.540414+00:00"
+    }
+  ]
+}

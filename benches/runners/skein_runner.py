@@ -37,6 +37,7 @@ def _build_estimator(
     lambda_grid: np.ndarray,
     tol: float,
     screening: Literal["off", "strong", "gap_safe"],
+    gamma: float,
 ):
     # Lazy import so import-time cost doesn't pollute timings.
     from skein_glm import estimators as e
@@ -50,15 +51,18 @@ def _build_estimator(
         if penalty == "elastic_net":
             return e.ElasticNetPathRegressor(alpha=0.5, **common)
         if penalty == "mcp":
-            return e.MCPPathRegressor(**common)
+            return e.MCPPathRegressor(gamma=gamma, **common)
         if penalty == "scad":
-            return e.SCADPathRegressor(**common)
+            # SCADPathRegressor uses `a` for the SCAD shape parameter; MCP
+            # uses `gamma`. The bench scenario speaks γ uniformly, so we
+            # translate here.
+            return e.SCADPathRegressor(a=gamma, **common)
         if penalty == "group_lasso":
             return e.GroupLassoPathRegressor(groups=problem.groups, **common)
         if penalty == "group_mcp":
-            return e.GroupMCPPathRegressor(groups=problem.groups, **common)
+            return e.GroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
         if penalty == "group_scad":
-            return e.GroupSCADPathRegressor(groups=problem.groups, **common)
+            return e.GroupSCADPathRegressor(groups=problem.groups, a=gamma, **common)
     raise NotImplementedError(f"skein runner: ({problem.family}, {penalty}) not yet wired")
 
 
@@ -69,9 +73,10 @@ def fit(
     lambda_grid: np.ndarray,
     tol: float,
     screening: Literal["off", "strong", "gap_safe"] = "strong",
+    gamma: float = 3.0,
     **_: object,
 ) -> RunResult:
-    est = _build_estimator(problem, penalty, lambda_grid, tol, screening)
+    est = _build_estimator(problem, penalty, lambda_grid, tol, screening, gamma)
     t0 = time.perf_counter()
     est.fit(problem.x, problem.y)
     elapsed = time.perf_counter() - t0
@@ -91,5 +96,9 @@ def fit(
         active_set_size=final_active,
         coef_path=coef_path,
         intercept_path=intercept_path,
-        extra={"screening": screening, "info_keys": sorted(info.keys()) if info else []},
+        extra={
+            "screening": screening,
+            "gamma": gamma if penalty in ("mcp", "scad", "group_mcp", "group_scad") else None,
+            "info_keys": sorted(info.keys()) if info else [],
+        },
     )

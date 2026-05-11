@@ -189,6 +189,15 @@ api/abcs
 
 ```{toctree}
 :hidden:
+:caption: Benchmarks
+
+benchmarks/lasso_ls_correctness
+benchmarks/mcp_ls
+benchmarks/scad_ls
+```
+
+```{toctree}
+:hidden:
 :caption: Performance
 
 perf/lasso_ls_profile

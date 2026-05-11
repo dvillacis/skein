@@ -30,6 +30,7 @@ y <- as.numeric(input$y)
 lambdas <- as.numeric(input$lambdas)
 tol <- if (is.null(input$tol)) 1e-6 else as.numeric(input$tol)
 groups <- if (is.null(input$groups)) NULL else as.integer(input$groups)
+gamma <- if (is.null(input$gamma)) NULL else as.numeric(input$gamma)
 
 fit_result <- list()
 
@@ -70,8 +71,13 @@ if (package == "glmnet") {
     poisson = "poisson",
     stop(sprintf("ncvreg: unsupported family %s", family))
   )
+  ncv_args <- list(
+    X = X, y = y, family = ncv_family, penalty = ncv_penalty,
+    lambda = lambdas, eps = tol, returnX = FALSE
+  )
+  if (!is.null(gamma)) ncv_args$gamma <- gamma
   t0 <- proc.time()
-  fit <- ncvreg(X, y, family = ncv_family, penalty = ncv_penalty, lambda = lambdas, eps = tol)
+  fit <- do.call(ncvreg, ncv_args)
   elapsed <- (proc.time() - t0)[["elapsed"]]
   coef_path <- as.matrix(fit$beta)[-1, , drop = FALSE]  # drop intercept row, p × n_lambdas
   fit_result <- list(
