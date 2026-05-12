@@ -11,9 +11,19 @@ Two flavors of selection:
 The metric is auto-selected by family. After fitting, a final refit
 on the full data at λ_best is stored on `coef_` / `intercept_`.
 
-25+ estimators total — across the LS, logistic, Poisson, Cox, and
+36 estimators total — across the LS, logistic, Poisson, Cox, and
 multi-task families. They all share the same fit/predict surface as
 their non-CV counterparts.
+
+**Threaded fold parallelism.** Every CV class accepts an `n_jobs`
+parameter (default `None` = serial). The fold loop dispatches via
+`joblib.Parallel(prefer="threads")`, and the underlying Rust path
+solvers release the GIL during compute (`py.allow_threads` in every
+PyO3 entry point), so threads actually run concurrently. Bitwise
+parity between `n_jobs=1` and `n_jobs=-1` is verified in the test
+suite. Typical 5-fold speedup is ~2.3–2.5× on 8 cores, bounded by the
+number of folds and the inner-path's rayon parallelism already
+saturating cores per fit.
 
 ## LS family
 
@@ -82,6 +92,12 @@ for the data shape and convention notes.
 .. autoclass:: skein_glm.cv.LogisticSCADPathCV
    :members:
 
+.. autoclass:: skein_glm.cv.LogisticElasticNetPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.LogisticLassoPathCV
+   :members:
+
 .. autoclass:: skein_glm.cv.LogisticGroupLassoPathCV
    :members:
 
@@ -105,6 +121,12 @@ for the data shape and convention notes.
    :members:
 
 .. autoclass:: skein_glm.cv.PoissonSCADPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.PoissonElasticNetPathCV
+   :members:
+
+.. autoclass:: skein_glm.cv.PoissonLassoPathCV
    :members:
 
 .. autoclass:: skein_glm.cv.PoissonGroupLassoPathCV

@@ -17,6 +17,12 @@ logistic base class.
 
 .. autoclass:: skein_glm.estimators.LogisticSCADRegressor
    :members:
+
+.. autoclass:: skein_glm.estimators.LogisticElasticNetRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.LogisticLassoRegressor
+   :members:
 ```
 
 ## Scalar — path
@@ -26,6 +32,12 @@ logistic base class.
    :members:
 
 .. autoclass:: skein_glm.estimators.LogisticSCADPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.LogisticElasticNetPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.LogisticLassoPathRegressor
    :members:
 ```
 

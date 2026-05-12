@@ -29,33 +29,51 @@ When someone asks "why not just `skglm`, `glmnet`, or `ncvreg`?":
    against the same ABCs the Rust traits mirror, then port hot ones
    to Rust without re-architecting.
 
-## What's in v0.6
+## What's in v0.7
 
 | Family       | Datafits                          | Penalties                                          | Estimators           |
 |--------------|-----------------------------------|----------------------------------------------------|----------------------|
-| Gaussian     | Least squares                     | MCP, SCAD, elastic net, bridge `\|β\|^q`, group lasso, group MCP, group elastic net, sparse-group lasso, sparse-group MCP, sparse-group SCAD | 18 sklearn classes |
+| Gaussian     | Least squares                     | MCP, SCAD, elastic net, **lasso** (α=1 facade), bridge `\|β\|^q`, group lasso, group MCP, group elastic net, sparse-group lasso, sparse-group MCP, sparse-group SCAD | 18 sklearn classes |
 | Multi-task   | Multi-response least squares      | Multi-task lasso / MCP / SCAD / elastic net (row-grouped, dense + sparse, ±standardize) | 8 sklearn classes |
-| Binomial     | Logistic (with prox-Newton)       | MCP, SCAD, group lasso, group MCP, sparse-group lasso, sparse-group MCP, sparse-group SCAD | 14 sklearn classes   |
+| Binomial     | Logistic (with prox-Newton)       | MCP, SCAD, **elastic net, lasso** (first-class convex L1, not the MCP-at-γ=1e9 approximation), group lasso, group MCP, sparse-group lasso, sparse-group MCP, sparse-group SCAD | 18 sklearn classes   |
 | Multinomial  | Softmax (K classes, prox-Newton + Böhning bound) | Row-grouped lasso / MCP / SCAD / elastic net (dense + sparse, ±standardize) | 12 sklearn classes |
-| Poisson      | Log-link, offset support          | Same as binomial                                   | 14 sklearn classes   |
-| Cox PH       | Breslow + Efron ties              | Same as binomial                                   | 14 sklearn classes   |
-| **Graphical models** | **Sparse precision `Θ = Σ⁻¹`** | **L1, MCP, SCAD on edges; per-edge weights; joint estimation across `K` populations (Danaher–Wang–Witten group form via ADMM); EBIC tuner** | **5 sklearn-style classes** |
+| Poisson      | Log-link, offset support          | Same as binomial (**elastic net + lasso** new in 0.7) | 18 sklearn classes   |
+| Cox PH       | Breslow + Efron ties              | MCP, SCAD, group lasso, group MCP, sparse-group lasso, sparse-group MCP, sparse-group SCAD | 14 sklearn classes   |
+| Graphical models | Sparse precision `Θ = Σ⁻¹`    | L1, MCP, SCAD on edges; per-edge weights; joint estimation across `K` populations (Danaher–Wang–Witten group form via ADMM); EBIC tuner | 5 sklearn-style classes |
+| **Inference** | **VBR debiased lasso (LS + logistic + Poisson)** | **Wald CIs / p-values for high-dimensional penalized fits; nodewise inverse-Gram / Fisher approximation** | **3 free functions + 3 sklearn-style wrappers** |
+| **Edge stability** | **Bootstrap edge stability for graphical models** | **MB-style stability selection on edges + bootnet-style non-parametric bootstrap** | **2 sklearn-style classes** |
 
-108 regression estimators + 5 graphical-model estimators. Plus 51
-`*PathCV` cross-validation wrappers, `select_by_ic` for AIC/BIC/EBIC
-across all five GLM families, and `ebic_path` / `joint_ebic_path` for
-graphical models. 28 adaptive variants span LS, group, logistic,
-Poisson, and Cox families.
+122 regression / classification estimators + 5 graphical-model
+estimators + 5 inference / edge-stability classes. Plus 36 `*PathCV`
+wrappers, `select_by_ic` for AIC/BIC/EBIC across all four GLM
+families, `ebic_path` / `joint_ebic_path` for graphical models, and
+**every** CV class supports `n_jobs` for threaded fold parallelism
+(real parallelism — every Rust path solver releases the GIL during
+compute). 28 adaptive variants span LS, group, logistic, Poisson, and
+Cox families.
 
-**M11 — graphical models** is the headline of this release.
-Nonconvex graphical
-lasso (MCP/SCAD on edges) and joint estimation across populations
-are not available in mainstream packages (`sklearn.covariance.
-GraphicalLasso`, R `glasso` / `qgraph` / `bootnet` /
-`EstimateGroupNetwork` are all L1-only or single-population). The
-single most common social-science use of glasso — network
-psychometrics — gets unbiased edge-weight estimates that the
-existing L1-only toolchain can't deliver.
+**M5 (model selection & inference) is the headline of this release.**
+Three feature lines land together:
+
+1. **Debiased lasso for LS + binomial + Poisson** — Wald confidence
+   intervals and p-values for high-dimensional penalized fits. The one
+   inference feature `glmnet` / `ncvreg` / `grpreg` do not offer;
+   mirrors R's `hdi::lasso.proj`.
+2. **First-class convex logistic + Poisson Elastic-Net / Lasso
+   primitives** — retires the prior `MCP(γ=1e9)` approximation used
+   internally. The new primitive matches sklearn's L1 logistic
+   regression to ~1% (vs ~17% off for the approximation), so the
+   inference layer built on top is unbiased.
+3. **Threaded CV folds across every `*PathCV` class** — the heavy
+   compute in every PyO3 path-solver entry releases the GIL via
+   `py.allow_threads`, so K-fold CV scales across cores instead of
+   serializing. Same fix accelerates `StabilitySelection`,
+   `GraphicalStabilitySelection`, `GraphicalBootstrap`, and the
+   debiased-lasso nodewise loop.
+
+Plus **M11.3 bootstrap edge stability** — the `bootnet`-style network-
+psychometrics output that the L1-only toolchain (`glasso` / `qgraph` /
+`EstimateGroupNetwork`) leaves on the table.
 
 ## Quick taste
 
@@ -104,22 +122,22 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Status
 
-v0.6 is a complete, tested implementation: **292 cargo + 300 pytest
+v0.7 is a complete, tested implementation: **292 cargo + 412 pytest
 tests, all green** at last snapshot. Sparse + dense + mmap + chunked
 + multi-task backends all interoperate; every datafit × penalty
 combination is wired end-to-end with sklearn-style `fit` / `predict` /
 `predict_proba` / `score`. The graphical-model family ships with a
 gram-form CD inner solver (for single-population glasso) and an
-ADMM kernel (for joint glasso) — the first ADMM in skein. Wheels are
-built via `cibuildwheel` for Linux (x86_64 + aarch64), macOS
-(x86_64 + arm64), and Windows (AMD64).
+ADMM kernel (for joint glasso). Every Rust path solver releases the
+GIL during compute, so Python-side `joblib` parallelism is real
+rather than a no-op. Wheels are built via `cibuildwheel` for Linux
+(x86_64 + aarch64), macOS (x86_64 + arm64), and Windows (AMD64).
 
 What's not yet in: multi-response GLMs for Poisson / Cox (M7.3),
 comparison benchmarks vs `glmnet` / `ncvreg` / `grpreg` / `skglm` /
-`EstimateGroupNetwork` (M8 / M11.3), polychoric / polyserial
-correlation helpers for ordinal Likert data, bootstrap edge
-stability for graphical models. See the [roadmap](roadmap.md) for
-the full picture.
+`EstimateGroupNetwork` (M8 / M9 follow-ups), polychoric / polyserial
+correlation helpers for ordinal Likert data, an R facade. See the
+[roadmap](roadmap.md) for the full picture.
 
 ```{toctree}
 :hidden:
@@ -207,6 +225,8 @@ api/cv
 api/ic
 api/stability
 api/graph_selection
+api/graph_stability
+api/debiased
 api/design
 api/abcs
 ```

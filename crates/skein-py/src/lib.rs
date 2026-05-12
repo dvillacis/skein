@@ -852,8 +852,8 @@ where
     let datafit = LeastSquares::new(ys);
     let make_pen =
         move |lam: f64| -> Box<dyn GroupPenalty> { make_inner(lam, weights_orig.clone()) };
-    let (betas_std, report) = py
-        .allow_threads(|| solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg));
+    let (betas_std, report) =
+        py.allow_threads(|| solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg));
     let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
 
     let info = PyDict::new_bound(py);
@@ -1692,8 +1692,8 @@ where
     let groups = MultiTaskDesign::<DenseMatrix>::auto_groups(p, k);
     let make_pen =
         move |lam: f64| -> Box<dyn GroupPenalty> { make_inner(lam, weights_eff.clone()) };
-    let (mut betas, report) = py
-        .allow_threads(|| solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg));
+    let (mut betas, report) =
+        py.allow_threads(|| solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg));
     if standardize_x {
         multitask_descale_inplace(&mut betas, &x_scales, p, k);
     }

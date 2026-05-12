@@ -31,10 +31,17 @@ LS family adds 8 more (`MultiTaskLasso/MCP/SCAD/ElasticNet ×
 
 | Module                       | Page                |
 |------------------------------|---------------------|
-| `*PathCV` cross-validation   | [CV](cv.md)         |
+| `*PathCV` cross-validation (every CV class accepts `n_jobs` for threaded folds) | [CV](cv.md)         |
 | `select_by_ic` (AIC/BIC/EBIC) | [IC](ic.md)         |
 | `StabilitySelection` (MB bootstrap) | [Stability](stability.md) |
 | `ebic_path`, `joint_ebic_path` (graphical models) | [Graph selection](graph_selection.md) |
+| `GraphicalStabilitySelection`, `GraphicalBootstrap` (bootnet-style edge bootstrap) | [Graph stability](graph_stability.md) |
+
+## Inference
+
+| Module                       | Page                |
+|------------------------------|---------------------|
+| `debiased_lasso`, `debiased_logistic_lasso`, `debiased_poisson_lasso` (Wald CIs / p-values via VBR nodewise) | [Debiased](debiased.md) |
 
 ## Design-matrix helpers
 

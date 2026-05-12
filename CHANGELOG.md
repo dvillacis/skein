@@ -4,7 +4,38 @@ All notable changes to `skein-glm` are recorded here. The project follows
 semantic versioning, with the pre-1.0 minor-bump-on-feature policy
 documented in `docs/extending/rust-api.md`.
 
-## [Unreleased]
+## [0.7.0] — 2026-05-12
+
+Feature release: **M5.x complete + first-class convex GLM primitives +
+graphical edge stability**. Three headline differentiators land in this
+release:
+
+1. **Debiased / desparsified lasso** for least squares, binomial
+   logistic, and Poisson regression — Wald-style confidence intervals
+   and p-values for high-dimensional penalized fits. The one inference
+   feature `glmnet` / `ncvreg` / `grpreg` do not offer; mirrors R's
+   `hdi::lasso.proj` (M5.x-a + M5.x-b).
+2. **First-class convex logistic + Poisson Elastic-Net / Lasso
+   primitives** — retires the prior `MCP(γ=1e9)` approximation that
+   `AdaptiveLogisticLasso` and `AdaptivePoissonLasso` relied on. New
+   primitive matches sklearn's L1 logistic regression to ~1%, where
+   the approximation was ~17% off (M3.x).
+3. **Threaded CV folds** across every `*PathCV` class, enabled by a
+   project-wide PyO3 `py.allow_threads(|| ...)` GIL release on every
+   inner solver call. Every joblib-threaded code path in skein
+   (`StabilitySelection`, `GraphicalStabilitySelection`,
+   `GraphicalBootstrap`, the debiased-lasso nodewise loop, every CV
+   wrapper) now scales across cores instead of serializing on the GIL
+   (M5.x-c).
+
+Plus **bootstrap edge stability** for graphical models
+(`GraphicalStabilitySelection` + `GraphicalBootstrap`, M11.3) — the
+`bootnet`-style network-psychometrics output.
+
+Marks **M5 done** in the roadmap.
+
+Test count: **292 cargo + 412 pytest, all green** (up from
+274 cargo + 289 pytest at 0.6.0).
 
 ### Added (M5.x — GIL release: full coverage across all path builders)
 

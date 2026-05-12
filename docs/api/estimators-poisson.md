@@ -15,6 +15,12 @@ mean — matches sklearn's `PoissonRegressor.predict`),
 
 .. autoclass:: skein_glm.estimators.PoissonSCADRegressor
    :members:
+
+.. autoclass:: skein_glm.estimators.PoissonElasticNetRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonLassoRegressor
+   :members:
 ```
 
 ## Scalar — path
@@ -24,6 +30,12 @@ mean — matches sklearn's `PoissonRegressor.predict`),
    :members:
 
 .. autoclass:: skein_glm.estimators.PoissonSCADPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonElasticNetPathRegressor
+   :members:
+
+.. autoclass:: skein_glm.estimators.PoissonLassoPathRegressor
    :members:
 ```
 
