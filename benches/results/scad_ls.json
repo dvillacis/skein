@@ -198,6 +198,30 @@
         "lambda_min_ratio": 0.001
       },
       "timestamp": "2026-05-11T17:55:33.556887+00:00"
+    },
+    {
+      "package": "skglm",
+      "version": "0.5",
+      "n": 100000,
+      "p": 10000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 11307.558838416502,
+      "fit_time_min_s": 10929.972283915995,
+      "fit_time_max_s": 11685.14539291701,
+      "trials": [
+        11685.14539291701,
+        10929.972283915995
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 4609,
+      "size": "large",
+      "extra": {
+        "lambda_min_ratio": 0.001,
+        "gamma": 3.7
+      },
+      "timestamp": "2026-05-11T17:55:33.556887+00:00"
     }
   ]
 }

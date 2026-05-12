@@ -19,7 +19,7 @@ apples.
 |---|---|---|---|---|
 | small  (n=1k,  p=100)   | **7.0 ms**   | 41.0 ms      | 51.0 ms       | 0.17× |
 | medium (n=10k, p=1k)    | **1.78 s**   | 9.47 s       | 7.99 s        | 0.19× |
-| large  (n=100k, p=10k)  | _TBD_        | _TBD_        | (skipped †)   | _TBD_ |
+| large  (n=100k, p=10k)  | **538.7 s**  | 11 307.6 s   | (skipped †)   | **0.048×** |
 
 skein is the fastest across the board. The skein/skglm gap is
 *wider* on SCAD than on MCP at every size (0.19× vs 0.41× at
@@ -45,7 +45,7 @@ Arrow/Feather is a tracked follow-up.
 |---|---|---|---|---|
 | small  (n=1k,  p=100)   | **3.0 ms**   | 26.0 ms     | 13.0 ms       | 0.12× |
 | medium (n=10k, p=1k)    | **0.90 s**   | 7.63 s      | 1.86 s        | 0.12× |
-| large  (n=100k, p=10k)  | _TBD_        | _TBD_       | (skipped †)   | _TBD_ |
+| large  (n=100k, p=10k)  | **435.5 s**  | (aborted ‡) | (skipped †)   | — |
 
 Active set stays at **10** (the true support) along the entire path
 across all three packages at every size. The path stops near support
@@ -58,6 +58,12 @@ basically a wash), while skein roughly halves its time. The skein
 sparse advantage holds at medium (0.90 s vs 1.78 s, ~50 %).
 
 † R skipped at large for the same OOM reason as the deep regime.
+
+‡ skglm sparse@large was aborted after the deep run consumed ~9.4 h
+on the bench host. By extrapolation from the medium 0.12× ratio,
+the projection is ~3 700 s (~62 min) per trial, but it was killed
+mid-trial to free the host. The skein sparse@large number is from a
+completed trial pair.
 
 ## Correctness — pairwise agreement on the path
 
@@ -127,10 +133,13 @@ Raw JSON: `benches/results/scad_ls.json`,
 ## What this tells us
 
 1. **skein is the fastest SCAD path solver on every size and
-   regime.** The gap to skglm is wider on SCAD than on MCP (~5× at
-   medium vs ~2.5×) because skglm has no native SCAD `.path()` — the
-   manual α-loop pays per-α setup overhead that skglm's MCP estimator
-   amortizes internally.
+   regime.** The gap to skglm widens dramatically with scale —
+   ~5× at medium, **~21×** at large deep — because skglm has no
+   native SCAD `.path()` and the manual α-loop pays per-α setup
+   overhead that skglm's MCP estimator amortizes internally. The
+   single skglm large/deep fit took 3.1 hours (vs 9 minutes for
+   skein); the large/sparse skglm run was aborted on the bench
+   host before its first trial completed.
 2. **Correctness mirrors MCP exactly**: bit-identical to skglm,
    23/30 perfect-support match with ncvreg, same nonconvex local-min
    divergence at the saturated tail.

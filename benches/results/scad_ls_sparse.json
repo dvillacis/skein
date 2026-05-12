@@ -166,6 +166,38 @@
         "gamma": 3.7
       },
       "timestamp": "2026-05-11T17:51:35.050156+00:00"
+    },
+    {
+      "package": "skein",
+      "version": "0.5.1",
+      "n": 100000,
+      "p": 10000,
+      "n_groups": null,
+      "lambda_grid_len": 100,
+      "fit_time_s": 435.49085804149945,
+      "fit_time_min_s": 434.0018018330011,
+      "fit_time_max_s": 436.9799142499978,
+      "trials": [
+        434.0018018330011,
+        436.9799142499978
+      ],
+      "n_iter": null,
+      "final_obj": null,
+      "active_set_size": 10,
+      "size": "large",
+      "extra": {
+        "screening": "strong",
+        "gamma": 3.7,
+        "info_keys": [
+          "converged",
+          "final_objs",
+          "iters",
+          "kkt_passes",
+          "working_set_sizes"
+        ],
+        "lambda_min_ratio": 0.05
+      },
+      "timestamp": "2026-05-11T17:55:33.556887+00:00"
     }
   ]
 }
