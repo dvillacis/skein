@@ -6,6 +6,61 @@ documented in `docs/extending/rust-api.md`.
 
 ## [Unreleased]
 
+### Added (M5.x-a — Debiased / desparsified lasso)
+
+Van de Geer–Bühlmann–Ritov (2014) confidence intervals and p-values
+for high-dimensional lasso regression. Pure Python on top of the
+existing `ElasticNetRegressor(alpha=1.0)` primitive — no Rust
+changes.
+
+`python/skein_glm/debiased.py`:
+
+- `debiased_lasso(X, y, *, lambda_, lambda_nodewise, alpha, ...)`
+  — free function returning a `DebiasedLassoResult` dataclass with
+  `coef_debiased`, `coef_lasso`, `se`, `ci_lower` / `ci_upper`,
+  `pvalues`, `z_scores`, `sigma_hat`, `Theta` (the approximate
+  inverse Gram), `lambda_main`, `lambda_nodewise`, `alpha`.
+- `DebiasedLassoRegressor` — sklearn-style facade exposing the
+  debiased estimate as `coef_` / `intercept_` and the VBR-specific
+  outputs as suffixed attributes (`se_`, `ci_lower_`, etc.), so
+  the result composes with sklearn pipelines.
+
+Implementation follows the **nodewise lasso** construction (VBR
+Theorem 2.2): for each column `j`, regress `X_j` on `X_{−j}` with
+a lasso to obtain `γ̂_j` and `τ̂_j² = ‖resid‖²/n + λ_j ‖γ̂_j‖₁`;
+assemble row `j` of `Θ̂` as `(−γ̂_{j,·}, 1, −γ̂_{j,·}) / τ̂_j²`.
+The debiased estimator is `β̂_d = β̂ + (1/n) · Θ̂ · Xᵀ(y − Xβ̂)`
+with asymptotic variance `σ̂² · diag(Θ̂ Σ̂ Θ̂ᵀ) / n`. Variance is
+computed via `U = X_s Θ̂ᵀ` so the `p × p` `Σ̂` is never
+materialized.
+
+Defaults: standardize columns, theoretical λ scale
+`√(2 log p / n)` for both main and nodewise fits (dimensionless on
+standardized features), joblib-parallel nodewise loop (`n_jobs=-1`
+recommended for `p ≳ 50`).
+
+Scope: least squares + dense `X` only. GLM debiasing (logistic /
+Poisson) via the weighted-LS surrogate + Fisher information is the
+planned follow-up (M5.x-b). Sparse `X` works through the
+underlying path solver's CSC dispatch but is not yet plumbed
+through the public API.
+
+22 pytest cover: dataclass shapes, finiteness, CI ordering, SE
+non-negativity, **empirical 95% CI coverage from 60-rep simulation**
+(load-bearing — catches Theta / variance math errors), active-
+coordinate coverage above 80%, debiased < lasso L1 error on
+active features, p-values smaller on true-active features,
+user-supplied / scalar / per-column λ_nodewise, no-intercept mode,
+n_jobs serial-vs-parallel parity, sklearn estimator round-trip,
+free-function ≡ wrapper equivalence, and parameter validation
+(3D X, mismatched y, alpha out of range, bad λ_nodewise shape,
+non-positive λ, p < 2).
+
+Closes M5.x-a; M5.x-b (GLM extension) and an R-anchor regression
+suite against `hdi::lasso.proj` are tracked under M5.x.
+
+Test count: **292 cargo + 338 pytest, all green** (up from 316).
+
 ### Added (M11.3 — Bootstrap edge stability)
 
 Pure-Python wrappers around the M11.1 / M11.2 graphical estimators
@@ -36,7 +91,7 @@ problem, threshold/CI ordering, joint dispatch (lasso + MCP),
 reproducibility under fixed `random_state`, `n_jobs` parity, and
 full parameter validation. No Rust changes.
 
-Test count: **292 cargo + 316 pytest, all green** (up from 289 pytest).
+Test count: **292 cargo + 316 pytest, all green** (up from 289 pytest at v0.6.0).
 
 ## [0.6.0] — 2026-05-12
 

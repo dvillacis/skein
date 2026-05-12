@@ -18,14 +18,14 @@ load-bearing piece; everything after stacks on top of it.
 | M2 — LLA + group block-CD + parallel | ✅ done | inner CD, working set, LLA outer, path, Rayon, op-norm Lipschitz, sparse-group, gap-safe, PyO3, criterion benches |
 | M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + **Poisson offsets** + M3.5 Cox PH (Breslow + **Efron** ties) + M3.6 multinomial (Rust + PyO3 + estimators) done; opportunistic GLMs (M3.7) pending |
 | M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
-| M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) + **M5.x stability selection (MB bootstrap)** done; adaptive done in M6.x; debiased + Rayon-parallel folds pending |
+| M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) + **M5.x stability selection (MB bootstrap)** + **M5.x-a debiased lasso (LS, VBR nodewise + Wald CIs/p-values)** done; adaptive done in M6.x; M5.x-b GLM debiasing + Rayon-parallel folds pending |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; **bridge `\|β\|^q` (LS, scalar LLA path) done**; **adaptive {Lasso, MCP, SCAD} (LS, two-stage pilot fit) done**; overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches moved to M9; comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 | M9 — Performance & correctness benchmarks | ⏳ partial | M9.1 harness + M9.3 lasso/LS + **M9.3 MCP/LS (deep + sparse, all sizes incl. n=100k, p=10k)** done, all comparators apples-to-apples via warm-started paths; M9.4 `benches/correctness/` framework live (per-λ Jaccard/sign/rel-L2 across skein/skglm/ncvreg). M9.2 criterion expansion + M9.4 at-scale `tests/fixtures/generate.R` parallel suite + M9.5 full docs page pending. Supersedes the deferred M8.6 bullet. |
 | M10 — Performance improvements | ⏳ partial | M10.1 profile (`col_dot` is the floor without BLAS) + M10.3 five waves: (1) col_axpy + F-order DenseMatrix + path-solver fixes; (2) adaptive inner tol via PGD + KKT-priority WS; (3) `blas-accelerate` feature; (4) (skipped — inner active-set CD didn't pay off); (5) F-series — duality gap + Anderson on residuals + gap-safe sphere screening, all gated and tested. **Skein medium lasso/LS: 7.6 s → 0.78 s sparse / 1.17 s deep — 6.5–10× total. Within 1.5× of glmnet on sparse, 1.9× on deep; ~8–9× behind sklearn's Cython `lasso_path`.** F-series wallclock-neutral on M9.3 scenarios — infrastructure correct but post-pass screening fires only on multi-pass λs (most converge in 1). M10.4 verified across deep + sparse regimes. Pending: G. cross-platform BLAS (OpenBLAS/MKL), H. pre-pass gap-safe screening, I. Cython-grade rewrite (off-roadmap). |
 
-Test count at this snapshot: **292 cargo + 316 pytest, all green.**
+Test count at this snapshot: **292 cargo + 338 pytest, all green.**
 
 ---
 
@@ -770,10 +770,42 @@ criterion arithmetic.
   estimators that fit a coarse model first, derive `w_j ∝ 1/|β̂_j|^η`,
   then refit. This is one of the headline reasons the per-feature
   weight axis exists.
-- **Debiased / desparsified lasso** for confidence intervals on the
-  active set (Van de Geer–Bühlmann–Ritov). Optional, behind a feature
-  flag — we are not a general inference library, but ignoring CIs
-  cedes ground to R.
+- ✅ **M5.x-a — Debiased / desparsified lasso (LS)**: Van de
+  Geer–Bühlmann–Ritov (2014) confidence intervals and Wald p-values
+  for high-dimensional least-squares lasso. Pure Python on top of
+  the existing `ElasticNetRegressor(alpha=1.0)` primitive — no Rust
+  changes. Constructs an approximate inverse Gram `Θ̂` via per-
+  column nodewise lassos (with the `+ λ‖γ‖₁` VBR correction in
+  `τ̂²`), debiases as `β̂_d = β̂ + (1/n) Θ̂ Xᵀ(y − Xβ̂)`, and reports
+  `σ̂² · diag(Θ̂ Σ̂ Θ̂ᵀ) / n` Wald inference computed via
+  `U = X_s Θ̂ᵀ` so the `p × p` `Σ̂` is never materialized. Public
+  surface: `debiased_lasso` free function returning a
+  `DebiasedLassoResult` dataclass, plus a `DebiasedLassoRegressor`
+  sklearn-style wrapper that exposes the debiased estimate as
+  `coef_` / `intercept_` and the inference outputs as suffixed
+  attributes (`se_`, `ci_lower_`, `ci_upper_`, `pvalues_`,
+  `z_scores_`, `Theta_`, `coef_lasso_`, `sigma_hat_`,
+  `lambda_main_`, `lambda_nodewise_`). Defaults: standardize
+  columns, theoretical `λ = √(2 log p / n)` for both main and
+  nodewise fits, joblib-parallel nodewise loop. 22 pytest cover
+  shapes and finiteness, **empirical 95% CI coverage over 60
+  replications** (load-bearing — catches Θ̂/variance errors),
+  active-coordinate coverage ≥ 80%, debiased < lasso L1 error on
+  active features, smaller p-values on true active features,
+  scalar/array `lambda_nodewise`, no-intercept mode, n_jobs
+  serial-vs-parallel parity, sklearn wrapper round-trip, and
+  parameter validation. Closes the inference-CI gap relative to
+  `glmnet` / `ncvreg` / `grpreg` (which offer none) and the R
+  `hdi::lasso.proj` canonical implementation. **R-anchor
+  regression** against `hdi::lasso.proj` on a fixed seed is the
+  next step — wire it into the M8 R suite.
+- **M5.x-b — Debiased GLM (pending)**: extend VBR debiasing to
+  logistic / Poisson via the weighted-LS surrogate `(W^{1/2} X,
+  W^{1/2} z)` with `W` and pseudo-response `z` from the final IRLS
+  step, using the Fisher information as the surrogate `Σ̂`.
+  Javanmard–Montanari (2014) variance for the logistic case; the
+  same nodewise machinery transfers. Single new function
+  `debiased_glm(...)` returning the same result dataclass.
 - **Rayon-parallel folds**: move CV's per-fold loop into Rust and
   dispatch across threads. Big speedup for fast solves.
 

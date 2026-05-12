@@ -183,6 +183,11 @@ from skein_glm.graph_stability import (
     GraphicalBootstrap,
     GraphicalStabilitySelection,
 )
+from skein_glm.debiased import (
+    DebiasedLassoRegressor,
+    DebiasedLassoResult,
+    debiased_lasso,
+)
 from skein_glm.adaptive import (
     AdaptiveCoxLassoPathCV,
     AdaptiveCoxLassoPathRegressor,
@@ -486,6 +491,9 @@ __all__ = [
     "JointEBICPathResult",
     "GraphicalStabilitySelection",
     "GraphicalBootstrap",
+    "DebiasedLassoRegressor",
+    "DebiasedLassoResult",
+    "debiased_lasso",
 ]
 
 __version__ = "0.6.0"
