@@ -25,7 +25,7 @@ load-bearing piece; everything after stacks on top of it.
 | M9 — Performance & correctness benchmarks | ⏳ partial | M9.1 harness + M9.3 lasso/LS + **M9.3 MCP/LS (deep + sparse, all sizes incl. n=100k, p=10k)** done, all comparators apples-to-apples via warm-started paths; M9.4 `benches/correctness/` framework live (per-λ Jaccard/sign/rel-L2 across skein/skglm/ncvreg). M9.2 criterion expansion + M9.4 at-scale `tests/fixtures/generate.R` parallel suite + M9.5 full docs page pending. Supersedes the deferred M8.6 bullet. |
 | M10 — Performance improvements | ⏳ partial | M10.1 profile (`col_dot` is the floor without BLAS) + M10.3 five waves: (1) col_axpy + F-order DenseMatrix + path-solver fixes; (2) adaptive inner tol via PGD + KKT-priority WS; (3) `blas-accelerate` feature; (4) (skipped — inner active-set CD didn't pay off); (5) F-series — duality gap + Anderson on residuals + gap-safe sphere screening, all gated and tested. **Skein medium lasso/LS: 7.6 s → 0.78 s sparse / 1.17 s deep — 6.5–10× total. Within 1.5× of glmnet on sparse, 1.9× on deep; ~8–9× behind sklearn's Cython `lasso_path`.** F-series wallclock-neutral on M9.3 scenarios — infrastructure correct but post-pass screening fires only on multi-pass λs (most converge in 1). M10.4 verified across deep + sparse regimes. Pending: G. cross-platform BLAS (OpenBLAS/MKL), H. pre-pass gap-safe screening, I. Cython-grade rewrite (off-roadmap). |
 
-Test count at this snapshot: **274 cargo + 289 pytest, all green.**
+Test count at this snapshot: **292 cargo + 316 pytest, all green.**
 
 ---
 
@@ -1686,12 +1686,37 @@ Exit criteria:
   problem (modulo numerical noise).
 - Benchmark vs R `EstimateGroupNetwork` on p ∈ {50, 100, 200}, K=3.
 
-### M11.3 — Follow-ups (deferred)
+### M11.3 — Follow-ups
 
 - **Polychoric / polyserial correlations** for ordinal Likert data —
   high value for psychometrics; Python-side preprocessing helper.
-- **Bootstrap edge stability** (`bootnet`-style) — pure Python
-  wrapper around the M11.1/M11.2 estimators.
+- ✅ **Bootstrap edge stability** (`bootnet`-style): two pure-Python
+  wrappers around the M11.1 / M11.2 estimators in
+  `python/skein_glm/graph_stability.py`.
+  `GraphicalStabilitySelection` lifts MB (2010) subsample stability
+  selection to **edges** — sweep a user-supplied λ-grid; for each
+  (bootstrap, λ) refit, record the off-diagonal nonzero pattern;
+  aggregate to per-(λ, i, j) selection probability with a max-over-λ
+  stable-edge set at threshold π_thr (defaults to 0.6). Output shapes
+  `(n_lambdas, p, p)` single / `(n_lambdas, K, p, p)` joint;
+  `stable_edges_` is `(n_stable, 2)` for single, a list of K such
+  arrays for joint. `GraphicalBootstrap` runs the classic non-
+  parametric (resample-with-replacement) bootstrap at a single λ and
+  returns the per-edge sampling distribution: mean, SD,
+  `[α/2, 1−α/2]` quantile CIs, and edge selection probability —
+  the headline `bootnet::bootnet(type="nonparametric")` output for
+  edge error bars. Both auto-dispatch single-vs-joint via the
+  estimator's `alpha`/`lambda_2` surface, parallelize the bootstrap
+  loop over `joblib`, and reject precomputed-covariance inputs with
+  a clear error. Exported from `skein_glm`; 16 pytest cover shapes,
+  signal recovery (true non-zero edges have higher max-prob than
+  true zeros on a synthetic sparse-Θ problem; bootstrap selection
+  probability separates true edges from non-edges), threshold
+  monotonicity, joint dispatch (MCP + lasso), CI ordering
+  (`ci_lower ≤ mean ≤ ci_upper`), reproducibility under fixed
+  `random_state`, `n_jobs` parity (serial == parallel), and full
+  parameter validation including covariance-input rejection. No
+  Rust changes; entirely composes existing M11 estimators.
 - **Fused JGL** (TV across populations) — needs a 1D TV prox we don't
   have; group form covers most published applications.
 - Time-varying / dynamic glasso, mixed graphical models.

@@ -4,6 +4,40 @@ All notable changes to `skein-glm` are recorded here. The project follows
 semantic versioning, with the pre-1.0 minor-bump-on-feature policy
 documented in `docs/extending/rust-api.md`.
 
+## [Unreleased]
+
+### Added (M11.3 — Bootstrap edge stability)
+
+Pure-Python wrappers around the M11.1 / M11.2 graphical estimators
+in `python/skein_glm/graph_stability.py`:
+
+- `GraphicalStabilitySelection` — Meinshausen–Bühlmann (2010)
+  subsample stability selection lifted to **edges**. Sweeps a
+  user-supplied λ-grid; per (bootstrap, λ) refit records the
+  off-diagonal nonzero pattern of `Θ̂`; aggregates to per-(λ, i, j)
+  selection probability. Stable edges are those whose max-over-λ
+  probability crosses a threshold (default 0.6; MB error-control
+  requires `> 0.5`). Output shape `(n_lambdas, p, p)` single,
+  `(n_lambdas, K, p, p)` joint.
+- `GraphicalBootstrap` — classic non-parametric (resample-with-
+  replacement) bootstrap at a single λ. Returns the per-edge
+  bootstrap mean, SD, `[α/2, 1−α/2]` quantile CIs, and edge
+  selection probability — the headline
+  `bootnet::bootnet(type="nonparametric")` output for edge error
+  bars in network psychometrics.
+
+Both classes auto-dispatch single-vs-joint via the wrapped
+estimator's `alpha` (single) or `lambda_2` (joint) init param,
+parallelize the bootstrap loop via `joblib`, and reject precomputed-
+covariance inputs with a clear error.
+
+16 pytest cover shapes, signal recovery on a synthetic sparse-`Θ`
+problem, threshold/CI ordering, joint dispatch (lasso + MCP),
+reproducibility under fixed `random_state`, `n_jobs` parity, and
+full parameter validation. No Rust changes.
+
+Test count: **292 cargo + 316 pytest, all green** (up from 289 pytest).
+
 ## [0.6.0] — 2026-05-12
 
 Feature release: **M11 — graphical models**. The first non-regression

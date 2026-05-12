@@ -179,6 +179,10 @@ from skein_glm.graph_selection import (
     ebic_path,
     joint_ebic_path,
 )
+from skein_glm.graph_stability import (
+    GraphicalBootstrap,
+    GraphicalStabilitySelection,
+)
 from skein_glm.adaptive import (
     AdaptiveCoxLassoPathCV,
     AdaptiveCoxLassoPathRegressor,
@@ -480,6 +484,8 @@ __all__ = [
     "joint_ebic_path",
     "EBICPathResult",
     "JointEBICPathResult",
+    "GraphicalStabilitySelection",
+    "GraphicalBootstrap",
 ]
 
 __version__ = "0.6.0"
