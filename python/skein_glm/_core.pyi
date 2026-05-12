@@ -2143,3 +2143,66 @@ def solve_multinomial_elastic_net_path_sparse(
 ) -> tuple[
     NDArray[np.float64], NDArray[np.float64], NDArray[np.float64], dict,
 ]: ...
+
+# ---- M11: graphical models ----------------------------------------
+
+def solve_glasso_lasso(
+    sample_cov: NDArray[np.float64],
+    lambda_: float,
+    *,
+    edge_weights: NDArray[np.float64] | None = ...,
+    diag_offset: float = ...,
+    max_outer_iter: int = ...,
+    outer_tol: float = ...,
+    inner_max_iter: int = ...,
+    inner_tol: float = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], dict]: ...
+def solve_glasso_mcp(
+    sample_cov: NDArray[np.float64],
+    lambda_: float,
+    gamma: float,
+    *,
+    edge_weights: NDArray[np.float64] | None = ...,
+    diag_offset: float = ...,
+    max_outer_iter: int = ...,
+    outer_tol: float = ...,
+    inner_max_iter: int = ...,
+    inner_tol: float = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], dict]: ...
+def solve_glasso_scad(
+    sample_cov: NDArray[np.float64],
+    lambda_: float,
+    a: float,
+    *,
+    edge_weights: NDArray[np.float64] | None = ...,
+    diag_offset: float = ...,
+    max_outer_iter: int = ...,
+    outer_tol: float = ...,
+    inner_max_iter: int = ...,
+    inner_tol: float = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], dict]: ...
+def solve_joint_glasso_lasso(
+    sample_covs: list[NDArray[np.float64]],
+    n_samples: list[float],
+    lambda_: float,
+    *,
+    edge_weights: NDArray[np.float64] | None = ...,
+    rho: float = ...,
+    diag_offset: float = ...,
+    max_iter: int = ...,
+    primal_tol: float = ...,
+    dual_tol: float = ...,
+) -> tuple[list[NDArray[np.float64]], dict]: ...
+def solve_joint_glasso_mcp(
+    sample_covs: list[NDArray[np.float64]],
+    n_samples: list[float],
+    lambda_: float,
+    gamma: float,
+    *,
+    edge_weights: NDArray[np.float64] | None = ...,
+    rho: float = ...,
+    diag_offset: float = ...,
+    max_iter: int = ...,
+    primal_tol: float = ...,
+    dual_tol: float = ...,
+) -> tuple[list[NDArray[np.float64]], dict]: ...

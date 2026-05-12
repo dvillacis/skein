@@ -7,7 +7,7 @@ expose `coef_`, `intercept_`, and `info_` after `fit`.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import NDArray
@@ -5400,6 +5400,11 @@ class _GraphicalEstimatorBase(BaseEstimator):
     covariance_: NDArray[np.float64]
     info_: dict[str, Any]
     n_features_in_: int
+    # Subclasses override `_solver` with one of `_core.solve_glasso_{lasso,mcp,scad}`,
+    # which have different signatures (extra `gamma` / `a` positional). Typed
+    # loosely so mypy doesn't flag the override variance — the actual signature
+    # is enforced by each subclass's `_solver_kwargs`.
+    _solver: Callable[..., Any]
 
 
 class GraphicalLasso(_GraphicalEstimatorBase):
@@ -5440,7 +5445,7 @@ class GraphicalLasso(_GraphicalEstimatorBase):
     n_features_in_ : int
     """
 
-    _solver = staticmethod(_core.solve_glasso_lasso)
+    _solver: Callable[..., Any] = staticmethod(_core.solve_glasso_lasso)
 
     def __init__(
         self,
@@ -5581,6 +5586,9 @@ class _JointGraphicalBase(BaseEstimator):
     info_: dict[str, Any]
     n_features_in_: int
     n_populations_: int
+    # Loosely typed for the same reason as `_GraphicalEstimatorBase._solver`:
+    # subclasses point this at pyfunctions with different signatures.
+    _solver: Callable[..., Any]
 
 
 class JointGraphicalLasso(_JointGraphicalBase):
@@ -5622,7 +5630,7 @@ class JointGraphicalLasso(_JointGraphicalBase):
     implemented.
     """
 
-    _solver = staticmethod(_core.solve_joint_glasso_lasso)
+    _solver: Callable[..., Any] = staticmethod(_core.solve_joint_glasso_lasso)
 
     def __init__(
         self,
