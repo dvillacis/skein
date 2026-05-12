@@ -165,7 +165,7 @@ fn build_path_outputs<'py, F>(
     make_penalty: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(f64, Array1<f64>) -> Box<dyn Penalty>,
+    F: Fn(f64, Array1<f64>) -> Box<dyn Penalty> + Send,
 {
     let x_arr = x.as_array().to_owned();
     let y_arr = y.as_array().to_owned();
@@ -247,7 +247,12 @@ where
         let datafit = LeastSquares::with_sample_weights(y_arr, sw);
         let make_pen =
             move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, pen_weights.clone()) };
-        let (betas_aug, report) = solve_path(&design, &datafit, make_pen, &path_cfg);
+        // Release the GIL during the heavy compute so Python-side
+        // thread pools (e.g. CV fold loops via joblib's "threads"
+        // backend) can actually run folds in parallel. The closure
+        // and its captures are pure Rust — no PyObject references.
+        let (betas_aug, report) =
+            py.allow_threads(|| solve_path(&design, &datafit, make_pen, &path_cfg));
         let (coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
 
         let info = PyDict::new_bound(py);
@@ -277,7 +282,8 @@ where
     let design = DenseMatrix::new(xs);
     let datafit = LeastSquares::new(ys);
     let make_pen = move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, weights_std.clone()) };
-    let (betas_std, report) = solve_path(&design, &datafit, make_pen, &path_cfg);
+    let (betas_std, report) =
+        py.allow_threads(|| solve_path(&design, &datafit, make_pen, &path_cfg));
     let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
 
     let info = PyDict::new_bound(py);
@@ -2244,7 +2250,7 @@ fn build_glm_path_outputs<'py, F, V, G>(
     make_penalty: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty>,
+    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty> + Send,
     V: Fn(ndarray::ArrayView1<'_, f64>) -> PyResult<()>,
     G: FnOnce(ndarray::Array1<f64>, Option<ndarray::Array1<f64>>) -> Box<dyn GlmDatafit>,
 {
@@ -2334,7 +2340,10 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (betas_aug, report) = match scales_user.as_ref() {
+    // Release the GIL during the heavy compute so Python-side thread
+    // pools (CV fold loops, joblib in stability selection, debiased
+    // lasso nodewise loop, etc.) actually run concurrently.
+    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(design.n_features());
             for j in 0..p_user {
@@ -2365,7 +2374,7 @@ where
             max_outer,
             outer_tol,
         ),
-    };
+    });
 
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -3767,7 +3776,7 @@ fn build_cox_path_outputs<'py, F>(
     make_penalty: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty>,
+    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty> + Send,
 {
     let x_arr = x.as_array().to_owned();
     let time_arr = time.as_array().to_owned();
@@ -3830,7 +3839,7 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (mut betas, report) = match scales_user.as_ref() {
+    let (mut betas, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let std_design = Standardized::new(design, scales.clone());
             prox_newton_solve_path(
@@ -3856,7 +3865,7 @@ where
             max_outer,
             outer_tol,
         ),
-    };
+    });
 
     if let Some(scales) = scales_user.as_ref() {
         for k in 0..betas.nrows() {
@@ -4636,7 +4645,7 @@ fn build_path_outputs_sparse_ls<'py, F>(
     make_penalty: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty>,
+    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty> + Send,
 {
     let y_arr = y.as_array().to_owned();
     if y_arr.len() != n_rows {
@@ -4703,7 +4712,7 @@ where
     let datafit = LeastSquares::new(y_arr);
     let make_pen = move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, pen_weights.clone()) };
 
-    let (betas_aug, report) = match scales_user.as_ref() {
+    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
             for j in 0..n_cols {
@@ -4714,7 +4723,7 @@ where
             solve_path(&std_design, &datafit, make_pen, &path_cfg)
         }
         None => solve_path(&csc_eff, &datafit, make_pen, &path_cfg),
-    };
+    });
 
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -7353,7 +7362,7 @@ fn build_glm_path_outputs_sparse<'py, F, V, G>(
     make_penalty: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty>,
+    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty> + Send,
     V: Fn(ndarray::ArrayView1<'_, f64>) -> PyResult<()>,
     G: FnOnce(ndarray::Array1<f64>) -> Box<dyn GlmDatafit>,
 {
@@ -7414,7 +7423,7 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (betas_aug, report) = match scales_user.as_ref() {
+    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
             for j in 0..n_cols {
@@ -7444,7 +7453,7 @@ where
             max_outer,
             outer_tol,
         ),
-    };
+    });
 
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -7656,7 +7665,7 @@ fn build_cox_path_outputs_sparse<'py, F>(
     make_penalty: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty>,
+    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty> + Send,
 {
     let time_arr = time.as_array().to_owned();
     let event_arr = event.as_array().to_owned();
@@ -7714,7 +7723,7 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (mut betas, report) = match scales_user.as_ref() {
+    let (mut betas, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let std_design = Standardized::new(csc, scales.clone());
             prox_newton_solve_path(
@@ -7740,7 +7749,7 @@ where
             max_outer,
             outer_tol,
         ),
-    };
+    });
 
     if let Some(scales) = scales_user.as_ref() {
         for k in 0..betas.nrows() {

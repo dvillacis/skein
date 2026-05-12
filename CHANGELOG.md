@@ -6,6 +6,51 @@ documented in `docs/extending/rust-api.md`.
 
 ## [Unreleased]
 
+### Added (M5.x — Threaded CV fold parallelism via GIL release)
+
+Closes the remaining M5.x item. The fold loop in `_PathCVMixin` and
+`_CoxPathCVMixin` (`python/skein_glm/cv.py`) now dispatches K folds
+across threads via `joblib.Parallel(prefer="threads")`, gated by a new
+`n_jobs` constructor parameter on every CV class.
+
+**The enabling fix is in Rust**: the heavy compute inside the PyO3
+builder functions (`build_path_outputs`, `build_path_outputs_sparse_ls`,
+`build_glm_path_outputs`, `build_glm_path_outputs_sparse`,
+`build_cox_path_outputs`, `build_cox_path_outputs_sparse`) now wraps
+the `solve_path` / `prox_newton_solve_path` calls in
+`py.allow_threads(|| ...)`. Without this, Python threads serialized
+on the GIL during the path solve and parallelism was a no-op.
+
+Concrete impact on a 5-fold CV at `(n=5000, p=200)`:
+
+- `MCPPathCV`: 16.5 s → 7.3 s (n_jobs=-1 on 8 cores, ~2.3×).
+- `LogisticLassoPathCV` at `(n=3000, p=100)`: 187 s → 74 s (~2.5×).
+
+**Correctness**: `n_jobs=1` and `n_jobs=-1` produce **bitwise-identical**
+results — the fold loop is deterministic regardless of thread
+interleaving. 14 new pytest in `tests/test_cv_parallel.py` cover LS
+(MCP/SCAD/EN), logistic (Lasso/EN/MCP/SCAD), Poisson (Lasso/EN/MCP/SCAD),
+and Cox (MCP/SCAD) families with parameterized parity checks. Plus a
+signature audit that every user-facing CV class exposes `n_jobs`.
+
+**Side benefits**: the GIL release also accelerates anything else that
+calls into these builders through joblib threading —
+`StabilitySelection`, `GraphicalStabilitySelection`,
+`GraphicalBootstrap`, the debiased lasso nodewise loop. They were all
+previously bottlenecked by the same GIL contention.
+
+**Scope notes**: the GIL release is applied to the **scalar-penalty
+builders** (LS, GLM, Cox dense + sparse — the most-used CV paths).
+Block-penalty builders (group / sparse-group), multinomial path
+builders, and multitask path builders still hold the GIL during solve
+— a follow-up PR will extend the same pattern to them. CV with those
+estimators still works, just doesn't get the parallel speedup yet.
+The `n_jobs` parameter is wired through every CV class — when the
+corresponding builder gets GIL release, those CVs will accelerate
+without any further Python changes.
+
+Test count: **292 cargo + 403 pytest, all green** (up from 389).
+
 ### Added (M5.x-b — Debiased / desparsified lasso for GLMs)
 
 Extends the VBR debiasing framework from least squares (M5.x-a) to

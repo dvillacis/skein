@@ -113,7 +113,35 @@ class _PathCVMixin:
         `predict_proba`, Cox → `decision_function`)."""
         return np.asarray(model.predict(x))
 
+    def _fit_one_fold(
+        self,
+        train_idx: NDArray[np.int64],
+        test_idx: NDArray[np.int64],
+        x: Any,
+        y: NDArray[np.float64],
+        lambdas: NDArray[np.float64],
+        offset_arr: NDArray[np.float64] | None,
+    ) -> NDArray[np.float64]:
+        """Fit on the train rows of one fold, score on the held-out
+        rows, return the per-λ score vector. Called concurrently from
+        the threaded fold loop in :meth:`fit`."""
+        x_tr = _row_index(x, train_idx)
+        x_te = _row_index(x, test_idx)
+        y_tr = y[train_idx]
+        y_te = y[test_idx]
+        fold_overrides: dict[str, Any] = {"lambdas": lambdas}
+        if offset_arr is not None:
+            fold_overrides["offset"] = offset_arr[train_idx]
+        fold_model = self._make_base_path(**fold_overrides).fit(x_tr, y_tr)
+        preds = self._predict_for_score(fold_model, x_te)  # (n_te, n_lambdas)
+        return np.array(
+            [self._score(y_te, preds[:, k]) for k in range(len(lambdas))],
+            dtype=np.float64,
+        )
+
     def fit(self, x, y):
+        from joblib import Parallel, delayed
+
         y = np.ascontiguousarray(y, dtype=np.float64)
 
         # Determine the λ-grid once. If the user passed `lambdas`, use
@@ -148,21 +176,21 @@ class _PathCVMixin:
         if offset_arr is not None:
             offset_arr = np.ascontiguousarray(offset_arr, dtype=np.float64)
 
-        n_folds = splitter.get_n_splits(idx)
-        scores = np.empty((n_folds, len(lambdas)), dtype=np.float64)
-        for fold, (train_idx, test_idx) in enumerate(splitter.split(idx)):
-            x_tr = _row_index(x, train_idx)
-            x_te = _row_index(x, test_idx)
-            y_tr = y[train_idx]
-            y_te = y[test_idx]
-
-            fold_overrides: dict[str, Any] = {"lambdas": lambdas}
-            if offset_arr is not None:
-                fold_overrides["offset"] = offset_arr[train_idx]
-            fold_model = self._make_base_path(**fold_overrides).fit(x_tr, y_tr)
-            preds = self._predict_for_score(fold_model, x_te)  # (n_te, n_lambdas)
-            for k in range(len(lambdas)):
-                scores[fold, k] = self._score(y_te, preds[:, k])
+        # Thread-based fold parallelism. The Rust solver releases the
+        # GIL during compute, so threads run concurrently without GIL
+        # contention; thread-based (vs process-based) avoids pickling X
+        # into K worker processes. `n_jobs` is opt-in via the subclass
+        # __init__ — subclasses that don't expose it default to serial
+        # via the `getattr` fallback.
+        n_jobs = getattr(self, "n_jobs", None)
+        splits = list(splitter.split(idx))
+        rows = Parallel(n_jobs=n_jobs, prefer="threads")(
+            delayed(self._fit_one_fold)(
+                train_idx, test_idx, x, y, lambdas, offset_arr,
+            )
+            for train_idx, test_idx in splits
+        )
+        scores = np.stack(rows, axis=0)
 
         mean_scores = scores.mean(axis=0)
         std_scores = scores.std(axis=0)
@@ -201,6 +229,7 @@ class MCPPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -215,6 +244,7 @@ class MCPPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         self.gamma = gamma
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -254,6 +284,7 @@ class SCADPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -268,6 +299,7 @@ class SCADPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         self.a = a
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -309,6 +341,7 @@ class ElasticNetPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -323,6 +356,7 @@ class ElasticNetPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -366,6 +400,7 @@ class BridgePathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         eps: float = 1e-6,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -382,6 +417,7 @@ class BridgePathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         self.eps = eps
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -429,6 +465,7 @@ class GroupLassoPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -444,6 +481,7 @@ class GroupLassoPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         self.groups = groups
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -486,6 +524,7 @@ class GroupElasticNetPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -502,6 +541,7 @@ class GroupElasticNetPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -544,6 +584,7 @@ class GroupMCPPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -562,6 +603,7 @@ class GroupMCPPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         self.gamma = gamma
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -609,6 +651,7 @@ class GroupSCADPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -627,6 +670,7 @@ class GroupSCADPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         self.a = a
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -673,6 +717,7 @@ class SparseGroupLassoPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -689,6 +734,7 @@ class SparseGroupLassoPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -732,6 +778,7 @@ class SparseGroupMCPPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -752,6 +799,7 @@ class SparseGroupMCPPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -803,6 +851,7 @@ class SparseGroupSCADPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -823,6 +872,7 @@ class SparseGroupSCADPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1001,7 +1051,37 @@ class _CoxPathCVMixin:
     def _score(self, time_test, event_test, eta_pred) -> float:
         return _harrell_c_index(time_test, event_test, eta_pred)
 
+    def _fit_one_fold_cox(
+        self,
+        train_idx: NDArray[np.int64],
+        test_idx: NDArray[np.int64],
+        x: Any,
+        time_arr: NDArray[np.float64],
+        event_arr: NDArray[np.float64],
+        lambdas: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        """Fit one Cox fold; return per-λ c-index scores (NaN for the
+        whole row if the fold has no events — those are masked out by
+        nanmean / nanstd downstream)."""
+        n_lambdas = len(lambdas)
+        e_tr = event_arr[train_idx]
+        if e_tr.sum() < 1.0:
+            return np.full(n_lambdas, np.nan, dtype=np.float64)
+        x_tr = _row_index(x, train_idx)
+        x_te = _row_index(x, test_idx)
+        t_tr = time_arr[train_idx]
+        t_te = time_arr[test_idx]
+        e_te = event_arr[test_idx]
+        fold_model = self._make_base_path(lambdas=lambdas).fit(x_tr, t_tr, e_tr)
+        etas = np.asarray(fold_model.decision_function(x_te))  # (n_te, n_lambdas)
+        return np.array(
+            [self._score(t_te, e_te, etas[:, k]) for k in range(n_lambdas)],
+            dtype=np.float64,
+        )
+
     def fit(self, x, time, event):
+        from joblib import Parallel, delayed
+
         time_arr = np.ascontiguousarray(time, dtype=np.float64)
         event_arr = np.ascontiguousarray(event, dtype=np.float64)
 
@@ -1030,28 +1110,18 @@ class _CoxPathCVMixin:
             splitter.split(idx, stratify) if stratify is not None
             else splitter.split(idx)
         )
-        n_folds = (
-            splitter.get_n_splits(idx, stratify) if stratify is not None
-            else splitter.get_n_splits(idx)
+
+        # Threaded fold parallelism — same rationale as the LS/GLM
+        # mixin. `n_jobs` is opt-in via the subclass __init__.
+        n_jobs = getattr(self, "n_jobs", None)
+        splits = list(split_iter)
+        rows = Parallel(n_jobs=n_jobs, prefer="threads")(
+            delayed(self._fit_one_fold_cox)(
+                train_idx, test_idx, x, time_arr, event_arr, lambdas,
+            )
+            for train_idx, test_idx in splits
         )
-        scores = np.full((n_folds, len(lambdas)), np.nan, dtype=np.float64)
-
-        for fold, (train_idx, test_idx) in enumerate(split_iter):
-            x_tr = _row_index(x, train_idx)
-            x_te = _row_index(x, test_idx)
-            t_tr = time_arr[train_idx]
-            t_te = time_arr[test_idx]
-            e_tr = event_arr[train_idx]
-            e_te = event_arr[test_idx]
-
-            if e_tr.sum() < 1.0:
-                # Cox needs at least one event to fit; skip the fold.
-                continue
-
-            fold_model = self._make_base_path(lambdas=lambdas).fit(x_tr, t_tr, e_tr)
-            etas = np.asarray(fold_model.decision_function(x_te))  # (n_te, n_lambdas)
-            for k in range(len(lambdas)):
-                scores[fold, k] = self._score(t_te, e_te, etas[:, k])
+        scores = np.stack(rows, axis=0)
 
         mean_scores = np.nanmean(scores, axis=0)
         std_scores = np.nanstd(scores, axis=0)
@@ -1093,6 +1163,7 @@ class LogisticMCPPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1107,6 +1178,7 @@ class LogisticMCPPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMixin):
         self.gamma = gamma
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1139,6 +1211,7 @@ class LogisticSCADPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1153,6 +1226,7 @@ class LogisticSCADPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMixin):
         self.a = a
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1185,6 +1259,7 @@ class LogisticElasticNetPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMi
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1199,6 +1274,7 @@ class LogisticElasticNetPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMi
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1231,6 +1307,7 @@ class LogisticLassoPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1244,6 +1321,7 @@ class LogisticLassoPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMixin):
     ) -> None:
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1276,6 +1354,7 @@ class LogisticGroupLassoPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMi
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1290,6 +1369,7 @@ class LogisticGroupLassoPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMi
         self.groups = groups
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1323,6 +1403,7 @@ class LogisticGroupMCPPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMixi
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1338,6 +1419,7 @@ class LogisticGroupMCPPathCV(_LogisticPathCVMixin, BaseEstimator, ClassifierMixi
         self.gamma = gamma
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1371,6 +1453,7 @@ class LogisticSparseGroupLassoPathCV(_LogisticPathCVMixin, BaseEstimator, Classi
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1386,6 +1469,7 @@ class LogisticSparseGroupLassoPathCV(_LogisticPathCVMixin, BaseEstimator, Classi
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1420,6 +1504,7 @@ class LogisticSparseGroupMCPPathCV(_LogisticPathCVMixin, BaseEstimator, Classifi
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1437,6 +1522,7 @@ class LogisticSparseGroupMCPPathCV(_LogisticPathCVMixin, BaseEstimator, Classifi
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1474,6 +1560,7 @@ class LogisticSparseGroupSCADPathCV(_LogisticPathCVMixin, BaseEstimator, Classif
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1491,6 +1578,7 @@ class LogisticSparseGroupSCADPathCV(_LogisticPathCVMixin, BaseEstimator, Classif
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1530,6 +1618,7 @@ class PoissonMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1545,6 +1634,7 @@ class PoissonMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         self.gamma = gamma
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1578,6 +1668,7 @@ class PoissonSCADPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1593,6 +1684,7 @@ class PoissonSCADPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         self.a = a
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1626,6 +1718,7 @@ class PoissonElasticNetPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1641,6 +1734,7 @@ class PoissonElasticNetPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1673,6 +1767,7 @@ class PoissonLassoPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1687,6 +1782,7 @@ class PoissonLassoPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
     ) -> None:
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1720,6 +1816,7 @@ class PoissonGroupLassoPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1735,6 +1832,7 @@ class PoissonGroupLassoPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin
         self.groups = groups
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1769,6 +1867,7 @@ class PoissonGroupMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1785,6 +1884,7 @@ class PoissonGroupMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorMixin):
         self.gamma = gamma
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1819,6 +1919,7 @@ class PoissonSparseGroupLassoPathCV(_PoissonPathCVMixin, BaseEstimator, Regresso
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1835,6 +1936,7 @@ class PoissonSparseGroupLassoPathCV(_PoissonPathCVMixin, BaseEstimator, Regresso
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1870,6 +1972,7 @@ class PoissonSparseGroupMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorM
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1888,6 +1991,7 @@ class PoissonSparseGroupMCPPathCV(_PoissonPathCVMixin, BaseEstimator, RegressorM
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1926,6 +2030,7 @@ class PoissonSparseGroupSCADPathCV(_PoissonPathCVMixin, BaseEstimator, Regressor
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1944,6 +2049,7 @@ class PoissonSparseGroupSCADPathCV(_PoissonPathCVMixin, BaseEstimator, Regressor
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -1984,6 +2090,7 @@ class CoxMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -1998,6 +2105,7 @@ class CoxMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         self.gamma = gamma
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -2030,6 +2138,7 @@ class CoxSCADPathCV(_CoxPathCVMixin, BaseEstimator):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -2044,6 +2153,7 @@ class CoxSCADPathCV(_CoxPathCVMixin, BaseEstimator):
         self.a = a
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -2076,6 +2186,7 @@ class CoxGroupLassoPathCV(_CoxPathCVMixin, BaseEstimator):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -2090,6 +2201,7 @@ class CoxGroupLassoPathCV(_CoxPathCVMixin, BaseEstimator):
         self.groups = groups
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -2123,6 +2235,7 @@ class CoxGroupMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -2138,6 +2251,7 @@ class CoxGroupMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         self.gamma = gamma
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -2171,6 +2285,7 @@ class CoxSparseGroupLassoPathCV(_CoxPathCVMixin, BaseEstimator):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -2186,6 +2301,7 @@ class CoxSparseGroupLassoPathCV(_CoxPathCVMixin, BaseEstimator):
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -2220,6 +2336,7 @@ class CoxSparseGroupMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -2237,6 +2354,7 @@ class CoxSparseGroupMCPPathCV(_CoxPathCVMixin, BaseEstimator):
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
@@ -2274,6 +2392,7 @@ class CoxSparseGroupSCADPathCV(_CoxPathCVMixin, BaseEstimator):
         *,
         cv: Any = 5,
         random_state: int | None = None,
+        n_jobs: int | None = None,
         lambdas: NDArray[np.float64] | None = None,
         n_lambdas: int = 100,
         lambda_min_ratio: float = 1e-3,
@@ -2291,6 +2410,7 @@ class CoxSparseGroupSCADPathCV(_CoxPathCVMixin, BaseEstimator):
         self.alpha = alpha
         self.cv = cv
         self.random_state = random_state
+        self.n_jobs = n_jobs
         self.lambdas = lambdas
         self.n_lambdas = n_lambdas
         self.lambda_min_ratio = lambda_min_ratio
