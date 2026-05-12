@@ -3318,6 +3318,63 @@ fn solve_poisson_scad_path<'py>(
 
 #[pyfunction]
 #[pyo3(signature = (
+    x, y, *, alpha=0.5, offset=None,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    sample_weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_poisson_elastic_net_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray1<f64>,
+    alpha: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    sample_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if !(0.0..=1.0).contains(&alpha) {
+        return Err(PyValueError::new_err(format!(
+            "alpha must be in [0, 1]; got {alpha}"
+        )));
+    }
+    let n = x.as_array().nrows();
+    let make_glm = poisson_glm_factory_with_sw(offset, n)?;
+    build_glm_path_outputs(
+        py,
+        x,
+        y,
+        weights,
+        sample_weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        validate_y_nonneg,
+        make_glm,
+        move |lam, w| Box::new(ElasticNet::with_weights(lam, alpha, w)),
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
     x, y, groups, *, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
@@ -8497,6 +8554,67 @@ fn solve_poisson_scad_path_sparse<'py>(
 
 #[pyfunction]
 #[pyo3(signature = (
+    x_data, x_indices, x_indptr, n_rows, n_cols, y, *, alpha=0.5, offset=None,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false, max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+fn solve_poisson_elastic_net_path_sparse<'py>(
+    py: Python<'py>,
+    x_data: PyReadonlyArray1<f64>,
+    x_indices: PyReadonlyArray1<i64>,
+    x_indptr: PyReadonlyArray1<i64>,
+    n_rows: usize,
+    n_cols: usize,
+    y: PyReadonlyArray1<f64>,
+    alpha: f64,
+    offset: Option<PyReadonlyArray1<f64>>,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if !(0.0..=1.0).contains(&alpha) {
+        return Err(PyValueError::new_err(format!(
+            "alpha must be in [0, 1]; got {alpha}"
+        )));
+    }
+    let make_glm = poisson_glm_factory(offset, n_rows)?;
+    build_glm_path_outputs_sparse(
+        py,
+        n_rows,
+        n_cols,
+        x_data,
+        x_indices,
+        x_indptr,
+        y,
+        weights,
+        lambdas,
+        n_lambdas,
+        lambda_min_ratio,
+        max_iter,
+        tol,
+        acceleration,
+        fit_intercept,
+        standardize_x,
+        max_outer,
+        outer_tol,
+        validate_y_nonneg,
+        make_glm,
+        move |lam, w| Box::new(ElasticNet::with_weights(lam, alpha, w)),
+    )
+}
+
+#[pyfunction]
+#[pyo3(signature = (
     x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *, offset=None,
     lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3, weights=None,
     max_iter=100, tol=1e-6, acceleration=Some(5),
@@ -10384,6 +10502,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(solve_logistic_sparse_group_scad_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_scad_path, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_poisson_elastic_net_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_group_lasso_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_group_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_sparse_group_lasso_path, m)?)?;
@@ -10446,6 +10565,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_mcp_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_scad_path_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(solve_poisson_elastic_net_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_group_lasso_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(solve_poisson_group_mcp_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(

@@ -3743,6 +3743,174 @@ class PoissonSCADPathRegressor(_PoissonPathRegressorBase):
         return self
 
 
+class PoissonElasticNetRegressor(_PoissonRegressorBase):
+    """Poisson regression with elastic-net penalty at a single λ.
+
+    Convex penalty ``α λ |β_j| + (1 - α) λ β_j² / 2`` per feature, with
+    log-link Poisson likelihood. ``alpha = 1`` is pure Poisson lasso;
+    ``alpha = 0`` is ridge.
+    """
+
+    def __init__(
+        self,
+        lambda_: float = 0.1,
+        alpha: float = 0.5,
+        *,
+        offset: NDArray[np.float64] | None = None,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.lambda_ = lambda_
+        self.alpha = alpha
+        self.offset = offset
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y) -> "PoissonElasticNetRegressor":
+        common, payload, n_features = _glm_dispatch_inputs(
+            self, x, y, validate_y=_validate_y_nonneg, is_path=False,
+        )
+        common["alpha"] = self.alpha
+        if payload is not None:
+            coefs, intercepts, _, info = _core.solve_poisson_elastic_net_path_sparse(
+                *payload, **common
+            )
+        else:
+            x_arr = common.pop("_x"); y_arr = common.pop("_y")
+            coefs, intercepts, _, info = _core.solve_poisson_elastic_net_path(
+                x_arr, y_arr, **common
+            )
+        self.coef_ = coefs[0]
+        self.intercept_ = float(intercepts[0])
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
+class PoissonElasticNetPathRegressor(_PoissonPathRegressorBase):
+    """Poisson regression with elastic-net penalty along an entire λ-path."""
+
+    def __init__(
+        self,
+        alpha: float = 0.5,
+        *,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
+        weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.alpha = alpha
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.offset = offset
+        self.weights = weights
+        self.sample_weights = sample_weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y) -> "PoissonElasticNetPathRegressor":
+        common, payload, n_features = _glm_dispatch_inputs(
+            self, x, y, validate_y=_validate_y_nonneg, is_path=True,
+        )
+        common["alpha"] = self.alpha
+        if payload is not None:
+            coefs, intercepts, lambdas_used, info = (
+                _core.solve_poisson_elastic_net_path_sparse(*payload, **common)
+            )
+        else:
+            x_arr = common.pop("_x"); y_arr = common.pop("_y")
+            coefs, intercepts, lambdas_used, info = (
+                _core.solve_poisson_elastic_net_path(x_arr, y_arr, **common)
+            )
+        self.coefs_ = coefs
+        self.intercepts_ = intercepts
+        self.lambdas_ = lambdas_used
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
+class PoissonLassoRegressor(PoissonElasticNetRegressor):
+    """Poisson regression with L1 penalty at a single λ (alpha=1 facade)."""
+
+    def __init__(
+        self,
+        lambda_: float = 0.1,
+        *,
+        offset: NDArray[np.float64] | None = None,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        super().__init__(
+            lambda_=lambda_, alpha=1.0, offset=offset, weights=weights,
+            max_iter=max_iter, tol=tol, fit_intercept=fit_intercept,
+            standardize=standardize, acceleration=acceleration,
+            max_outer=max_outer, outer_tol=outer_tol,
+        )
+
+
+class PoissonLassoPathRegressor(PoissonElasticNetPathRegressor):
+    """Poisson regression with L1 penalty along an entire λ-path."""
+
+    def __init__(
+        self,
+        *,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        offset: NDArray[np.float64] | None = None,
+        weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        super().__init__(
+            alpha=1.0, lambdas=lambdas, n_lambdas=n_lambdas,
+            lambda_min_ratio=lambda_min_ratio, offset=offset, weights=weights,
+            sample_weights=sample_weights, max_iter=max_iter, tol=tol,
+            fit_intercept=fit_intercept, standardize=standardize,
+            acceleration=acceleration, max_outer=max_outer, outer_tol=outer_tol,
+        )
+
+
 class _PoissonGroupSingleLambdaBase(_PoissonRegressorBase, _GroupEstimatorMixin):
     """Common base for single-λ Poisson + group regressors."""
 

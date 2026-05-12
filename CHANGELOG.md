@@ -6,6 +6,49 @@ documented in `docs/extending/rust-api.md`.
 
 ## [Unreleased]
 
+### Added (M3.x — First-class Poisson Elastic Net / Lasso primitives)
+
+Symmetric to the logistic-side addition: replaces the prior
+`PoissonMCPPathRegressor(gamma=1e9)` convention used internally by
+`AdaptivePoissonLasso*` and as the de-facto user-facing Poisson lasso.
+
+PyO3 bindings (`crates/skein-py/src/lib.rs`):
+
+- `solve_poisson_elastic_net_path` (dense) and
+  `solve_poisson_elastic_net_path_sparse` (CSC). Both take
+  `alpha ∈ [0, 1]` and the log-link `offset` parameter that the rest of
+  the Poisson family uses.
+
+Python estimators (`python/skein_glm/estimators.py`):
+
+- `PoissonElasticNetRegressor` / `PoissonElasticNetPathRegressor` with
+  full surface (`alpha`, `lambda_`, `offset`, weights, sample weights,
+  sparse dispatch).
+- `PoissonLassoRegressor` / `PoissonLassoPathRegressor` — `alpha=1.0`
+  facades.
+
+CV variants (`python/skein_glm/cv.py`):
+
+- `PoissonElasticNetPathCV` and `PoissonLassoPathCV` via the existing
+  `_PoissonPathCVMixin`.
+
+Retrofit (`python/skein_glm/adaptive.py`):
+
+- `_fit_pilot_poisson` now uses `PoissonLassoPathRegressor`.
+- `AdaptivePoissonLassoPathRegressor._final_cls` and
+  `AdaptivePoissonLassoPathCV._final_cls` switched to
+  `PoissonLassoPathRegressor`; `_extra_kwargs() = {"gamma": 1e9}`
+  removed.
+
+15 new pytest in `tests/test_poisson_en.py` mirror the logistic suite:
+shape, lasso/EN facade equivalence, support-match against MCP-at-γ=1e9,
+sparse-signal recovery, α→0 ridge limit, α=0.5 sparsity ordering,
+sparse-input parity, offset changes the fit, `predict` returning
+`μ = exp(η)`, CV wrappers, parameter validation. All existing adaptive
++ Poisson-offset tests pass unchanged.
+
+Test count: **292 cargo + 370 pytest, all green** (up from 355).
+
 ### Added (M3.x — First-class logistic Elastic Net / Lasso primitives)
 
 Replaces the prior `LogisticMCPPathRegressor(gamma=1e9)` convention used

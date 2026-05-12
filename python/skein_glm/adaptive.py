@@ -49,6 +49,7 @@ from skein_glm.estimators import (
     LogisticMCPPathRegressor,
     LogisticSCADPathRegressor,
     MCPPathRegressor,
+    PoissonLassoPathRegressor,
     PoissonMCPPathRegressor,
     PoissonSCADPathRegressor,
     SCADPathRegressor,
@@ -1212,8 +1213,7 @@ def _fit_pilot_poisson(
     fit_intercept: bool,
     standardize: bool,
 ) -> NDArray[np.float64]:
-    pilot = PoissonMCPPathRegressor(
-        gamma=1e9,
+    pilot = PoissonLassoPathRegressor(
         n_lambdas=n_pilot_lambdas,
         lambda_min_ratio=1e-3,
         fit_intercept=fit_intercept,
@@ -1655,7 +1655,8 @@ class AdaptiveLogisticSCADPathCV(_AdaptiveLogisticPathCVBase):
 
 class _AdaptivePoissonPathBase(BaseEstimator, RegressorMixin):
     """Adaptive Poisson path: same pattern as logistic but uses
-    `PoissonMCPPathRegressor`/`PoissonSCADPathRegressor` for the final."""
+    `PoissonLassoPathRegressor` / `PoissonMCPPathRegressor` /
+    `PoissonSCADPathRegressor` for the final."""
 
     coefs_: NDArray[np.float64]
     intercepts_: NDArray[np.float64]
@@ -1709,7 +1710,7 @@ class _AdaptivePoissonPathBase(BaseEstimator, RegressorMixin):
 class AdaptivePoissonLassoPathRegressor(_AdaptivePoissonPathBase):
     """Adaptive Poisson lasso."""
 
-    _final_cls = PoissonMCPPathRegressor
+    _final_cls = PoissonLassoPathRegressor
 
     def __init__(
         self,
@@ -1743,9 +1744,6 @@ class AdaptivePoissonLassoPathRegressor(_AdaptivePoissonPathBase):
         self.fit_intercept = fit_intercept
         self.standardize = standardize
         self.acceleration = acceleration
-
-    def _extra_kwargs(self) -> dict[str, Any]:
-        return {"gamma": 1e9}
 
 
 class AdaptivePoissonMCPPathRegressor(_AdaptivePoissonPathBase):
@@ -1869,7 +1867,7 @@ class _AdaptivePoissonPathCVBase(_PoissonPathCVMixin, BaseEstimator, RegressorMi
 class AdaptivePoissonLassoPathCV(_AdaptivePoissonPathCVBase):
     """K-fold CV over an adaptive Poisson-lasso path."""
 
-    _final_cls = PoissonMCPPathRegressor
+    _final_cls = PoissonLassoPathRegressor
 
     def __init__(
         self,
@@ -1907,9 +1905,6 @@ class AdaptivePoissonLassoPathCV(_AdaptivePoissonPathCVBase):
         self.fit_intercept = fit_intercept
         self.standardize = standardize
         self.acceleration = acceleration
-
-    def _extra_kwargs(self) -> dict[str, Any]:
-        return {"gamma": 1e9}
 
 
 class AdaptivePoissonMCPPathCV(_AdaptivePoissonPathCVBase):
