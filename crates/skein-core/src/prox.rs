@@ -5,6 +5,15 @@
 //! - `weight` multiplies the penalty: effective penalty is `weight · p(x)`.
 //!   This is the single hook every weighted variant (adaptive, per-feature,
 //!   per-group) plugs into.
+//!
+//! Also includes [`logdet_eigen_prox`] — the closed-form prox of the
+//! log-det barrier `−c log det Θ + tr(S Θ)` with a Frobenius proximal
+//! term. Used by the joint graphical-lasso ADMM solver. Backed by a
+//! self-contained Jacobi eigendecomposition ([`jacobi_eigh`]) so the
+//! crate doesn't have to depend on `ndarray-linalg` / LAPACK for what
+//! is, in this use case, a small-matrix routine.
+
+use ndarray::{Array1, Array2, ArrayView2};
 
 /// Soft-threshold: prox of `weight·λ·|x|` at step `step`.
 #[inline]
@@ -122,6 +131,167 @@ pub fn group_elastic_net_prox(block: &mut [f64], step: f64, lambda: f64, alpha: 
             *x *= scale;
         }
     }
+}
+
+/// Symmetric eigendecomposition `A = Q diag(d) Qᵀ` via cyclic Jacobi
+/// rotations (Numerical Recipes §11.1). Returns `(d, Q)`.
+///
+/// Self-contained — avoids a LAPACK dependency for the small (`p`
+/// typically ≤ a few hundred) symmetric eigendecompositions the joint
+/// graphical lasso ADMM solver needs. Iterates until the sum of
+/// absolute off-diagonal entries falls below `tol · ‖A‖_F` or
+/// `max_sweeps` is reached.
+///
+/// Panics if `A` is not square.
+pub fn jacobi_eigh(a: ArrayView2<f64>) -> (Array1<f64>, Array2<f64>) {
+    let n = a.nrows();
+    assert_eq!(a.ncols(), n, "jacobi_eigh: input must be square");
+    let mut a = a.to_owned();
+    let mut v = Array2::<f64>::eye(n);
+    if n <= 1 {
+        let d = Array1::from_iter(a.diag().iter().copied());
+        return (d, v);
+    }
+
+    let max_sweeps = 100_usize;
+    let tol = 1e-14;
+    let frob = {
+        let mut s = 0.0_f64;
+        for i in 0..n {
+            for j in 0..n {
+                s += a[[i, j]] * a[[i, j]];
+            }
+        }
+        s.sqrt()
+    };
+    let stop = tol * frob.max(1.0);
+
+    for _sweep in 0..max_sweeps {
+        let mut off = 0.0_f64;
+        for i in 0..n {
+            for j in (i + 1)..n {
+                off += a[[i, j]].abs();
+            }
+        }
+        if off < stop {
+            break;
+        }
+
+        for p in 0..(n - 1) {
+            for q in (p + 1)..n {
+                let apq = a[[p, q]];
+                if apq.abs() < 1e-300 {
+                    continue;
+                }
+                let app = a[[p, p]];
+                let aqq = a[[q, q]];
+                let h = aqq - app;
+                let t = if h.abs() > 1e100 * apq.abs() {
+                    apq / h
+                } else {
+                    let theta = 0.5 * h / apq;
+                    let mag = 1.0 / (theta.abs() + (1.0 + theta * theta).sqrt());
+                    if theta < 0.0 {
+                        -mag
+                    } else {
+                        mag
+                    }
+                };
+                let c = 1.0 / (1.0 + t * t).sqrt();
+                let s = t * c;
+                let tau = s / (1.0 + c);
+
+                a[[p, p]] = app - t * apq;
+                a[[q, q]] = aqq + t * apq;
+                a[[p, q]] = 0.0;
+                a[[q, p]] = 0.0;
+                for r in 0..n {
+                    if r == p || r == q {
+                        continue;
+                    }
+                    let arp = a[[r, p]];
+                    let arq = a[[r, q]];
+                    let new_rp = arp - s * (arq + tau * arp);
+                    let new_rq = arq + s * (arp - tau * arq);
+                    a[[r, p]] = new_rp;
+                    a[[p, r]] = new_rp;
+                    a[[r, q]] = new_rq;
+                    a[[q, r]] = new_rq;
+                }
+                for r in 0..n {
+                    let vrp = v[[r, p]];
+                    let vrq = v[[r, q]];
+                    v[[r, p]] = vrp - s * (vrq + tau * vrp);
+                    v[[r, q]] = vrq + s * (vrp - tau * vrq);
+                }
+            }
+        }
+    }
+
+    let d = Array1::from_iter((0..n).map(|i| a[[i, i]]));
+    (d, v)
+}
+
+/// Closed-form prox of the log-det barrier with a Frobenius proximal
+/// term:
+///
+/// ```text
+///     Θ̂ = argmin_{Θ ≻ 0}  −c · log det Θ + tr(S Θ)
+///                          + (ρ/2) · ‖Θ − V‖_F²,
+/// ```
+///
+/// solved via the symmetric eigendecomposition of `M = ρV − cS`. The
+/// stationarity condition `ρΘ − cΘ⁻¹ = M` is diagonalised by `M = Q D
+/// Qᵀ`, giving `Θ = Q diag(θ_i) Qᵀ` with
+///
+/// ```text
+///     θ_i = (d_i + √(d_i² + 4 ρ c)) / (2 ρ).
+/// ```
+///
+/// `m_scaled` is the precomputed `M = ρ V − c S`. The caller is
+/// responsible for forming it (cheap, and lets the ADMM outer loop
+/// reuse buffers).
+///
+/// Panics on `rho ≤ 0`, `c ≤ 0`, or a non-square input.
+pub fn logdet_eigen_prox(m_scaled: ArrayView2<f64>, rho: f64, c: f64) -> Array2<f64> {
+    assert!(rho > 0.0, "logdet_eigen_prox: rho must be positive");
+    assert!(c > 0.0, "logdet_eigen_prox: c must be positive");
+    let n = m_scaled.nrows();
+    assert_eq!(
+        m_scaled.ncols(),
+        n,
+        "logdet_eigen_prox: input must be square"
+    );
+
+    // Symmetrise defensively — the ADMM outer loop sometimes feeds a
+    // numerically near-symmetric matrix and we want to feed exactly-
+    // symmetric data into jacobi_eigh.
+    let mut sym = Array2::<f64>::zeros((n, n));
+    for i in 0..n {
+        for j in 0..n {
+            sym[[i, j]] = 0.5 * (m_scaled[[i, j]] + m_scaled[[j, i]]);
+        }
+    }
+
+    let (d, q) = jacobi_eigh(sym.view());
+    let mut theta_diag = Array1::<f64>::zeros(n);
+    let four_rho_c = 4.0 * rho * c;
+    let two_rho = 2.0 * rho;
+    for i in 0..n {
+        let di = d[i];
+        // Positive root of ρ θ² − d_i θ − c = 0 ⇒ θ > 0 always.
+        theta_diag[i] = (di + (di * di + four_rho_c).sqrt()) / two_rho;
+    }
+
+    // Θ = Q · diag(θ) · Qᵀ. Form `q_scaled = Q · diag(θ)` then multiply
+    // by `Qᵀ`.
+    let mut q_scaled = Array2::<f64>::zeros((n, n));
+    for i in 0..n {
+        for j in 0..n {
+            q_scaled[[i, j]] = q[[i, j]] * theta_diag[j];
+        }
+    }
+    q_scaled.dot(&q.t())
 }
 
 #[cfg(test)]
@@ -328,6 +498,84 @@ mod tests {
         group_elastic_net_prox(&mut block, 1.0, 1.0, 0.5, 1.0);
         assert_abs_diff_eq!(block[0], 1.8, epsilon = 1e-12);
         assert_abs_diff_eq!(block[1], 2.4, epsilon = 1e-12);
+    }
+
+    // ---- Jacobi eigendecomp + log-det prox -----------------------------
+
+    #[test]
+    fn jacobi_eigh_diagonal_returns_diagonal() {
+        let a = ndarray::array![[2.0_f64, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, -1.0]];
+        let (d, _q) = jacobi_eigh(a.view());
+        let mut sorted: Vec<f64> = d.to_vec();
+        sorted.sort_by(|x, y| x.partial_cmp(y).unwrap());
+        assert_abs_diff_eq!(sorted[0], -1.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(sorted[1], 2.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(sorted[2], 5.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn jacobi_eigh_reconstructs_input() {
+        let a = ndarray::array![
+            [4.0_f64, 1.0, 0.2, 0.1],
+            [1.0, 3.0, 0.3, 0.2],
+            [0.2, 0.3, 2.5, 0.4],
+            [0.1, 0.2, 0.4, 1.7]
+        ];
+        let (d, q) = jacobi_eigh(a.view());
+        // Reconstruct: Q diag(d) Qᵀ should equal A.
+        let mut q_diag = q.clone();
+        for j in 0..4 {
+            for i in 0..4 {
+                q_diag[[i, j]] *= d[j];
+            }
+        }
+        let recon = q_diag.dot(&q.t());
+        for i in 0..4 {
+            for j in 0..4 {
+                assert_abs_diff_eq!(recon[[i, j]], a[[i, j]], epsilon = 1e-10);
+            }
+        }
+        // Q should be orthogonal.
+        let qtq = q.t().dot(&q);
+        for i in 0..4 {
+            for j in 0..4 {
+                let expected = if i == j { 1.0 } else { 0.0 };
+                assert_abs_diff_eq!(qtq[[i, j]], expected, epsilon = 1e-10);
+            }
+        }
+    }
+
+    #[test]
+    fn logdet_eigen_prox_satisfies_stationarity() {
+        // ρ Θ − c Θ⁻¹ = M  must hold at the returned Θ.
+        let m = ndarray::array![[3.0_f64, 0.5], [0.5, 2.0]];
+        let rho = 1.5;
+        let c = 2.0;
+        let theta = logdet_eigen_prox(m.view(), rho, c);
+        // Compute Θ⁻¹ via 2×2 closed form.
+        let det = theta[[0, 0]] * theta[[1, 1]] - theta[[0, 1]] * theta[[1, 0]];
+        let theta_inv = ndarray::array![
+            [theta[[1, 1]] / det, -theta[[0, 1]] / det],
+            [-theta[[1, 0]] / det, theta[[0, 0]] / det],
+        ];
+        let lhs = &(&theta * rho) - &(&theta_inv * c);
+        for i in 0..2 {
+            for j in 0..2 {
+                assert_abs_diff_eq!(lhs[[i, j]], m[[i, j]], epsilon = 1e-10);
+            }
+        }
+    }
+
+    #[test]
+    fn logdet_eigen_prox_is_positive_definite() {
+        // For any M, the prox solution must be PD (positive root chosen).
+        let m = ndarray::array![[-1.0_f64, 0.0], [0.0, -2.0]];
+        let theta = logdet_eigen_prox(m.view(), 1.0, 1.0);
+        // Diagonals must be positive; determinant positive.
+        assert!(theta[[0, 0]] > 0.0);
+        assert!(theta[[1, 1]] > 0.0);
+        let det = theta[[0, 0]] * theta[[1, 1]] - theta[[0, 1]] * theta[[1, 0]];
+        assert!(det > 0.0);
     }
 
     #[test]

@@ -4,6 +4,66 @@ All notable changes to `skein-glm` are recorded here. The project follows
 semantic versioning, with the pre-1.0 minor-bump-on-feature policy
 documented in `docs/extending/rust-api.md`.
 
+## [0.6.0] — 2026-05-12
+
+Feature release: **M11 — graphical models**. The first non-regression
+algorithm family in skein. The headline new capability is
+**nonconvex graphical lasso** (MCP/SCAD on edges) and **joint
+estimation across populations**, neither of which is available in
+mainstream packages.
+
+### Added (M11 — Graphical models)
+
+Sparse precision matrix estimation with weighted L1, MCP, and SCAD
+penalties on edges. The single-population pipeline lands as
+**M11.1**; joint estimation across `K` related populations lands
+as **M11.2**.
+
+- New Rust solvers:
+  - `solver::glasso_solve` — single-population graphical lasso via
+    Friedman/Hastie/Tibshirani 2008 block-CD. Each column-solve
+    runs the existing `cd_solve` against a new `GramLeastSquares`
+    datafit + `GramDesign` backend, so every scalar `Penalty`
+    (`Lasso` / `Mcp` / `Scad` / `ElasticNet`) plus per-edge
+    weights drops in unchanged.
+  - `solver::joint_glasso_solve` — joint graphical lasso (Danaher–
+    Wang–Witten 2014, group form) via ADMM. The Θ-update is a new
+    `prox::logdet_eigen_prox` (closed-form via symmetric eigen-
+    decomposition; self-contained Jacobi, no LAPACK dependency).
+    The Z-update is exactly an existing `GroupPenalty::prox_group`
+    call (one group per off-diagonal edge of length `K`), so
+    `GroupLasso` and `GroupMcp` drop in unchanged. First ADMM
+    kernel in skein.
+- New trait shims `penalty::ScalarPenaltyFactory` and
+  `penalty::GroupPenaltyFactory` keep the outer glasso solvers
+  generic over penalty choice.
+- Python estimators in `skein_glm.estimators`:
+  `GraphicalLasso`, `GraphicalMCP`, `GraphicalSCAD`,
+  `JointGraphicalLasso`, `JointGraphicalMCP`. All accept either
+  raw `X (n, p)` or precomputed `(p, p)` covariance (sniffed by
+  shape + symmetry); joint variants take a list of either form.
+- EBIC tuners in `skein_glm.graph_selection`: `ebic_path` and
+  `joint_ebic_path` implementing Foygel & Drton 2010 — the
+  field-standard graphical-model tuning rule used by `qgraph` /
+  `bootnet`.
+- Docs: new `docs/concepts/graphical_models.md`,
+  `docs/api/estimators-graphical.md`, `docs/api/graph_selection.md`,
+  `docs/tutorials/10_graphical_lasso.md`,
+  `docs/tutorials/11_joint_networks.md`, plus
+  `docs/examples/psychometrics.md`.
+- Tests: 19 new Rust unit tests (gram-form CD, Jacobi eigen, log-
+  det prox, single & joint glasso) and 11 new pytest end-to-end
+  tests including a sklearn `GraphicalLasso` parity check.
+
+### Differentiator
+
+Nonconvex graphical lasso (MCP/SCAD on edges) and joint estimation
+across populations are not available in mainstream packages
+(`sklearn.covariance.GraphicalLasso`, R `glasso`, `qgraph`,
+`bootnet`, `EstimateGroupNetwork` are all L1-only or
+single-population). Closes a recognised shrinkage-bias gap in
+network psychometrics — see Fan/Feng/Wu 2009, Lam & Fan 2009.
+
 ## [0.5.1] — 2026-05-10
 
 CI green-up patch on top of `v0.5.0`. No behaviour change, no new

@@ -1581,6 +1581,131 @@ I. **Cython-grade rewrite of `cd_solve_subset`** — the single
 
 ---
 
+## M11 — Graphical models (precision matrix estimation)
+
+Status: scoped, not started. Headline pull is **network psychometrics**
+(Borsboom/Epskamp lineage): social scientists fit graphical lasso to
+estimate symptom-interaction networks instead of latent-factor models,
+then increasingly compare those networks across populations
+(treatment vs control, age cohorts, time points). Their current tooling
+(R `glasso` / `qgraph` / `bootnet` / `EstimateGroupNetwork`; Python
+`sklearn.covariance.GraphicalLasso`) is L1-only — a well-known
+shrinkage-bias gap that nonconvex penalties (MCP/SCAD) close — and
+joint estimation across populations is split across separate packages.
+
+Skein's existing trait surface is a near-perfect fit:
+
+- Single-population glasso, via Friedman et al. 2008 block-CD, reduces
+  to a sequence of weighted-lasso subproblems on each column. Each
+  subproblem is residual-shaped — exactly the `LeastSquares` datafit
+  skein already has. This mirrors the
+  `GlmDatafit::surrogate_at(β) → LeastSquares` pattern
+  (`crates/skein-core/src/datafit/mod.rs:37`) used for logistic/Poisson/
+  Cox via prox-Newton.
+- Joint glasso (Danaher–Wang–Witten 2014, group form), via ADMM. The
+  Z-update is *edge-wise* and, for group-JGL with MCP/SCAD on edges,
+  is exactly an existing `GroupPenalty::prox_group` call. The only
+  genuinely new prox is the **eigenvalue prox of the log-det barrier**
+  in the Θ-update — a closed-form eigen-thresholding step.
+
+No `Penalty` / `Datafit` trait changes. New code: one new datafit
+(`GramLeastSquares`), two new solvers (`solver/glasso.rs`,
+`solver/glasso_admm.rs`), one new prox primitive (log-det eigen
+threshold), Python bindings, sklearn-style estimators, EBIC tuner.
+
+### M11.1 — Single-population glasso (L1 + MCP + SCAD)
+
+Headline deliverable: `GraphicalLasso`, `GraphicalMcp`, `GraphicalScad`
+sklearn-style estimators returning `.precision_`, `.covariance_`,
+`.info_`. Each accepts either raw `X (n, p)` or precomputed
+`cov (p, p)` (sklearn convention; sniff via shape + symmetry).
+
+Scope:
+
+- `crates/skein-core/src/datafit/gram_least_squares.rs` — gram-form
+  LS that maintains `r = Wβ − s` instead of `r = Xβ − y`; integrates
+  with `cd_solve` unchanged.
+- `ScalarPenaltyFactory` shim in `penalty/mod.rs` so the outer
+  solver is generic over `Lasso | Mcp | Scad | ElasticNet`.
+- `crates/skein-core/src/solver/glasso.rs` — Friedman/Hastie/Tibshirani
+  outer loop; per-column k, peel `W_{-k,-k}` and `s_{-k,k}`, build
+  `GramLeastSquares`, build penalty from factory with the row-k slice
+  of `edge_weights`, call `cd_solve`, update Θ and W.
+- `crates/skein-py/src/lib.rs` — `solve_glasso_{lasso,mcp,scad}`
+  pyfunctions returning `(precision, covariance, info_dict)`.
+- `python/skein_glm/estimators.py` — three new estimator classes.
+- `python/skein_glm/graph_selection.py` — `ebic_path` (Foygel–Drton
+  2010, the field-standard tuning rule for graphical models).
+
+Exit criteria:
+
+- L1 with no edge weights matches `sklearn.covariance.graphical_lasso`
+  to `‖Θ_skein − Θ_sklearn‖_F < 1e-3` on p=20, n=200 Gaussian draws.
+- Synthetic recovery: known sparse Θ, fit at sufficient λ, support
+  matches.
+- EBIC selects a λ within a small range of the truth-recovery λ on
+  a synthetic ground-truth precision matrix.
+- Psychometrics replication: one published network (BFI or
+  depression-symptoms from `bootnet`/`psychonetrics`) reproduced at
+  the field-standard λ.
+- Benchmark within 2× of sklearn at p=200 for L1; MCP/SCAD have no
+  mainstream-package equivalent to compete against.
+
+### M11.2 — Joint glasso across populations (group form)
+
+Headline deliverable: `JointGraphicalLasso`, `JointGraphicalMcp`,
+`JointGraphicalScad` accepting `[X^(1), …, X^(K)]` or
+`[S^(1), …, S^(K)]`, returning `.precisions_`.
+
+Scope:
+
+- `crates/skein-core/src/prox.rs` — add `logdet_eigen_prox(A, ρ)`
+  closed-form via eigendecomposition.
+- `crates/skein-core/Cargo.toml` — `ndarray-linalg` dependency.
+- `GroupPenaltyFactory` shim in `penalty/mod.rs` to mirror the
+  scalar factory.
+- `crates/skein-core/src/solver/glasso_admm.rs` — ADMM outer loop
+  on `(Θ^(k), Z^(k), U^(k))_{k=1..K}`. Θ-update via
+  `logdet_eigen_prox` (Rayon-parallel across pops). Z-update is
+  edge-wise: K-vector `(Θ^(k)_ij + U^(k)_ij)_{k=1..K}` through
+  `GroupPenalty::prox_group` (existing `GroupMcp` / `GroupLasso`).
+  Dual residual stop.
+- Three more pyfunctions + three estimator classes mirroring M11.1.
+- `joint_ebic_path` in `graph_selection.py`.
+
+This is the first ADMM kernel in skein. Keep it self-contained inside
+`solver/glasso_admm.rs` for v1; extract if a second ADMM use case
+appears later. Don't pre-generalize.
+
+Exit criteria:
+
+- K=2 populations from identical Θ, JGL with λ₂ = 0 must equal two
+  independent single-glasso fits to ~1e-6; with λ₂ large, must
+  collapse to identical Θ̂^(1) = Θ̂^(2).
+- ADMM primal and dual residuals both decrease toward zero on a small
+  problem (modulo numerical noise).
+- Benchmark vs R `EstimateGroupNetwork` on p ∈ {50, 100, 200}, K=3.
+
+### M11.3 — Follow-ups (deferred)
+
+- **Polychoric / polyserial correlations** for ordinal Likert data —
+  high value for psychometrics; Python-side preprocessing helper.
+- **Bootstrap edge stability** (`bootnet`-style) — pure Python
+  wrapper around the M11.1/M11.2 estimators.
+- **Fused JGL** (TV across populations) — needs a 1D TV prox we don't
+  have; group form covers most published applications.
+- Time-varying / dynamic glasso, mixed graphical models.
+
+### Out of scope for M11.1 + M11.2
+
+- Anything in M11.3.
+- A new general-purpose ADMM solver kernel decoupled from glasso —
+  premature; revisit when a second use case appears.
+- GPU acceleration of the eigendecomposition (tied to M4's GPU
+  workstream).
+
+---
+
 ## Differentiators (the elevator pitch)
 
 When someone asks "why not just `skglm` / `ncvreg`?":
@@ -1600,3 +1725,9 @@ When someone asks "why not just `skglm` / `ncvreg`?":
    downstream researchers can prototype a custom penalty in Python
    against the same ABCs the Rust traits mirror, then port hot ones
    to Rust without re-architecting.
+5. **Nonconvex graphical lasso (MCP/SCAD on edges) + joint estimation
+   across populations** — neither exists in mainstream packages
+   (`sklearn.covariance.GraphicalLasso`, R `glasso`, `qgraph`,
+   `bootnet`, `EstimateGroupNetwork` are all L1-only or
+   single-population). Same weight-first / group-penalty machinery
+   that powers M2–M7 drops directly into edge-wise estimation.

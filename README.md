@@ -37,6 +37,13 @@ place; design-matrix backends (sparse, mmap, chunked) are next. See
 - **Python** — sklearn-compatible estimators for every (datafit ×
   penalty) combination; type stubs; warm-started λ-paths; standardization
   with original-scale `coef_` / `intercept_` recovery (dense backend).
+- **Graphical models** — sparse precision matrix estimation
+  (`GraphicalLasso` / `GraphicalMCP` / `GraphicalSCAD`) and joint
+  estimation across `K` related populations (`JointGraphicalLasso` /
+  `JointGraphicalMCP`, Danaher–Wang–Witten 2014 group form via ADMM),
+  with EBIC tuning. Nonconvex penalties on edges close the
+  shrinkage-bias gap that `sklearn.covariance.GraphicalLasso` and R's
+  `glasso` / `qgraph` / `bootnet` leave open.
 
 **M8 (Distribution & DX) is done:** CI + cibuildwheel + Read the Docs +
 25-page mkdocs site (concepts + R-porting + extending + examples + API

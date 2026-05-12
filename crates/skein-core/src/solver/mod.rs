@@ -9,6 +9,8 @@ mod block_cd;
 mod block_path;
 mod block_path_lla;
 mod cd;
+mod glasso;
+mod glasso_admm;
 mod lla;
 mod path;
 mod path_lla;
@@ -21,6 +23,8 @@ pub use block_path_lla::{solve_block_path_lla, BlockPathLLAReport};
 pub use cd::{
     cd_solve, cd_solve_subset, cd_solve_warm, cd_solve_warm_with_residual, CdConfig, CdReport,
 };
+pub use glasso::{glasso_solve, GlassoConfig, GlassoReport};
+pub use glasso_admm::{joint_glasso_solve, JointGlassoConfig, JointGlassoReport};
 pub use lla::{
     lla_solve, surrogate_sparse_group_mcp, surrogate_sparse_group_scad, surrogate_weights_bridge,
     surrogate_weights_group_mcp, surrogate_weights_group_scad, LLAReport,

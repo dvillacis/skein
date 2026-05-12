@@ -74,3 +74,16 @@ If you're new to the conceptual model:
 If you're porting from R, skip ahead to the **Porting** section
 (coming in commit 2) — it's organized by R package and points back
 to the relevant concept pages.
+
+## Beyond regression: graphical models
+
+A fifth, separate use of the same machinery: instead of regressing
+`y` on `X`, estimate a **sparse precision matrix** that encodes
+conditional independence between variables. This is the workhorse
+of network psychometrics and Gaussian graphical models. The same
+penalties (L1, MCP, SCAD) and weight infrastructure carry over
+edge-wise, and joint estimation across populations reuses the
+group-penalty primitives.
+
+5. **[Graphical models](graphical_models.md)** — sparse inverse
+   covariance, glasso, joint estimation across populations.

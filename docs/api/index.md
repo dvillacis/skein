@@ -17,6 +17,7 @@ a linear scan through 80 classes.
 | Multinomial / softmax (K classes, row-grouped) | [Multinomial](estimators-multinomial.md) |
 | Poisson                                       | [Poisson](estimators-poisson.md)   |
 | Cox proportional hazards                      | [Cox](estimators-cox.md)           |
+| Graphical models — sparse precision matrices  | [Graphical](estimators-graphical.md) |
 
 Every GLM family follows the same pattern: scalar (`MCP`, `SCAD`)
 and group (`GroupLasso`, `GroupMCP`, `SparseGroupLasso`,
@@ -33,6 +34,7 @@ LS family adds 8 more (`MultiTaskLasso/MCP/SCAD/ElasticNet ×
 | `*PathCV` cross-validation   | [CV](cv.md)         |
 | `select_by_ic` (AIC/BIC/EBIC) | [IC](ic.md)         |
 | `StabilitySelection` (MB bootstrap) | [Stability](stability.md) |
+| `ebic_path`, `joint_ebic_path` (graphical models) | [Graph selection](graph_selection.md) |
 
 ## Design-matrix helpers
 

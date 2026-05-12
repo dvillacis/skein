@@ -29,21 +29,33 @@ When someone asks "why not just `skglm`, `glmnet`, or `ncvreg`?":
    against the same ABCs the Rust traits mirror, then port hot ones
    to Rust without re-architecting.
 
-## What's in v0.3
+## What's in v0.6
 
 | Family       | Datafits                          | Penalties                                          | Estimators           |
 |--------------|-----------------------------------|----------------------------------------------------|----------------------|
-| Gaussian     | Least squares                     | MCP, SCAD, **elastic net**, **bridge `\|β\|^q`**, group lasso, group MCP, **group elastic net**, sparse-group lasso, sparse-group MCP, **sparse-group SCAD** | 18 sklearn classes |
+| Gaussian     | Least squares                     | MCP, SCAD, elastic net, bridge `\|β\|^q`, group lasso, group MCP, group elastic net, sparse-group lasso, sparse-group MCP, sparse-group SCAD | 18 sklearn classes |
 | Multi-task   | Multi-response least squares      | Multi-task lasso / MCP / SCAD / elastic net (row-grouped, dense + sparse, ±standardize) | 8 sklearn classes |
-| Binomial     | Logistic (with prox-Newton)       | MCP, SCAD, group lasso, group MCP, sparse-group lasso, sparse-group MCP, **sparse-group SCAD** | 14 sklearn classes   |
+| Binomial     | Logistic (with prox-Newton)       | MCP, SCAD, group lasso, group MCP, sparse-group lasso, sparse-group MCP, sparse-group SCAD | 14 sklearn classes   |
 | Multinomial  | Softmax (K classes, prox-Newton + Böhning bound) | Row-grouped lasso / MCP / SCAD / elastic net (dense + sparse, ±standardize) | 12 sklearn classes |
-| Poisson      | Log-link, **offset support**      | Same as binomial                                   | 14 sklearn classes   |
-| Cox PH       | **Breslow + Efron** ties           | Same as binomial                                   | 14 sklearn classes   |
+| Poisson      | Log-link, offset support          | Same as binomial                                   | 14 sklearn classes   |
+| Cox PH       | Breslow + Efron ties              | Same as binomial                                   | 14 sklearn classes   |
+| **Graphical models** | **Sparse precision `Θ = Σ⁻¹`** | **L1, MCP, SCAD on edges; per-edge weights; joint estimation across `K` populations (Danaher–Wang–Witten group form via ADMM); EBIC tuner** | **5 sklearn-style classes** |
 
-108 estimators total (incl. 28 adaptive variants spanning LS, group,
-logistic, Poisson, and Cox families). Plus 51 `*PathCV` cross-
-validation wrappers, plus `select_by_ic` for AIC/BIC/EBIC across all
-five GLM families.
+108 regression estimators + 5 graphical-model estimators. Plus 51
+`*PathCV` cross-validation wrappers, `select_by_ic` for AIC/BIC/EBIC
+across all five GLM families, and `ebic_path` / `joint_ebic_path` for
+graphical models. 28 adaptive variants span LS, group, logistic,
+Poisson, and Cox families.
+
+**M11 — graphical models** is the headline of this release.
+Nonconvex graphical
+lasso (MCP/SCAD on edges) and joint estimation across populations
+are not available in mainstream packages (`sklearn.covariance.
+GraphicalLasso`, R `glasso` / `qgraph` / `bootnet` /
+`EstimateGroupNetwork` are all L1-only or single-population). The
+single most common social-science use of glasso — network
+psychometrics — gets unbiased edge-weight estimates that the
+existing L1-only toolchain can't deliver.
 
 ## Quick taste
 
@@ -81,9 +93,10 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 - **[Installation](installation.md)** — pip + from source.
 - **[Quick start](quickstart.md)** — worked snippets covering paths,
   CV, IC selection, sparse, and memory-mapped inputs.
-- **[Tutorials](tutorials/index.md)** — nine guided walkthroughs in
-  three tiers (basics, structure, advanced). Read in order or skip
-  to the tier that matches what you already know.
+- **[Tutorials](tutorials/index.md)** — eleven guided walkthroughs
+  (basics, structure, advanced, plus the two graphical-model
+  tutorials). Read in order or skip to the tier that matches what
+  you already know.
 - **[Concepts](concepts/index.md)** — the conceptual model: penalties,
   datafits, weights, and design-matrix backends.
 - **[Roadmap](roadmap.md)** — what's in v0.1, what's coming next, and
@@ -91,17 +104,22 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Status
 
-v0.3 is a complete, tested implementation: **265 cargo + 279 pytest
+v0.6 is a complete, tested implementation: **292 cargo + 300 pytest
 tests, all green** at last snapshot. Sparse + dense + mmap + chunked
 + multi-task backends all interoperate; every datafit × penalty
 combination is wired end-to-end with sklearn-style `fit` / `predict` /
-`predict_proba` / `score`. Wheels are built via `cibuildwheel` for
-Linux (x86_64 + aarch64), macOS (x86_64 + arm64), and Windows
-(AMD64).
+`predict_proba` / `score`. The graphical-model family ships with a
+gram-form CD inner solver (for single-population glasso) and an
+ADMM kernel (for joint glasso) — the first ADMM in skein. Wheels are
+built via `cibuildwheel` for Linux (x86_64 + aarch64), macOS
+(x86_64 + arm64), and Windows (AMD64).
 
-What's not yet in: multi-response GLMs for Poisson / Cox (M7.3) and
-comparison benchmarks vs `glmnet`/`ncvreg`/`grpreg`/`skglm` (M8).
-See the [roadmap](roadmap.md) for the full picture.
+What's not yet in: multi-response GLMs for Poisson / Cox (M7.3),
+comparison benchmarks vs `glmnet` / `ncvreg` / `grpreg` / `skglm` /
+`EstimateGroupNetwork` (M8 / M11.3), polychoric / polyserial
+correlation helpers for ordinal Likert data, bootstrap edge
+stability for graphical models. See the [roadmap](roadmap.md) for
+the full picture.
 
 ```{toctree}
 :hidden:
@@ -125,6 +143,8 @@ tutorials/06_counts_and_rates
 tutorials/07_stability_selection
 tutorials/08_adaptive_estimators
 tutorials/09_multinomial_and_multitask
+tutorials/10_graphical_lasso
+tutorials/11_joint_networks
 ```
 
 ```{toctree}
@@ -138,6 +158,7 @@ concepts/weights
 concepts/backends
 concepts/multitask
 concepts/multinomial
+concepts/graphical_models
 ```
 
 ```{toctree}
@@ -166,6 +187,7 @@ extending/rust-api
 examples/genomics
 examples/nlp
 examples/survival
+examples/psychometrics
 ```
 
 ```{toctree}
@@ -180,9 +202,11 @@ api/estimators-logistic
 api/estimators-multinomial
 api/estimators-poisson
 api/estimators-cox
+api/estimators-graphical
 api/cv
 api/ic
 api/stability
+api/graph_selection
 api/design
 api/abcs
 ```

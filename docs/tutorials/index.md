@@ -57,6 +57,20 @@ adds something none of the alternatives have.
    reduce to the same row-grouped problem on a virtual block-
    replicated design.
 
+## Graphical models
+
+A separate use of the same machinery: estimate sparse precision
+matrices instead of regression coefficients. Two tutorials covering
+single- and multi-population network estimation, the workhorse of
+network psychometrics and Gaussian graphical models.
+
+10. **[Graphical lasso end-to-end](10_graphical_lasso.md)** — fit
+    a sparse precision matrix, tune by EBIC, visualise the recovered
+    graph. L1, MCP, and SCAD variants.
+11. **[Joint networks](11_joint_networks.md)** — joint estimation
+    across `K` related populations with an across-population group
+    penalty (Danaher–Wang–Witten 2014).
+
 ## What's next after the tutorials
 
 - **[Worked examples](../examples/genomics.md)** — full analyses on

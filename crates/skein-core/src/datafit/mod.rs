@@ -13,6 +13,7 @@
 
 mod binomial_logit;
 mod cox_ph;
+mod gram_least_squares;
 mod huber;
 mod least_squares;
 mod multinomial_logit;
@@ -20,6 +21,7 @@ mod poisson_log;
 
 pub use binomial_logit::BinomialLogit;
 pub use cox_ph::{CoxPH, TieHandling};
+pub use gram_least_squares::GramLeastSquares;
 pub use huber::Huber;
 pub use least_squares::LeastSquares;
 pub use multinomial_logit::MultinomialLogit;

@@ -8,6 +8,7 @@
 //! whether weights are uniform, adaptive, or supplied externally.
 
 mod elastic_net;
+mod factories;
 mod group_elastic_net;
 mod group_lasso;
 mod group_mcp;
@@ -16,6 +17,10 @@ mod scad;
 mod sparse_group_lasso;
 
 pub use elastic_net::ElasticNet;
+pub use factories::{
+    GroupLassoFactory, GroupMcpFactory, GroupPenaltyFactory, LassoFactory, McpFactory, ScadFactory,
+    ScalarPenaltyFactory,
+};
 pub use group_elastic_net::GroupElasticNet;
 pub use group_lasso::GroupLasso;
 pub use group_mcp::GroupMcp;

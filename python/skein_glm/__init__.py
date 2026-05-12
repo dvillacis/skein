@@ -166,6 +166,19 @@ from skein_glm.cv import (
 )
 from skein_glm.ic import select_by_ic
 from skein_glm.stability import StabilitySelection
+from skein_glm.estimators import (
+    GraphicalLasso,
+    GraphicalMCP,
+    GraphicalSCAD,
+    JointGraphicalLasso,
+    JointGraphicalMCP,
+)
+from skein_glm.graph_selection import (
+    EBICPathResult,
+    JointEBICPathResult,
+    ebic_path,
+    joint_ebic_path,
+)
 from skein_glm.adaptive import (
     AdaptiveCoxLassoPathCV,
     AdaptiveCoxLassoPathRegressor,
@@ -457,6 +470,16 @@ __all__ = [
     "Penalty",
     "GroupPenalty",
     "Datafit",
+    # Graphical models (M11).
+    "GraphicalLasso",
+    "GraphicalMCP",
+    "GraphicalSCAD",
+    "JointGraphicalLasso",
+    "JointGraphicalMCP",
+    "ebic_path",
+    "joint_ebic_path",
+    "EBICPathResult",
+    "JointEBICPathResult",
 ]
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"

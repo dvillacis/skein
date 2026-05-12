@@ -5338,3 +5338,400 @@ class HuberSCADPathRegressor(_HuberPathRegressorBase):
         self.info_ = info
         self.n_features_in_ = n_features
         return self
+
+
+# ============================================================
+# Graphical models (M11): sparse precision matrix estimation.
+# ============================================================
+#
+# These follow sklearn.covariance.GraphicalLasso conventions: each
+# estimator's `fit(X)` accepts either raw `X (n, p)` or a precomputed
+# `(p, p)` symmetric covariance, sniffed by shape + symmetry. Fitted
+# attributes: `precision_`, `covariance_`, `info_`, `n_features_in_`.
+# Joint variants take a list of such arrays and expose `precisions_`
+# (covariances are not exposed for joint — ADMM doesn't return them).
+#
+# Why MCP/SCAD on edges: closes the well-known shrinkage-bias gap of
+# the standard L1 glasso used in network psychometrics (Borsboom/
+# Epskamp lineage), sociology, finance.
+
+
+def _is_symmetric(x: NDArray[np.float64], atol: float = 1e-8) -> bool:
+    return bool(np.allclose(x, x.T, atol=atol))
+
+
+def _to_covariance(x: NDArray[np.float64], assume_centered: bool = False) -> NDArray[np.float64]:
+    """Resolve `fit(X)`'s polymorphic input. Square + symmetric ⇒
+    treat as precomputed covariance. Otherwise compute the empirical
+    covariance with the MLE `1/n` denominator — the convention used
+    by sklearn's GraphicalLasso, R's `glasso`, and Friedman/Hastie/
+    Tibshirani 2008. `assume_centered=True` skips the mean
+    subtraction."""
+    if x.ndim != 2:
+        raise ValueError(f"X must be 2D, got shape {x.shape}")
+    n, p = x.shape
+    if n == p and _is_symmetric(x):
+        return x
+    if assume_centered:
+        return (x.T @ x) / n
+    xc = x - x.mean(axis=0, keepdims=True)
+    return (xc.T @ xc) / max(n, 1)
+
+
+def _validate_edge_weights(
+    edge_weights: NDArray[np.float64] | None, p: int
+) -> NDArray[np.float64] | None:
+    if edge_weights is None:
+        return None
+    w = np.ascontiguousarray(edge_weights, dtype=np.float64)
+    if w.shape != (p, p):
+        raise ValueError(
+            f"edge_weights must have shape ({p}, {p}), got {w.shape}"
+        )
+    if not _is_symmetric(w):
+        raise ValueError("edge_weights must be symmetric")
+    if np.any(w < 0):
+        raise ValueError("edge_weights must be non-negative")
+    return w
+
+
+class _GraphicalEstimatorBase(BaseEstimator):
+    precision_: NDArray[np.float64]
+    covariance_: NDArray[np.float64]
+    info_: dict[str, Any]
+    n_features_in_: int
+
+
+class GraphicalLasso(_GraphicalEstimatorBase):
+    """L1-penalised sparse inverse covariance (graphical lasso).
+
+    Estimates a sparse precision matrix ``Θ = Σ⁻¹`` by solving the
+    L1-penalised Gaussian log-likelihood with off-diagonal-only
+    weights, via the Friedman/Hastie/Tibshirani 2008 block-coordinate-descent
+    algorithm. Zeros in `Θ` correspond to conditional independence
+    between variables — the standard interpretation of a Gaussian
+    graphical model.
+
+    Parameters
+    ----------
+    alpha : float, default 0.1
+        L1 regularisation strength. Larger → sparser graph.
+    edge_weights : (p, p) array or None
+        Per-edge weights (zero diagonal ignored). Adaptive glasso falls
+        out for free: set `edge_weights[i, j] = 1 / |Θ̂_init[i, j]|`.
+    assume_centered : bool, default False
+        Skip mean-centering when computing the empirical covariance.
+    diag_offset : float or None
+        Added to the diagonal of `S` at initialisation; numerical
+        safety to keep `W` positive definite. Defaults to `alpha` if
+        `None`, matching sklearn's convention.
+    max_iter : int, default 100
+    tol : float, default 1e-4
+    inner_max_iter : int, default 200
+    inner_tol : float, default 1e-6
+
+    Attributes
+    ----------
+    precision_ : ndarray of shape (p, p)
+        Estimated precision matrix `Θ̂`.
+    covariance_ : ndarray of shape (p, p)
+        Working covariance estimate `Ŵ` at convergence.
+    info_ : dict
+    n_features_in_ : int
+    """
+
+    _solver = staticmethod(_core.solve_glasso_lasso)
+
+    def __init__(
+        self,
+        alpha: float = 0.1,
+        *,
+        edge_weights: NDArray[np.float64] | None = None,
+        assume_centered: bool = False,
+        diag_offset: float | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-4,
+        inner_max_iter: int = 200,
+        inner_tol: float = 1e-6,
+    ) -> None:
+        self.alpha = alpha
+        self.edge_weights = edge_weights
+        self.assume_centered = assume_centered
+        self.diag_offset = diag_offset
+        self.max_iter = max_iter
+        self.tol = tol
+        self.inner_max_iter = inner_max_iter
+        self.inner_tol = inner_tol
+
+    def _solver_kwargs(self) -> dict[str, Any]:
+        return {"lambda_": self.alpha}
+
+    def fit(self, X) -> "GraphicalLasso":
+        x = np.ascontiguousarray(X, dtype=np.float64)
+        s = _to_covariance(x, assume_centered=self.assume_centered)
+        p = s.shape[0]
+        ew = _validate_edge_weights(self.edge_weights, p)
+        diag_offset = self.diag_offset if self.diag_offset is not None else self.alpha
+        kwargs = self._solver_kwargs()
+        precision, covariance, info = self._solver(
+            s,
+            **kwargs,
+            edge_weights=ew,
+            diag_offset=diag_offset,
+            max_outer_iter=self.max_iter,
+            outer_tol=self.tol,
+            inner_max_iter=self.inner_max_iter,
+            inner_tol=self.inner_tol,
+        )
+        self.precision_ = precision
+        self.covariance_ = covariance
+        self.info_ = info
+        self.n_features_in_ = p
+        return self
+
+
+class GraphicalMCP(GraphicalLasso):
+    """MCP-penalised sparse inverse covariance — reduces the shrinkage
+    bias of the standard L1 glasso by transitioning to identity above
+    `gamma · alpha`. Same `fit` API and fitted attributes as
+    :class:`GraphicalLasso`.
+
+    Parameters
+    ----------
+    gamma : float, default 3.0
+        MCP nonconvexity parameter (`> 1`). `gamma → ∞` recovers
+        :class:`GraphicalLasso`.
+    """
+
+    _solver = staticmethod(_core.solve_glasso_mcp)
+
+    def __init__(
+        self,
+        alpha: float = 0.1,
+        gamma: float = 3.0,
+        *,
+        edge_weights: NDArray[np.float64] | None = None,
+        assume_centered: bool = False,
+        diag_offset: float | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-4,
+        inner_max_iter: int = 200,
+        inner_tol: float = 1e-6,
+    ) -> None:
+        super().__init__(
+            alpha=alpha,
+            edge_weights=edge_weights,
+            assume_centered=assume_centered,
+            diag_offset=diag_offset,
+            max_iter=max_iter,
+            tol=tol,
+            inner_max_iter=inner_max_iter,
+            inner_tol=inner_tol,
+        )
+        self.gamma = gamma
+
+    def _solver_kwargs(self) -> dict[str, Any]:
+        return {"lambda_": self.alpha, "gamma": self.gamma}
+
+
+class GraphicalSCAD(GraphicalLasso):
+    """SCAD-penalised sparse inverse covariance. Same `fit` API and
+    fitted attributes as :class:`GraphicalLasso`.
+
+    Parameters
+    ----------
+    a : float, default 3.7
+        SCAD shape parameter (`> 2`). `a → ∞` recovers
+        :class:`GraphicalLasso`.
+    """
+
+    _solver = staticmethod(_core.solve_glasso_scad)
+
+    def __init__(
+        self,
+        alpha: float = 0.1,
+        a: float = 3.7,
+        *,
+        edge_weights: NDArray[np.float64] | None = None,
+        assume_centered: bool = False,
+        diag_offset: float | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-4,
+        inner_max_iter: int = 200,
+        inner_tol: float = 1e-6,
+    ) -> None:
+        super().__init__(
+            alpha=alpha,
+            edge_weights=edge_weights,
+            assume_centered=assume_centered,
+            diag_offset=diag_offset,
+            max_iter=max_iter,
+            tol=tol,
+            inner_max_iter=inner_max_iter,
+            inner_tol=inner_tol,
+        )
+        self.a = a
+
+    def _solver_kwargs(self) -> dict[str, Any]:
+        return {"lambda_": self.alpha, "a": self.a}
+
+
+class _JointGraphicalBase(BaseEstimator):
+    precisions_: list[NDArray[np.float64]]
+    info_: dict[str, Any]
+    n_features_in_: int
+    n_populations_: int
+
+
+class JointGraphicalLasso(_JointGraphicalBase):
+    """Joint graphical lasso across `K` related populations
+    (Danaher–Wang–Witten 2014, group form).
+
+    Estimates `K` precision matrices `Θ̂^(1), …, Θ̂^(K)` simultaneously
+    with a group penalty coupling the *same* edge across populations.
+    The coupling parameter `lambda_2` controls how much the edges
+    align across populations: `lambda_2 = 0` decouples to `K`
+    independent fits; large `lambda_2` collapses to identical
+    estimates.
+
+    Parameters
+    ----------
+    lambda_2 : float, default 0.1
+        Across-population coupling strength.
+    edge_weights : (p, p) array or None
+        Per-edge coupling weights.
+    assume_centered : bool, default False
+    rho : float, default 1.0
+        ADMM penalty parameter.
+    diag_offset : float, default 0.0
+    max_iter : int, default 200
+    primal_tol : float, default 1e-5
+    dual_tol : float, default 1e-5
+
+    Attributes
+    ----------
+    precisions_ : list of K ndarrays of shape (p, p)
+    info_ : dict
+    n_features_in_ : int
+    n_populations_ : int
+
+    Notes
+    -----
+    First ADMM-based solver in skein. Solves the *group form* of joint
+    glasso; the fused form (TV across populations) is not yet
+    implemented.
+    """
+
+    _solver = staticmethod(_core.solve_joint_glasso_lasso)
+
+    def __init__(
+        self,
+        lambda_2: float = 0.1,
+        *,
+        edge_weights: NDArray[np.float64] | None = None,
+        assume_centered: bool = False,
+        rho: float = 1.0,
+        diag_offset: float = 0.0,
+        max_iter: int = 200,
+        primal_tol: float = 1e-5,
+        dual_tol: float = 1e-5,
+    ) -> None:
+        self.lambda_2 = lambda_2
+        self.edge_weights = edge_weights
+        self.assume_centered = assume_centered
+        self.rho = rho
+        self.diag_offset = diag_offset
+        self.max_iter = max_iter
+        self.primal_tol = primal_tol
+        self.dual_tol = dual_tol
+
+    def _solver_kwargs(self) -> dict[str, Any]:
+        return {"lambda_": self.lambda_2}
+
+    def fit(self, Xs) -> "JointGraphicalLasso":
+        if not isinstance(Xs, (list, tuple)) or len(Xs) == 0:
+            raise ValueError(
+                "Xs must be a non-empty list/tuple of arrays (one per population)"
+            )
+        covs: list[NDArray[np.float64]] = []
+        ns: list[float] = []
+        p = None
+        for k, x in enumerate(Xs):
+            xa = np.ascontiguousarray(x, dtype=np.float64)
+            if xa.ndim != 2:
+                raise ValueError(f"Xs[{k}] must be 2D, got shape {xa.shape}")
+            s = _to_covariance(xa, assume_centered=self.assume_centered)
+            if p is None:
+                p = s.shape[0]
+            elif s.shape[0] != p:
+                raise ValueError(
+                    f"all populations must share the same number of features; "
+                    f"got {p} and {s.shape[0]}"
+                )
+            covs.append(s)
+            # n_k: the number of samples that produced S_k. For
+            # precomputed covariance, default to `s.shape[0]` so the
+            # log-lik scaling is reasonable; users can override by
+            # passing raw `X (n_k, p)` so we see the real n_k.
+            n_k = xa.shape[0] if xa.shape != s.shape else s.shape[0]
+            ns.append(float(n_k))
+        assert p is not None
+        ew = _validate_edge_weights(self.edge_weights, p)
+        kwargs = self._solver_kwargs()
+        precisions, info = self._solver(
+            covs,
+            ns,
+            **kwargs,
+            edge_weights=ew,
+            rho=self.rho,
+            diag_offset=self.diag_offset,
+            max_iter=self.max_iter,
+            primal_tol=self.primal_tol,
+            dual_tol=self.dual_tol,
+        )
+        self.precisions_ = list(precisions)
+        self.info_ = info
+        self.n_features_in_ = p
+        self.n_populations_ = len(precisions)
+        return self
+
+
+class JointGraphicalMCP(JointGraphicalLasso):
+    """Joint graphical lasso with group MCP coupling. Same `fit` API
+    and fitted attributes as :class:`JointGraphicalLasso`.
+
+    Parameters
+    ----------
+    gamma : float, default 3.0
+        Group-MCP nonconvexity parameter.
+    """
+
+    _solver = staticmethod(_core.solve_joint_glasso_mcp)
+
+    def __init__(
+        self,
+        lambda_2: float = 0.1,
+        gamma: float = 3.0,
+        *,
+        edge_weights: NDArray[np.float64] | None = None,
+        assume_centered: bool = False,
+        rho: float = 1.0,
+        diag_offset: float = 0.0,
+        max_iter: int = 200,
+        primal_tol: float = 1e-5,
+        dual_tol: float = 1e-5,
+    ) -> None:
+        super().__init__(
+            lambda_2=lambda_2,
+            edge_weights=edge_weights,
+            assume_centered=assume_centered,
+            rho=rho,
+            diag_offset=diag_offset,
+            max_iter=max_iter,
+            primal_tol=primal_tol,
+            dual_tol=dual_tol,
+        )
+        self.gamma = gamma
+
+    def _solver_kwargs(self) -> dict[str, Any]:
+        return {"lambda_": self.lambda_2, "gamma": self.gamma}
