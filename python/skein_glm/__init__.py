@@ -200,9 +200,14 @@ from skein_glm.graph_stability import (
     GraphicalStabilitySelection,
 )
 from skein_glm.debiased import (
+    DebiasedGLMResult,
     DebiasedLassoRegressor,
     DebiasedLassoResult,
+    DebiasedLogisticLassoRegressor,
+    DebiasedPoissonLassoRegressor,
     debiased_lasso,
+    debiased_logistic_lasso,
+    debiased_poisson_lasso,
 )
 from skein_glm.adaptive import (
     AdaptiveCoxLassoPathCV,
@@ -526,6 +531,11 @@ __all__ = [
     "DebiasedLassoRegressor",
     "DebiasedLassoResult",
     "debiased_lasso",
+    "DebiasedGLMResult",
+    "DebiasedLogisticLassoRegressor",
+    "DebiasedPoissonLassoRegressor",
+    "debiased_logistic_lasso",
+    "debiased_poisson_lasso",
 ]
 
 __version__ = "0.6.0"

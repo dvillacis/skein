@@ -6,6 +6,68 @@ documented in `docs/extending/rust-api.md`.
 
 ## [Unreleased]
 
+### Added (M5.x-b — Debiased / desparsified lasso for GLMs)
+
+Extends the VBR debiasing framework from least squares (M5.x-a) to
+binomial logistic and Poisson log-link regression via the weighted-LS
+surrogate + nodewise approximation of the Fisher information.
+
+**The math**: at the penalized fit ``β̂``, the score is
+``Xᵀ(y − μ̂)`` (canonical-link gradient) and the Fisher information
+is ``J = (1/n) · Xᵀ W X`` where ``W = diag(μ̂(1−μ̂))`` for binomial,
+``diag(μ̂)`` for Poisson. The debiased estimator is
+
+    β̂_d = β̂ + (1/n) · Θ̂ · Xᵀ (y − μ̂)
+
+with asymptotic Gaussian distribution ``√n (β̂_d − β) ⇝ N(0, J⁻¹)``
+and ``Θ̂ ≈ J⁻¹`` built nodewise on the weighted design
+``X̃ = W^{1/2} X``. **No `σ²` factor** — GLM noise is encoded in `W`.
+
+Public surface (`python/skein_glm/debiased.py`):
+
+- `debiased_logistic_lasso(X, y, *, lambda_, lambda_nodewise, alpha,
+  fit_intercept, standardize, max_iter, tol, n_jobs)` — free
+  function returning a `DebiasedGLMResult`.
+- `debiased_poisson_lasso(...)` — same plus a Poisson `offset`
+  (log-exposure) parameter.
+- `DebiasedLogisticLassoRegressor` — sklearn-style facade with
+  `decision_function`, `predict_proba`, `predict` inherited
+  semantics; the inference outputs (`se_`, `ci_lower_`, `ci_upper_`,
+  `pvalues_`, `z_scores_`, `Theta_`, `mu_fitted_`, `coef_glm_`,
+  `family_`, `lambda_main_`, `lambda_nodewise_`) live as suffixed
+  attributes.
+- `DebiasedPoissonLassoRegressor` — `predict` returns `μ̂ = exp(η̂)`
+  matching the existing `PoissonLassoRegressor` convention; supports
+  the `offset` constructor parameter.
+- `DebiasedGLMResult` dataclass (separate from `DebiasedLassoResult`
+  since GLMs have no `sigma_hat` and add `mu_fitted` / `family`).
+
+Implementation reuses the M5.x-a nodewise machinery
+(`_fit_nodewise_column`, `_assemble_theta_rows`): once the weighted
+design is formed, the math is identical to the LS case. Working
+weights are floored at `1e-8` to prevent degenerate `X̃` columns
+when logistic fit saturates near probabilities 0 / 1.
+
+**Critically**: the penalized-fit primitive is the new M3.x
+`LogisticLassoRegressor` / `PoissonLassoRegressor`, not the prior
+`MCP(γ=1e9)` approximation. Debiasing on top of that approximation
+would have inherited its bias.
+
+19 new pytest in `tests/test_debiased_glm.py` cover: dataclass
+shapes and finiteness, CI ordering, SE non-negativity, **empirical
+95% CI coverage on inactive coordinates** (40 reps each for logistic
+and Poisson — coverage ≥ 80% catches Θ̂/variance errors), smaller
+p-values on true-active features, Poisson `offset` changing the fit
+and rejecting bad shapes, parameter validation (non-binary y,
+negative y, alpha out of range), sklearn wrapper round-trip on
+both families, free-function ≡ wrapper equivalence, n_jobs
+serial-vs-parallel parity.
+
+Closes M5.x-b. The remaining M5.x item is Rayon-parallel CV folds
+(performance only, no new capability).
+
+Test count: **292 cargo + 389 pytest, all green** (up from 370).
+
 ### Added (M3.x — First-class Poisson Elastic Net / Lasso primitives)
 
 Symmetric to the logistic-side addition: replaces the prior

@@ -48,7 +48,11 @@ from numpy.typing import NDArray
 from scipy import stats
 from sklearn.base import BaseEstimator, RegressorMixin
 
-from skein_glm.estimators import ElasticNetRegressor
+from skein_glm.estimators import (
+    ElasticNetRegressor,
+    LogisticLassoRegressor,
+    PoissonLassoRegressor,
+)
 
 _ACTIVE_EPS = 1e-10
 
@@ -471,8 +475,562 @@ class DebiasedLassoRegressor(BaseEstimator, RegressorMixin):
         return X @ self.coef_ + self.intercept_
 
 
+# =====================================================================
+# M5.x-b — Debiased GLM (logistic + Poisson)
+# =====================================================================
+#
+# Extends the VBR construction from LS to canonical-link GLMs via the
+# weighted-LS surrogate. The estimating equation at β̂ is
+#
+#     score(β̂) = Xᵀ (y − μ̂(β̂))
+#
+# and the Fisher information at β̂ is J = (1/n) · Xᵀ W X where W is the
+# diagonal of working weights — μ̂(1−μ̂) for binomial logit, μ̂ for
+# Poisson log. The debiased estimator is
+#
+#     β̂_d = β̂ + (1/n) · Θ̂ · Xᵀ (y − μ̂)
+#
+# with asymptotic distribution √n (β̂_d − β) ⇝ N(0, J⁻¹) and Θ̂ ≈ J⁻¹
+# constructed nodewise on the **weighted design** X̃ = W^{1/2} X. This
+# is the JM-extended-to-GLM construction (Van de Geer 2014 §3).
+#
+# Reuses :func:`_fit_nodewise_column` and :func:`_assemble_theta_rows`
+# from the LS path — the math is identical once you swap `X` for `X̃`.
+
+
+_GLM_WEIGHT_FLOOR = 1e-8
+
+
+@dataclass
+class DebiasedGLMResult:
+    """Output of :func:`debiased_logistic_lasso` / :func:`debiased_poisson_lasso`.
+
+    Same fields as :class:`DebiasedLassoResult` minus ``sigma_hat``
+    (GLMs have no residual scale — the noise is encoded in the working
+    weights `W`) and plus ``mu_fitted`` and ``family``.
+
+    Attributes
+    ----------
+    coef_debiased : ndarray (p,)
+    coef_glm : ndarray (p,)
+        Underlying penalized GLM fit on the original feature scale.
+    intercept_ : float
+        Intercept of the underlying fit; not an inferential target (VBR
+        theory applies to slopes only).
+    se : ndarray (p,)
+        `sqrt(diag(Θ̂ X̃ᵀX̃ Θ̂ᵀ)) / n`.
+    ci_lower, ci_upper, pvalues, z_scores : ndarray (p,)
+    mu_fitted : ndarray (n,)
+        `μ̂` at the penalized fit. Useful for diagnostics.
+    Theta : ndarray (p, p)
+        Approximate inverse Fisher on the standardized scale.
+    lambda_main : float
+    lambda_nodewise : ndarray (p,)
+    alpha : float
+    family : str
+        ``"binomial"`` or ``"poisson"``.
+    """
+
+    coef_debiased: NDArray[np.float64]
+    coef_glm: NDArray[np.float64]
+    intercept_: float
+    se: NDArray[np.float64]
+    ci_lower: NDArray[np.float64]
+    ci_upper: NDArray[np.float64]
+    pvalues: NDArray[np.float64]
+    z_scores: NDArray[np.float64]
+    mu_fitted: NDArray[np.float64]
+    Theta: NDArray[np.float64]
+    lambda_main: float
+    lambda_nodewise: NDArray[np.float64]
+    alpha: float
+    family: str
+
+
+def _debiased_glm_core(
+    Xs: NDArray[np.float64],
+    y: NDArray[np.float64],
+    beta_hat_s: NDArray[np.float64],
+    intercept_s: float,
+    mu_hat: NDArray[np.float64],
+    w_diag: NDArray[np.float64],
+    x_mean: NDArray[np.float64],
+    x_scale: NDArray[np.float64],
+    lam_nw: NDArray[np.float64],
+    alpha: float,
+    max_iter: int,
+    tol: float,
+    n_jobs: int | None,
+    family: str,
+    lambda_main: float,
+) -> DebiasedGLMResult:
+    """Shared GLM debiasing core — nodewise + variance + inference.
+
+    Inputs are on the **standardized** feature scale (mean-centered,
+    scaled to unit variance). Output is destandardized to the original
+    scale.
+    """
+    from joblib import Parallel, delayed
+
+    n, p = Xs.shape
+
+    # Floor working weights to avoid degenerate columns in X̃ near
+    # saturation (logistic prob ≈ 0/1) or very small Poisson means.
+    # The asymptotic theory requires the working weights to be bounded
+    # away from zero; in practice tiny floors here don't move the
+    # answer materially when the data are well-conditioned but prevent
+    # blow-ups when they aren't.
+    w_safe = np.maximum(w_diag, _GLM_WEIGHT_FLOOR)
+    w_sqrt = np.sqrt(w_safe)
+    X_tilde = Xs * w_sqrt[:, None]
+
+    # Nodewise lassos on the weighted design.
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(_fit_nodewise_column)(X_tilde, j, float(lam_nw[j]), max_iter, tol)
+        for j in range(p)
+    )
+    gammas = [g for g, _ in results]
+    tau2s = np.array([t for _, t in results], dtype=np.float64)
+    Theta = _assemble_theta_rows(gammas, tau2s)
+
+    # Debias: β̂_d = β̂ + (1/n) Θ̂ Xᵀ (y − μ̂). Note this is the
+    # *unweighted* score (the canonical-link gradient), not the
+    # weighted X̃ᵀ (y − μ̂).
+    score = Xs.T @ (y - mu_hat)
+    beta_d_s = beta_hat_s + (Theta @ score) / n
+
+    # Variance: diag(Θ̂ X̃ᵀX̃ Θ̂ᵀ) / n. Compute via U = X̃ Θ̂ᵀ to skip
+    # the (p, p) Gram materialization.
+    U = X_tilde @ Theta.T
+    var_d_s = np.einsum("ij,ij->j", U, U) / (n * n)
+    se_s = np.sqrt(np.maximum(var_d_s, 0.0))
+
+    # Destandardize to original feature scale.
+    beta_d = beta_d_s / x_scale
+    beta_glm = beta_hat_s / x_scale
+    se = se_s / x_scale
+    intercept = intercept_s - float(np.dot(beta_d, x_mean))
+
+    # Wald inference.
+    z_alpha = float(stats.norm.ppf(1.0 - alpha / 2.0))
+    safe_se = np.where(se > 0, se, 1.0)
+    z_scores = np.where(se > 0, beta_d / safe_se, 0.0)
+    pvalues = 2.0 * stats.norm.sf(np.abs(z_scores))
+    ci_lower = beta_d - z_alpha * se
+    ci_upper = beta_d + z_alpha * se
+
+    return DebiasedGLMResult(
+        coef_debiased=beta_d,
+        coef_glm=beta_glm,
+        intercept_=intercept,
+        se=se,
+        ci_lower=ci_lower,
+        ci_upper=ci_upper,
+        pvalues=pvalues,
+        z_scores=z_scores,
+        mu_fitted=mu_hat,
+        Theta=Theta,
+        lambda_main=lambda_main,
+        lambda_nodewise=lam_nw,
+        alpha=alpha,
+        family=family,
+    )
+
+
+def _standardize_X(
+    X: NDArray[np.float64],
+    standardize: bool,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], NDArray[np.float64]]:
+    """Mean-center and (optionally) unit-scale columns.
+
+    Returns ``(Xs, x_mean, x_scale)``. When ``standardize=False`` we
+    still center; ``x_scale`` is all ones. Constant columns get
+    ``scale=1`` so we don't divide by zero — the penalized fit will
+    drop them via the usual KKT.
+    """
+    x_mean = X.mean(axis=0)
+    Xc = X - x_mean
+    if standardize:
+        x_scale = Xc.std(axis=0, ddof=0)
+        x_scale = np.where(x_scale > 0, x_scale, 1.0)
+    else:
+        x_scale = np.ones(X.shape[1], dtype=np.float64)
+    return Xc / x_scale, x_mean, x_scale
+
+
+def _build_lambda_nodewise(
+    lambda_nodewise: float | NDArray[np.float64] | None,
+    n: int,
+    p: int,
+) -> NDArray[np.float64]:
+    if lambda_nodewise is None:
+        return np.full(p, _theoretical_lambda(n, p), dtype=np.float64)
+    if np.isscalar(lambda_nodewise):
+        return np.full(
+            p, float(lambda_nodewise),  # type: ignore[arg-type]
+            dtype=np.float64,
+        )
+    arr = np.ascontiguousarray(lambda_nodewise, dtype=np.float64)
+    if arr.shape != (p,):
+        raise ValueError(
+            f"lambda_nodewise must be scalar or shape ({p},); got {arr.shape}"
+        )
+    return arr
+
+
+def _sigmoid(z: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Numerically stable sigmoid."""
+    out = np.empty_like(z)
+    pos = z >= 0
+    out[pos] = 1.0 / (1.0 + np.exp(-z[pos]))
+    e = np.exp(z[~pos])
+    out[~pos] = e / (1.0 + e)
+    return out
+
+
+# --- logistic --------------------------------------------------------
+
+
+def debiased_logistic_lasso(
+    X: Any,
+    y: Any,
+    *,
+    lambda_: float | None = None,
+    lambda_nodewise: float | NDArray[np.float64] | None = None,
+    alpha: float = 0.05,
+    fit_intercept: bool = True,
+    standardize: bool = True,
+    max_iter: int = 1000,
+    tol: float = 1e-7,
+    n_jobs: int | None = None,
+) -> DebiasedGLMResult:
+    """VBR debiased lasso for binomial logistic regression.
+
+    Construction (Van de Geer 2014 §3): fit penalized logistic lasso
+    to obtain ``β̂``, compute ``μ̂_i = σ(η̂_i)`` and working weights
+    ``W_ii = μ̂_i (1 − μ̂_i)``, then build the approximate inverse
+    Fisher ``Θ̂`` by nodewise lassos on ``X̃ = W^{1/2} X``. The
+    debiased estimator is
+    ``β̂_d = β̂ + (1/n) · Θ̂ · Xᵀ (y − μ̂)``
+    with asymptotic variance ``diag(Θ̂ X̃ᵀX̃ Θ̂ᵀ) / n`` (no `σ²` —
+    the noise is encoded in `W`).
+
+    Parameters mirror :func:`debiased_lasso`. The penalized fit is
+    obtained from :class:`~skein_glm.LogisticLassoRegressor`, the new
+    convex-L1 primitive — debiasing on top of the prior
+    ``MCP(γ=1e9)`` approximation would have inherited its bias.
+
+    Notes
+    -----
+    Working weights are floored at ``1e-8`` to avoid degenerate
+    columns in `X̃` when fitted probabilities saturate near 0 or 1.
+    If you see suspiciously narrow CIs, inspect ``mu_fitted`` for
+    boundary cases.
+    """
+    X = np.ascontiguousarray(X, dtype=np.float64)
+    y = np.ascontiguousarray(y, dtype=np.float64)
+    if X.ndim != 2:
+        raise ValueError(f"X must be 2D, got shape {X.shape}")
+    if y.ndim != 1 or y.shape[0] != X.shape[0]:
+        raise ValueError(
+            f"y must be 1D with length {X.shape[0]}, got shape {y.shape}"
+        )
+    if not np.all((y == 0.0) | (y == 1.0)):
+        raise ValueError("logistic regression requires y ∈ {0, 1}")
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must be in (0, 1); got {alpha}")
+    n, p = X.shape
+    if p < 2:
+        raise ValueError(f"debiased lasso requires p ≥ 2 features; got p = {p}")
+
+    Xs, x_mean, x_scale = _standardize_X(X, standardize)
+    # The logistic primitive fits an intercept itself; we pass
+    # standardized X. (`fit_intercept` here means: do we let the GLM
+    # fit one at all.)
+    lambda_main = (
+        _theoretical_lambda(n, p) if lambda_ is None else float(lambda_)
+    )
+    if lambda_main <= 0:
+        raise ValueError(f"lambda_ must be > 0; got {lambda_main}")
+    fit = LogisticLassoRegressor(
+        lambda_=lambda_main,
+        fit_intercept=fit_intercept,
+        standardize=False,
+        max_iter=max_iter,
+        tol=tol,
+        max_outer=20,
+        outer_tol=tol,
+    ).fit(Xs, y)
+    beta_hat_s = np.asarray(fit.coef_, dtype=np.float64)
+    intercept_s = float(fit.intercept_)
+
+    eta = Xs @ beta_hat_s + intercept_s
+    mu_hat = _sigmoid(eta)
+    w_diag = mu_hat * (1.0 - mu_hat)
+
+    lam_nw = _build_lambda_nodewise(lambda_nodewise, n, p)
+    if np.any(lam_nw <= 0):
+        raise ValueError("lambda_nodewise entries must be > 0")
+
+    return _debiased_glm_core(
+        Xs=Xs, y=y, beta_hat_s=beta_hat_s, intercept_s=intercept_s,
+        mu_hat=mu_hat, w_diag=w_diag,
+        x_mean=x_mean, x_scale=x_scale,
+        lam_nw=lam_nw, alpha=alpha,
+        max_iter=max_iter, tol=tol, n_jobs=n_jobs,
+        family="binomial", lambda_main=lambda_main,
+    )
+
+
+# --- Poisson --------------------------------------------------------
+
+
+def debiased_poisson_lasso(
+    X: Any,
+    y: Any,
+    *,
+    lambda_: float | None = None,
+    lambda_nodewise: float | NDArray[np.float64] | None = None,
+    alpha: float = 0.05,
+    fit_intercept: bool = True,
+    standardize: bool = True,
+    offset: NDArray[np.float64] | None = None,
+    max_iter: int = 1000,
+    tol: float = 1e-7,
+    n_jobs: int | None = None,
+) -> DebiasedGLMResult:
+    """VBR debiased lasso for Poisson log-link regression.
+
+    Construction: fit penalized Poisson lasso to obtain ``β̂``,
+    compute ``μ̂_i = exp(η̂_i + offset_i)`` and working weights
+    ``W_ii = μ̂_i``, build ``Θ̂`` nodewise on ``X̃ = W^{1/2} X``,
+    debias as in the logistic case.
+
+    Parameters mirror :func:`debiased_logistic_lasso` plus a Poisson
+    ``offset`` (log-exposure) that participates in the linear
+    predictor but is not an inferential target.
+
+    Notes
+    -----
+    Poisson working weights can have very large dynamic range
+    (`μ̂ = exp(η̂)`). If some `μ̂_i` are tiny, the corresponding rows
+    of `X̃` are heavily down-weighted and the asymptotic theory's
+    regularity conditions may be strained. The same `1e-8` floor as
+    the logistic case applies — well-conditioned problems are
+    unaffected.
+    """
+    X = np.ascontiguousarray(X, dtype=np.float64)
+    y = np.ascontiguousarray(y, dtype=np.float64)
+    if X.ndim != 2:
+        raise ValueError(f"X must be 2D, got shape {X.shape}")
+    if y.ndim != 1 or y.shape[0] != X.shape[0]:
+        raise ValueError(
+            f"y must be 1D with length {X.shape[0]}, got shape {y.shape}"
+        )
+    if not np.all(np.isfinite(y)) or np.any(y < 0.0):
+        raise ValueError("Poisson regression requires y ≥ 0 (finite)")
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must be in (0, 1); got {alpha}")
+    n, p = X.shape
+    if p < 2:
+        raise ValueError(f"debiased lasso requires p ≥ 2 features; got p = {p}")
+    offset_arr: NDArray[np.float64] | None = None
+    if offset is not None:
+        offset_arr = np.ascontiguousarray(offset, dtype=np.float64)
+        if offset_arr.shape != (n,):
+            raise ValueError(
+                f"offset must be 1D with length {n}; got shape {offset_arr.shape}"
+            )
+
+    Xs, x_mean, x_scale = _standardize_X(X, standardize)
+    lambda_main = (
+        _theoretical_lambda(n, p) if lambda_ is None else float(lambda_)
+    )
+    if lambda_main <= 0:
+        raise ValueError(f"lambda_ must be > 0; got {lambda_main}")
+
+    fit_kwargs: dict[str, Any] = dict(
+        lambda_=lambda_main,
+        fit_intercept=fit_intercept,
+        standardize=False,
+        max_iter=max_iter,
+        tol=tol,
+        max_outer=20,
+        outer_tol=tol,
+    )
+    if offset_arr is not None:
+        fit_kwargs["offset"] = offset_arr
+    fit = PoissonLassoRegressor(**fit_kwargs).fit(Xs, y)
+    beta_hat_s = np.asarray(fit.coef_, dtype=np.float64)
+    intercept_s = float(fit.intercept_)
+
+    eta = Xs @ beta_hat_s + intercept_s
+    if offset_arr is not None:
+        eta = eta + offset_arr
+    mu_hat = np.exp(eta)
+    w_diag = mu_hat
+
+    lam_nw = _build_lambda_nodewise(lambda_nodewise, n, p)
+    if np.any(lam_nw <= 0):
+        raise ValueError("lambda_nodewise entries must be > 0")
+
+    return _debiased_glm_core(
+        Xs=Xs, y=y, beta_hat_s=beta_hat_s, intercept_s=intercept_s,
+        mu_hat=mu_hat, w_diag=w_diag,
+        x_mean=x_mean, x_scale=x_scale,
+        lam_nw=lam_nw, alpha=alpha,
+        max_iter=max_iter, tol=tol, n_jobs=n_jobs,
+        family="poisson", lambda_main=lambda_main,
+    )
+
+
+# --- sklearn-style wrappers -----------------------------------------
+
+
+class _DebiasedGLMRegressorBase(BaseEstimator):
+    """Shared facade: exposes ``coef_`` / ``intercept_`` and the
+    inference outputs as suffixed attributes. Subclasses pin the
+    family-specific free function."""
+
+    coef_: NDArray[np.float64]
+    coef_glm_: NDArray[np.float64]
+    intercept_: float
+    se_: NDArray[np.float64]
+    ci_lower_: NDArray[np.float64]
+    ci_upper_: NDArray[np.float64]
+    pvalues_: NDArray[np.float64]
+    z_scores_: NDArray[np.float64]
+    Theta_: NDArray[np.float64]
+    mu_fitted_: NDArray[np.float64]
+    lambda_main_: float
+    lambda_nodewise_: NDArray[np.float64]
+    family_: str
+    n_features_in_: int
+
+    def _store_result(self, res: DebiasedGLMResult) -> None:
+        self.coef_ = res.coef_debiased
+        self.coef_glm_ = res.coef_glm
+        self.intercept_ = res.intercept_
+        self.se_ = res.se
+        self.ci_lower_ = res.ci_lower
+        self.ci_upper_ = res.ci_upper
+        self.pvalues_ = res.pvalues
+        self.z_scores_ = res.z_scores
+        self.Theta_ = res.Theta
+        self.mu_fitted_ = res.mu_fitted
+        self.lambda_main_ = res.lambda_main
+        self.lambda_nodewise_ = res.lambda_nodewise
+        self.family_ = res.family
+        self.n_features_in_ = int(res.coef_debiased.shape[0])
+
+    def decision_function(self, X: Any) -> NDArray[np.float64]:
+        X = np.ascontiguousarray(X, dtype=np.float64)
+        return X @ self.coef_ + self.intercept_
+
+
+class DebiasedLogisticLassoRegressor(_DebiasedGLMRegressorBase):
+    """Sklearn-style facade over :func:`debiased_logistic_lasso`."""
+
+    def __init__(
+        self,
+        *,
+        lambda_: float | None = None,
+        lambda_nodewise: float | NDArray[np.float64] | None = None,
+        alpha: float = 0.05,
+        fit_intercept: bool = True,
+        standardize: bool = True,
+        max_iter: int = 1000,
+        tol: float = 1e-7,
+        n_jobs: int | None = None,
+    ) -> None:
+        self.lambda_ = lambda_
+        self.lambda_nodewise = lambda_nodewise
+        self.alpha = alpha
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.max_iter = max_iter
+        self.tol = tol
+        self.n_jobs = n_jobs
+
+    def fit(self, X: Any, y: Any) -> "DebiasedLogisticLassoRegressor":
+        res = debiased_logistic_lasso(
+            X, y,
+            lambda_=self.lambda_,
+            lambda_nodewise=self.lambda_nodewise,
+            alpha=self.alpha,
+            fit_intercept=self.fit_intercept,
+            standardize=self.standardize,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            n_jobs=self.n_jobs,
+        )
+        self._store_result(res)
+        return self
+
+    def predict_proba(self, X: Any) -> NDArray[np.float64]:
+        return _sigmoid(self.decision_function(X))
+
+    def predict(self, X: Any) -> NDArray[np.float64]:
+        return (self.predict_proba(X) >= 0.5).astype(np.float64)
+
+
+class DebiasedPoissonLassoRegressor(_DebiasedGLMRegressorBase):
+    """Sklearn-style facade over :func:`debiased_poisson_lasso`."""
+
+    def __init__(
+        self,
+        *,
+        lambda_: float | None = None,
+        lambda_nodewise: float | NDArray[np.float64] | None = None,
+        alpha: float = 0.05,
+        fit_intercept: bool = True,
+        standardize: bool = True,
+        offset: NDArray[np.float64] | None = None,
+        max_iter: int = 1000,
+        tol: float = 1e-7,
+        n_jobs: int | None = None,
+    ) -> None:
+        self.lambda_ = lambda_
+        self.lambda_nodewise = lambda_nodewise
+        self.alpha = alpha
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.offset = offset
+        self.max_iter = max_iter
+        self.tol = tol
+        self.n_jobs = n_jobs
+
+    def fit(self, X: Any, y: Any) -> "DebiasedPoissonLassoRegressor":
+        res = debiased_poisson_lasso(
+            X, y,
+            lambda_=self.lambda_,
+            lambda_nodewise=self.lambda_nodewise,
+            alpha=self.alpha,
+            fit_intercept=self.fit_intercept,
+            standardize=self.standardize,
+            offset=self.offset,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            n_jobs=self.n_jobs,
+        )
+        self._store_result(res)
+        return self
+
+    def predict(self, X: Any) -> NDArray[np.float64]:
+        """μ̂ = exp(η̂) — matches PoissonLassoRegressor's convention."""
+        eta = self.decision_function(X)
+        if self.offset is not None:
+            eta = eta + np.ascontiguousarray(self.offset, dtype=np.float64)
+        return np.exp(eta)
+
+
 __all__ = [
     "DebiasedLassoResult",
     "debiased_lasso",
     "DebiasedLassoRegressor",
+    "DebiasedGLMResult",
+    "debiased_logistic_lasso",
+    "debiased_poisson_lasso",
+    "DebiasedLogisticLassoRegressor",
+    "DebiasedPoissonLassoRegressor",
 ]
