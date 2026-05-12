@@ -550,18 +550,20 @@ fn solve_bridge_ls_path<'py>(
         let w = surrogate_weights_bridge(beta, q, eps, w_base);
         Box::new(ElasticNet::with_weights(lam, 1.0, w))
     };
-    let (betas_std, report) = solve_path_lla(
-        &design,
-        &datafit,
-        weights_std,
-        make_inner,
-        n_lambdas,
-        lambda_min_ratio,
-        lambdas_vec,
-        &cd_cfg,
-        max_outer,
-        outer_tol,
-    );
+    let (betas_std, report) = py.allow_threads(|| {
+        solve_path_lla(
+            &design,
+            &datafit,
+            weights_std,
+            make_inner,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
+        )
+    });
     let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
 
     let info = PyDict::new_bound(py);
@@ -678,7 +680,7 @@ fn solve_bridge_ls_path_sparse<'py>(
         Box::new(ElasticNet::with_weights(lam, 1.0, w))
     };
 
-    let (betas_aug, report) = match scales_user.as_ref() {
+    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
             for j in 0..n_cols {
@@ -710,7 +712,7 @@ fn solve_bridge_ls_path_sparse<'py>(
             max_outer,
             outer_tol,
         ),
-    };
+    });
 
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -794,7 +796,7 @@ fn build_block_path_outputs<'py, F>(
     make_inner: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn GroupPenalty>,
+    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn GroupPenalty> + Send,
 {
     let x_arr = x.as_array().to_owned();
     let y_arr = y.as_array().to_owned();
@@ -850,7 +852,8 @@ where
     let datafit = LeastSquares::new(ys);
     let make_pen =
         move |lam: f64| -> Box<dyn GroupPenalty> { make_inner(lam, weights_orig.clone()) };
-    let (betas_std, report) = solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg);
+    let (betas_std, report) = py
+        .allow_threads(|| solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg));
     let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
 
     let info = PyDict::new_bound(py);
@@ -890,7 +893,7 @@ fn build_block_path_lla_outputs<'py, F>(
     make_inner: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(ArrayView1<f64>, &Groups, f64) -> Box<dyn GroupPenalty>,
+    F: Fn(ArrayView1<f64>, &Groups, f64) -> Box<dyn GroupPenalty> + Send,
 {
     let x_arr = x.as_array().to_owned();
     let y_arr = y.as_array().to_owned();
@@ -944,16 +947,18 @@ where
 
     let design = DenseMatrix::new(xs);
     let datafit = LeastSquares::new(ys);
-    let (betas_std, report) = solve_block_path_lla(
-        &design,
-        &datafit,
-        base_weights,
-        make_inner,
-        &groups,
-        &block_cfg,
-        max_outer,
-        outer_tol,
-    );
+    let (betas_std, report) = py.allow_threads(|| {
+        solve_block_path_lla(
+            &design,
+            &datafit,
+            base_weights,
+            make_inner,
+            &groups,
+            &block_cfg,
+            max_outer,
+            outer_tol,
+        )
+    });
     let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
 
     let info = PyDict::new_bound(py);
@@ -1615,7 +1620,7 @@ fn build_multitask_path_outputs<'py, F>(
     make_inner: F,
 ) -> PyResult<MultiTaskPathOutput<'py>>
 where
-    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn GroupPenalty>,
+    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn GroupPenalty> + Send,
 {
     let x_arr = x.as_array().to_owned();
     let y_arr = y.as_array().to_owned();
@@ -1687,7 +1692,8 @@ where
     let groups = MultiTaskDesign::<DenseMatrix>::auto_groups(p, k);
     let make_pen =
         move |lam: f64| -> Box<dyn GroupPenalty> { make_inner(lam, weights_eff.clone()) };
-    let (mut betas, report) = solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg);
+    let (mut betas, report) = py
+        .allow_threads(|| solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg));
     if standardize_x {
         multitask_descale_inplace(&mut betas, &x_scales, p, k);
     }
@@ -1731,7 +1737,7 @@ fn build_multitask_path_lla_outputs<'py, F>(
     make_inner: F,
 ) -> PyResult<MultiTaskPathOutput<'py>>
 where
-    F: Fn(ArrayView1<f64>, &Groups, f64) -> Box<dyn GroupPenalty>,
+    F: Fn(ArrayView1<f64>, &Groups, f64) -> Box<dyn GroupPenalty> + Send,
 {
     let x_arr = x.as_array().to_owned();
     let y_arr = y.as_array().to_owned();
@@ -1790,16 +1796,18 @@ where
     let design = MultiTaskDesign::new(DenseMatrix::new(x_proc), k);
     let datafit = LeastSquares::new(y_stacked);
     let groups = MultiTaskDesign::<DenseMatrix>::auto_groups(p, k);
-    let (mut betas, report) = solve_block_path_lla(
-        &design,
-        &datafit,
-        weights_eff,
-        make_inner,
-        &groups,
-        &block_cfg,
-        max_outer,
-        outer_tol,
-    );
+    let (mut betas, report) = py.allow_threads(|| {
+        solve_block_path_lla(
+            &design,
+            &datafit,
+            weights_eff,
+            make_inner,
+            &groups,
+            &block_cfg,
+            max_outer,
+            outer_tol,
+        )
+    });
     if standardize_x {
         multitask_descale_inplace(&mut betas, &x_scales, p, k);
     }
@@ -2763,7 +2771,7 @@ fn build_glm_block_path_outputs<'py, F, V, G>(
     make_inner: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &ndarray::Array1<f64>) -> Box<dyn GroupPenalty>,
+    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &ndarray::Array1<f64>) -> Box<dyn GroupPenalty> + Send,
     V: Fn(ndarray::ArrayView1<'_, f64>) -> PyResult<()>,
     G: FnOnce(ndarray::Array1<f64>) -> Box<dyn GlmDatafit>,
 {
@@ -2845,7 +2853,7 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (betas_aug, report) = match scales_user.as_ref() {
+    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(design.n_features());
             for j in 0..p_user {
@@ -2879,7 +2887,7 @@ where
             max_outer,
             outer_tol,
         ),
-    };
+    });
 
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -3913,7 +3921,7 @@ fn build_cox_block_path_outputs<'py, F>(
     make_inner: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &ndarray::Array1<f64>) -> Box<dyn GroupPenalty>,
+    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &ndarray::Array1<f64>) -> Box<dyn GroupPenalty> + Send,
 {
     let x_arr = x.as_array().to_owned();
     let time_arr = time.as_array().to_owned();
@@ -3984,7 +3992,7 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (mut betas, report) = match scales_user.as_ref() {
+    let (mut betas, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let std_design = Standardized::new(design, scales.clone());
             prox_newton_block_solve_path(
@@ -4014,7 +4022,7 @@ where
             max_outer,
             outer_tol,
         ),
-    };
+    });
 
     if let Some(scales) = scales_user.as_ref() {
         for k in 0..betas.nrows() {
@@ -4977,7 +4985,7 @@ fn build_block_path_outputs_sparse_ls<'py, F>(
     make_inner: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn GroupPenalty>,
+    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn GroupPenalty> + Send,
 {
     let y_arr = y.as_array().to_owned();
     if y_arr.len() != n_rows {
@@ -5055,7 +5063,7 @@ where
     let make_pen =
         move |lam: f64| -> Box<dyn GroupPenalty> { make_inner(lam, group_w_eff.clone()) };
 
-    let (betas_aug, report) = match scales_user.as_ref() {
+    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
             for j in 0..n_cols {
@@ -5065,7 +5073,7 @@ where
             solve_block_path(&std_design, &datafit, make_pen, &groups, &block_cfg)
         }
         None => solve_block_path(&csc_eff, &datafit, make_pen, &groups, &block_cfg),
-    };
+    });
 
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -5117,7 +5125,7 @@ fn build_block_path_lla_outputs_sparse_ls<'py, F>(
     make_inner: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(ArrayView1<'_, f64>, &Groups, f64) -> Box<dyn GroupPenalty>,
+    F: Fn(ArrayView1<'_, f64>, &Groups, f64) -> Box<dyn GroupPenalty> + Send,
 {
     let y_arr = y.as_array().to_owned();
     if y_arr.len() != n_rows {
@@ -5188,7 +5196,7 @@ where
     };
 
     let datafit = LeastSquares::new(y_arr);
-    let (betas_aug, report) = match scales_user.as_ref() {
+    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
             for j in 0..n_cols {
@@ -5216,7 +5224,7 @@ where
             max_outer,
             outer_tol,
         ),
-    };
+    });
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
         for k in 0..coefs.nrows() {
@@ -5809,7 +5817,7 @@ fn build_multitask_path_outputs_sparse<'py, F>(
     make_inner: F,
 ) -> PyResult<MultiTaskPathOutput<'py>>
 where
-    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn GroupPenalty>,
+    F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn GroupPenalty> + Send,
 {
     let y_arr = y.as_array().to_owned();
     if y_arr.nrows() != n_rows {
@@ -5896,7 +5904,7 @@ where
         v
     });
 
-    let (betas, report) = match (fit_intercept, scale_vec) {
+    let (betas, report) = py.allow_threads(|| match (fit_intercept, scale_vec) {
         (true, Some(scales)) => {
             let std_design = Standardized::new(Augmented::new(csc), scales);
             let design = MultiTaskDesign::new(std_design, k_tasks);
@@ -5916,7 +5924,7 @@ where
             let design = MultiTaskDesign::new(csc, k_tasks);
             solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg)
         }
-    };
+    });
 
     // Split bvec into (p*K) feature coefs + (K) intercepts.
     // `betas` is in standardized space when scales_user.is_some(); the
@@ -5982,7 +5990,7 @@ fn build_multitask_path_lla_outputs_sparse<'py, F>(
     make_inner: F,
 ) -> PyResult<MultiTaskPathOutput<'py>>
 where
-    F: Fn(ArrayView1<f64>, &Groups, f64) -> Box<dyn GroupPenalty>,
+    F: Fn(ArrayView1<f64>, &Groups, f64) -> Box<dyn GroupPenalty> + Send,
 {
     let y_arr = y.as_array().to_owned();
     if y_arr.nrows() != n_rows {
@@ -6063,7 +6071,7 @@ where
         v
     });
 
-    let (betas, report) = match (fit_intercept, scale_vec) {
+    let (betas, report) = py.allow_threads(|| match (fit_intercept, scale_vec) {
         (true, Some(scales)) => {
             let std_design = Standardized::new(Augmented::new(csc), scales);
             let design = MultiTaskDesign::new(std_design, k_tasks);
@@ -6119,7 +6127,7 @@ where
                 outer_tol,
             )
         }
-    };
+    });
 
     let n_lambdas_out = betas.nrows();
     let mut coefs_out = Array2::<f64>::zeros((n_lambdas_out, p * k_tasks));
@@ -6544,7 +6552,7 @@ fn build_multinomial_path_outputs<'py, F>(
     make_inner: F,
 ) -> PyResult<MultinomialPathOutput<'py>>
 where
-    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &Array1<f64>) -> Box<dyn GroupPenalty>,
+    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &Array1<f64>) -> Box<dyn GroupPenalty> + Send,
 {
     let x_arr = x.as_array().to_owned();
     let labels_view = labels.as_array();
@@ -6635,7 +6643,7 @@ where
         v
     });
 
-    let (betas_aug, report) = match scale_vec_eff {
+    let (betas_aug, report) = py.allow_threads(|| match scale_vec_eff {
         Some(scales) => {
             let std_design = Standardized::new(DenseMatrix::new(x_eff), scales);
             let design = MultiTaskDesign::new(std_design, n_classes);
@@ -6669,7 +6677,7 @@ where
                 outer_tol,
             )
         }
-    };
+    });
 
     let (mut coefs, intercepts) =
         split_multinomial_intercept(betas_aug, p_user, n_classes, fit_intercept);
@@ -6724,7 +6732,7 @@ fn build_multinomial_path_outputs_sparse<'py, F>(
     make_inner: F,
 ) -> PyResult<MultinomialPathOutput<'py>>
 where
-    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &Array1<f64>) -> Box<dyn GroupPenalty>,
+    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &Array1<f64>) -> Box<dyn GroupPenalty> + Send,
 {
     let labels_view = labels.as_array();
     if labels_view.len() != n_rows {
@@ -6802,7 +6810,7 @@ where
         v
     });
 
-    let (betas_aug, report) = match (fit_intercept, scale_vec_eff) {
+    let (betas_aug, report) = py.allow_threads(|| match (fit_intercept, scale_vec_eff) {
         (true, Some(scales)) => {
             let std_design = Standardized::new(Augmented::new(csc), scales);
             let design = MultiTaskDesign::new(std_design, n_classes);
@@ -6870,7 +6878,7 @@ where
                 outer_tol,
             )
         }
-    };
+    });
 
     let (mut coefs, intercepts) =
         split_multinomial_intercept(betas_aug, p_user, n_classes, fit_intercept);
@@ -7504,7 +7512,7 @@ fn build_glm_block_path_outputs_sparse<'py, F, V, G>(
     make_inner: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &ndarray::Array1<f64>) -> Box<dyn GroupPenalty>,
+    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &ndarray::Array1<f64>) -> Box<dyn GroupPenalty> + Send,
     V: Fn(ndarray::ArrayView1<'_, f64>) -> PyResult<()>,
     G: FnOnce(ndarray::Array1<f64>) -> Box<dyn GlmDatafit>,
 {
@@ -7580,7 +7588,7 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (betas_aug, report) = match scales_user.as_ref() {
+    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
             for j in 0..n_cols {
@@ -7614,7 +7622,7 @@ where
             max_outer,
             outer_tol,
         ),
-    };
+    });
 
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -7801,7 +7809,7 @@ fn build_cox_block_path_outputs_sparse<'py, F>(
     make_inner: F,
 ) -> PyResult<PathOutput<'py>>
 where
-    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &ndarray::Array1<f64>) -> Box<dyn GroupPenalty>,
+    F: Fn(ArrayView1<'_, f64>, &Groups, f64, &ndarray::Array1<f64>) -> Box<dyn GroupPenalty> + Send,
 {
     let time_arr = time.as_array().to_owned();
     let event_arr = event.as_array().to_owned();
@@ -7870,7 +7878,7 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (mut betas, report) = match scales_user.as_ref() {
+    let (mut betas, report) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let std_design = Standardized::new(csc, scales.clone());
             prox_newton_block_solve_path(
@@ -7900,7 +7908,7 @@ where
             max_outer,
             outer_tol,
         ),
-    };
+    });
 
     if let Some(scales) = scales_user.as_ref() {
         for k in 0..betas.nrows() {
@@ -9556,7 +9564,7 @@ where
     };
 
     let p_eff = if fit_intercept { n_cols + 1 } else { n_cols };
-    let (betas_aug, report) = match (fit_intercept, scales_user.as_ref()) {
+    let (betas_aug, report) = py.allow_threads(|| match (fit_intercept, scales_user.as_ref()) {
         (false, None) => solve_path(&design, &datafit, make_pen, &path_cfg),
         (false, Some(scales)) => {
             let std_design = Standardized::new(design, scales.clone());
@@ -9575,7 +9583,7 @@ where
             let std_design = Standardized::new(aug, x_scale_eff);
             solve_path(&std_design, &datafit, make_pen, &path_cfg)
         }
-    };
+    });
 
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -9794,7 +9802,7 @@ where
     };
 
     let p_eff = if fit_intercept { n_cols + 1 } else { n_cols };
-    let (betas_aug, report) = match (fit_intercept, scales_user.as_ref()) {
+    let (betas_aug, report) = py.allow_threads(|| match (fit_intercept, scales_user.as_ref()) {
         (false, None) => prox_newton_solve_path(
             &design,
             &glm,
@@ -9853,7 +9861,7 @@ where
                 outer_tol,
             )
         }
-    };
+    });
 
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {

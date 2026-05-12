@@ -18,14 +18,14 @@ load-bearing piece; everything after stacks on top of it.
 | M2 — LLA + group block-CD + parallel | ✅ done | inner CD, working set, LLA outer, path, Rayon, op-norm Lipschitz, sparse-group, gap-safe, PyO3, criterion benches |
 | M3 — GLM datafits | ⏳ partial | M3.1 trait refactor + M3.2 logistic + M3.3 logistic×group + M3.4 Poisson + **Poisson offsets** + M3.5 Cox PH (Breslow + **Efron** ties) + M3.6 multinomial (Rust + PyO3 + estimators) + M3.7 Huber + **first-class logistic + Poisson Elastic Net / Lasso primitives (retires the prior `MCP(γ=1e9)` approximation; Adaptive\* retrofitted both families)** done; opportunistic GLMs pending |
 | M4 — Design-matrix backends | ⏳ partial | M4.1 SparseCSC core + M4.2 sparse PyO3 (LS + GLM × scalar + group, all 24 path functions) + M4.3 lazy `Standardized<D>` for LS and GLMs (dense + sparse, all 36 GLM estimators) + M4.x `MmapMatrix` f64 + f32 (LS + logistic MCP) + M4.x `Chunked<C>` row-block streaming (f64 + f32) done; true mixed precision + GPU pending |
-| M5 — Model selection & inference | ⏳ partial | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) + **M5.x stability selection (MB bootstrap)** + **M5.x-a debiased lasso (LS, VBR nodewise + Wald CIs/p-values)** + **M5.x-b debiased GLM (binomial + Poisson via weighted-LS surrogate + nodewise Fisher)** + **M5.x-c threaded CV folds via PyO3 `allow_threads` GIL release (scalar builders; ~2.3–2.5× speedup)** done; adaptive done in M6.x; block-builder GIL release for group/multitask/multinomial CV pending |
+| M5 — Model selection & inference | ✅ done | M5.1 CV (24 `*PathCV` estimators) + M5.2 information criteria (`select_by_ic` for AIC/BIC/EBIC across all four GLMs) + **M5.x stability selection (MB bootstrap)** + **M5.x-a debiased lasso (LS, VBR nodewise + Wald CIs/p-values)** + **M5.x-b debiased GLM (binomial + Poisson via weighted-LS surrogate + nodewise Fisher)** + **M5.x-c threaded CV folds via PyO3 `allow_threads` GIL release — full coverage across scalar + block + multinomial + multitask + Cox + bridge + mmap builders, ~2.3–2.5× speedup**; adaptive done in M6.x. |
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; **bridge `\|β\|^q` (LS, scalar LLA path) done**; **adaptive {Lasso, MCP, SCAD} (LS, two-stage pilot fit) done**; overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + mkdocs site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches moved to M9; comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
 | M9 — Performance & correctness benchmarks | ⏳ partial | M9.1 harness + M9.3 lasso/LS + **M9.3 MCP/LS (deep + sparse, all sizes incl. n=100k, p=10k)** done, all comparators apples-to-apples via warm-started paths; M9.4 `benches/correctness/` framework live (per-λ Jaccard/sign/rel-L2 across skein/skglm/ncvreg). M9.2 criterion expansion + M9.4 at-scale `tests/fixtures/generate.R` parallel suite + M9.5 full docs page pending. Supersedes the deferred M8.6 bullet. |
 | M10 — Performance improvements | ⏳ partial | M10.1 profile (`col_dot` is the floor without BLAS) + M10.3 five waves: (1) col_axpy + F-order DenseMatrix + path-solver fixes; (2) adaptive inner tol via PGD + KKT-priority WS; (3) `blas-accelerate` feature; (4) (skipped — inner active-set CD didn't pay off); (5) F-series — duality gap + Anderson on residuals + gap-safe sphere screening, all gated and tested. **Skein medium lasso/LS: 7.6 s → 0.78 s sparse / 1.17 s deep — 6.5–10× total. Within 1.5× of glmnet on sparse, 1.9× on deep; ~8–9× behind sklearn's Cython `lasso_path`.** F-series wallclock-neutral on M9.3 scenarios — infrastructure correct but post-pass screening fires only on multi-pass λs (most converge in 1). M10.4 verified across deep + sparse regimes. Pending: G. cross-platform BLAS (OpenBLAS/MKL), H. pre-pass gap-safe screening, I. Cython-grade rewrite (off-roadmap). |
 
-Test count at this snapshot: **292 cargo + 403 pytest, all green.**
+Test count at this snapshot: **292 cargo + 412 pytest, all green.**
 
 ---
 
@@ -841,10 +841,14 @@ criterion arithmetic.
   also speeds up `StabilitySelection`, `GraphicalStabilitySelection`,
   `GraphicalBootstrap`, and the debiased lasso nodewise loop, which
   all call into these builders through joblib threading.
-  Block-penalty / multinomial / multitask builders still hold the GIL
-  during solve — extending the `allow_threads` pattern to those (one
-  more PR of the same mechanical surgery) accelerates group / sparse-
-  group / multitask CV.
+  **Follow-up PR** extended the `py.allow_threads(|| ...)` pattern to
+  every remaining builder (LS block + LLA dense/sparse, GLM block
+  dense/sparse, Cox block dense/sparse, multinomial dense/sparse,
+  multitask + LLA dense/sparse, bridge LS scalar dense/sparse,
+  mmap-backed LS and logistic MCP). 9 additional parameterized parity
+  tests cover the grouped CV classes (LS, logistic, Poisson, Cox).
+  M5.x-c is now complete: **every** user-facing `*PathCV` benefits
+  from threaded fold parallelism.
 
 ---
 

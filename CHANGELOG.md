@@ -6,6 +6,46 @@ documented in `docs/extending/rust-api.md`.
 
 ## [Unreleased]
 
+### Added (M5.x — GIL release: full coverage across all path builders)
+
+Follow-up to the initial M5.x-c PR. Extends the `py.allow_threads(|| ...)`
+GIL release pattern to **every remaining path-solver builder** in
+`crates/skein-py/src/lib.rs`, so threaded fold loops accelerate **every
+CV class**, not just the scalar-penalty ones.
+
+Builders updated in this pass:
+
+- LS block: `build_block_path_outputs`, `build_block_path_outputs_sparse_ls`,
+  `build_block_path_lla_outputs`, `build_block_path_lla_outputs_sparse_ls`
+- GLM block: `build_glm_block_path_outputs`, `build_glm_block_path_outputs_sparse`
+- Cox block: `build_cox_block_path_outputs`, `build_cox_block_path_outputs_sparse`
+- Multinomial: `build_multinomial_path_outputs`, `build_multinomial_path_outputs_sparse`
+- Multitask: `build_multitask_path_outputs`, `build_multitask_path_outputs_sparse`,
+  `build_multitask_path_lla_outputs`, `build_multitask_path_lla_outputs_sparse`
+- Bridge LS scalar (dense + sparse): the `solve_path_lla` call site
+- Mmap-backed LS and logistic MCP paths
+
+Each builder's penalty-factory closure trait bound (`F`) gained
+`+ Send` so the closure can cross the `allow_threads` boundary. The
+surrounding Python-object setup/teardown still runs with the GIL
+held; only the inner Rust compute (`solve_path` / `solve_block_path` /
+`solve_block_path_lla` / `solve_path_lla` / `prox_newton_solve_path` /
+`prox_newton_block_solve_path`) is released.
+
+Parity tests extended in `tests/test_cv_parallel.py`: 9 new
+parameterized cases covering `GroupLassoPathCV` / `GroupMCPPathCV` /
+`GroupElasticNetPathCV` / `SparseGroupLassoPathCV` (LS), the
+logistic group variants, the Poisson group variants, and
+`CoxGroupLassoPathCV`. Total parity-test count goes from 14 → 23,
+all bitwise serial-vs-parallel equal.
+
+Coverage is now complete: every `*PathCV` class in the public API
+benefits from threaded fold parallelism. The `n_jobs` parameter on
+each CV constructor is the only knob users need; the GIL release at
+the Rust level makes the speedup real rather than a no-op.
+
+Test count: **292 cargo + 412 pytest, all green** (up from 403).
+
 ### Added (M5.x — Threaded CV fold parallelism via GIL release)
 
 Closes the remaining M5.x item. The fold loop in `_PathCVMixin` and
