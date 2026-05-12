@@ -6,6 +6,70 @@ documented in `docs/extending/rust-api.md`.
 
 ## [Unreleased]
 
+### Added (M3.x — First-class logistic Elastic Net / Lasso primitives)
+
+Replaces the prior `LogisticMCPPathRegressor(gamma=1e9)` convention used
+internally by `AdaptiveLogisticLassoPathRegressor` /
+`AdaptiveLogisticLassoPathCV` and as the de-facto user-facing logistic
+lasso. That trick was a numerical approximation — MCP at γ→∞ converges
+*pointwise* to soft-thresholding, but the LLA + prox-Newton machinery
+still pays for nonconvex outer iteration. New primitives call prox-Newton
+directly on the convex `ElasticNet` penalty, so the result is a proper
+convex solve.
+
+**Concrete numerical impact**: on a synthetic logistic problem
+(`n=200, p=30, s=3, λ=0.05`), the new `LogisticLassoRegressor` matches
+sklearn's `LogisticRegression(penalty='l1')` to ~1% on the active set,
+while the old `MCP(γ=1e9) + max_outer=1` approximation was off by ~17%.
+
+PyO3 bindings (`crates/skein-py/src/lib.rs`):
+
+- `solve_logistic_elastic_net_path` (dense) and
+  `solve_logistic_elastic_net_path_sparse` (CSC). Both take an
+  `alpha ∈ [0, 1]` parameter (1 = lasso, 0 = ridge). No new Rust core
+  code — `ElasticNet` penalty and `prox_newton_solve_path` already
+  existed; this is pure wiring.
+
+Python estimators (`python/skein_glm/estimators.py`):
+
+- `LogisticElasticNetRegressor` / `LogisticElasticNetPathRegressor` —
+  full surface with `alpha`, `lambda_`, weights, sample weights,
+  fit_intercept, standardize, sparse dispatch.
+- `LogisticLassoRegressor` / `LogisticLassoPathRegressor` — thin
+  facades around the EN variants with `alpha = 1.0` pinned.
+
+CV variants (`python/skein_glm/cv.py`):
+
+- `LogisticElasticNetPathCV` and `LogisticLassoPathCV` via the existing
+  `_LogisticPathCVMixin`.
+
+Retrofit (`python/skein_glm/adaptive.py`):
+
+- `_fit_pilot_logistic` now uses `LogisticLassoPathRegressor` for its
+  pilot fit (was `LogisticMCPPathRegressor(gamma=1e9)`).
+- `AdaptiveLogisticLassoPathRegressor._final_cls` and
+  `AdaptiveLogisticLassoPathCV._final_cls` switched to
+  `LogisticLassoPathRegressor`; the `_extra_kwargs() = {"gamma": 1e9}`
+  overrides are gone.
+
+17 new pytest in `tests/test_logistic_en.py` cover: shape and active-set
+sanity, lasso/EN facade equivalence (`LogisticLasso ≡ EN(α=1)`), the
+new lasso matching the old MCP-at-γ=1e9 on **support** (both
+approximate the same fit), sparse-signal recovery along the path,
+α→0 ridge limit (no exact zeros), α=0.5 intermediate sparsity ordering
+(`lasso ≤ EN ≤ ridge` active counts at fixed λ), sparse-input parity,
+predict_proba semantics inherited from the logistic base, sample
+weights changing the fit, CV wrappers picking a λ, and parameter
+validation (α range, non-binary y rejection). All 25 existing adaptive
+tests pass unchanged.
+
+Test count: **292 cargo + 355 pytest, all green** (up from 338).
+
+Foundation for M5.x-b (debiased GLM): VBR debiasing for logistic
+regression will use `LogisticLassoRegressor` as its penalized-likelihood
+fit primitive, which avoids inheriting the MCP-at-γ=1e9 approximation
+in the inference layer.
+
 ### Added (M5.x-a — Debiased / desparsified lasso)
 
 Van de Geer–Bühlmann–Ritov (2014) confidence intervals and p-values

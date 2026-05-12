@@ -2672,6 +2672,186 @@ class LogisticSCADPathRegressor(_LogisticPathRegressorBase):
         return self
 
 
+class LogisticElasticNetRegressor(_LogisticRegressorBase):
+    """Logistic regression with elastic-net penalty at a single λ.
+
+    Convex penalty ``α λ |β_j| + (1 - α) λ β_j² / 2`` per feature.
+    ``alpha = 1`` is pure logistic lasso; ``alpha = 0`` is ridge. The
+    `LogisticLassoRegressor` subclass pins ``alpha = 1`` for convenience.
+
+    Solver: prox-Newton with the existing weighted-LS surrogate
+    (`build_glm_path_outputs`) — same machinery as the MCP / SCAD
+    siblings, but with a convex `ElasticNet` penalty so the path is
+    one-shot rather than the LLA outer loop. ``max_outer`` / ``outer_tol``
+    still control the prox-Newton iteration count.
+    """
+
+    def __init__(
+        self,
+        lambda_: float = 0.1,
+        alpha: float = 0.5,
+        *,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.lambda_ = lambda_
+        self.alpha = alpha
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y) -> "LogisticElasticNetRegressor":
+        common, payload, n_features = _glm_dispatch_inputs(
+            self, x, y, validate_y=_validate_y_binary, is_path=False,
+        )
+        common["alpha"] = self.alpha
+        if payload is not None:
+            coefs, intercepts, _, info = _core.solve_logistic_elastic_net_path_sparse(
+                *payload, **common
+            )
+        else:
+            x_arr = common.pop("_x"); y_arr = common.pop("_y")
+            coefs, intercepts, _, info = _core.solve_logistic_elastic_net_path(
+                x_arr, y_arr, **common
+            )
+        self.coef_ = coefs[0]
+        self.intercept_ = float(intercepts[0])
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
+class LogisticElasticNetPathRegressor(_LogisticPathRegressorBase):
+    """Logistic regression with elastic-net penalty along an entire λ-path.
+
+    See :class:`LogisticElasticNetRegressor` for the single-λ variant.
+    """
+
+    def __init__(
+        self,
+        alpha: float = 0.5,
+        *,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.alpha = alpha
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.sample_weights = sample_weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y) -> "LogisticElasticNetPathRegressor":
+        common, payload, n_features = _glm_dispatch_inputs(
+            self, x, y, validate_y=_validate_y_binary, is_path=True,
+        )
+        common["alpha"] = self.alpha
+        if payload is not None:
+            coefs, intercepts, lambdas_used, info = (
+                _core.solve_logistic_elastic_net_path_sparse(*payload, **common)
+            )
+        else:
+            x_arr = common.pop("_x"); y_arr = common.pop("_y")
+            coefs, intercepts, lambdas_used, info = (
+                _core.solve_logistic_elastic_net_path(x_arr, y_arr, **common)
+            )
+        self.coefs_ = coefs
+        self.intercepts_ = intercepts
+        self.lambdas_ = lambdas_used
+        self.info_ = info
+        self.n_features_in_ = n_features
+        return self
+
+
+class LogisticLassoRegressor(LogisticElasticNetRegressor):
+    """Logistic regression with L1 penalty at a single λ.
+
+    Convex L1 — proper logistic lasso via prox-Newton with the
+    `ElasticNet` penalty pinned to ``alpha = 1``. Use this rather than
+    `LogisticMCPRegressor` at very large gamma; the latter pays for
+    nonconvex LLA machinery to approximate this convex problem.
+    """
+
+    def __init__(
+        self,
+        lambda_: float = 0.1,
+        *,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        super().__init__(
+            lambda_=lambda_, alpha=1.0, weights=weights,
+            max_iter=max_iter, tol=tol, fit_intercept=fit_intercept,
+            standardize=standardize, acceleration=acceleration,
+            max_outer=max_outer, outer_tol=outer_tol,
+        )
+
+
+class LogisticLassoPathRegressor(LogisticElasticNetPathRegressor):
+    """Logistic regression with L1 penalty along an entire λ-path.
+
+    See :class:`LogisticLassoRegressor` for the single-λ variant.
+    """
+
+    def __init__(
+        self,
+        *,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        sample_weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        super().__init__(
+            alpha=1.0, lambdas=lambdas, n_lambdas=n_lambdas,
+            lambda_min_ratio=lambda_min_ratio, weights=weights,
+            sample_weights=sample_weights, max_iter=max_iter, tol=tol,
+            fit_intercept=fit_intercept, standardize=standardize,
+            acceleration=acceleration, max_outer=max_outer, outer_tol=outer_tol,
+        )
+
+
 # =====================================================================
 # Logistic + group penalties (M3.3)
 # =====================================================================

@@ -45,6 +45,7 @@ from skein_glm.estimators import (
     GroupLassoPathRegressor,
     GroupMCPPathRegressor,
     GroupSCADPathRegressor,
+    LogisticLassoPathRegressor,
     LogisticMCPPathRegressor,
     LogisticSCADPathRegressor,
     MCPPathRegressor,
@@ -1170,8 +1171,8 @@ class AdaptiveGroupSCADPathCV(_AdaptiveGroupPathCVBase):
 # =========================================================================
 #
 # Pilot is the corresponding GLM's lasso path (e.g.,
-# `LogisticMCPPathRegressor(gamma=1e9)`). Final is the user's chosen
-# GLM-penalty path with adaptive weights derived from the pilot.
+# `LogisticLassoPathRegressor` for binomial). Final is the user's
+# chosen GLM-penalty path with adaptive weights derived from the pilot.
 #
 # Path classes store the fitted final estimator as `_final_estimator_`
 # and delegate `predict_proba` / `decision_function` / `predict` to it
@@ -1193,8 +1194,7 @@ def _fit_pilot_logistic(
     fit_intercept: bool,
     standardize: bool,
 ) -> NDArray[np.float64]:
-    pilot = LogisticMCPPathRegressor(
-        gamma=1e9,
+    pilot = LogisticLassoPathRegressor(
         n_lambdas=n_pilot_lambdas,
         lambda_min_ratio=1e-3,
         fit_intercept=fit_intercept,
@@ -1336,7 +1336,7 @@ def _logistic_path_init(self, gamma_or_a, *, eta, eps_pilot, n_pilot_lambdas,
 class AdaptiveLogisticLassoPathRegressor(_AdaptiveLogisticPathBase):
     """Adaptive logistic lasso (pilot lasso + adaptive lasso final)."""
 
-    _final_cls = LogisticMCPPathRegressor
+    _final_cls = LogisticLassoPathRegressor
 
     def __init__(
         self,
@@ -1370,9 +1370,6 @@ class AdaptiveLogisticLassoPathRegressor(_AdaptiveLogisticPathBase):
         self.fit_intercept = fit_intercept
         self.standardize = standardize
         self.acceleration = acceleration
-
-    def _extra_kwargs(self) -> dict[str, Any]:
-        return {"gamma": 1e9}
 
 
 class AdaptiveLogisticMCPPathRegressor(_AdaptiveLogisticPathBase):
@@ -1533,7 +1530,7 @@ def _adaptive_logistic_cv_init(
 class AdaptiveLogisticLassoPathCV(_AdaptiveLogisticPathCVBase):
     """K-fold CV over an adaptive logistic-lasso path."""
 
-    _final_cls = LogisticMCPPathRegressor
+    _final_cls = LogisticLassoPathRegressor
 
     def __init__(
         self,
@@ -1571,9 +1568,6 @@ class AdaptiveLogisticLassoPathCV(_AdaptiveLogisticPathCVBase):
         self.fit_intercept = fit_intercept
         self.standardize = standardize
         self.acceleration = acceleration
-
-    def _extra_kwargs(self) -> dict[str, Any]:
-        return {"gamma": 1e9}
 
 
 class AdaptiveLogisticMCPPathCV(_AdaptiveLogisticPathCVBase):
