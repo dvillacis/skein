@@ -45,3 +45,92 @@ impl GroupPenalty for GroupLasso {
         self.weights.view()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_abs_diff_eq;
+    use ndarray::{array, Array1};
+
+    fn two_blocks_of_two() -> Groups {
+        // Two contiguous groups of size 2: features 0..2 and 2..4.
+        Groups::contiguous_blocks(4, 2)
+    }
+
+    #[test]
+    fn value_zero_when_blocks_are_zero() {
+        let pen = GroupLasso::new(0.5, 2);
+        let beta = Array1::<f64>::zeros(4);
+        assert_abs_diff_eq!(pen.value(beta.view(), &two_blocks_of_two()), 0.0);
+    }
+
+    #[test]
+    fn value_is_lambda_times_block_norm_sum() {
+        // β = [3, 4, 0, 1] → ‖block_0‖ = 5, ‖block_1‖ = 1.
+        // λ=0.5, weights=[1, 2] ⇒ 0.5·1·5 + 0.5·2·1 = 2.5 + 1.0 = 3.5
+        let pen = GroupLasso::with_weights(0.5, array![1.0, 2.0]);
+        let beta = array![3.0, 4.0, 0.0, 1.0];
+        assert_abs_diff_eq!(
+            pen.value(beta.view(), &two_blocks_of_two()),
+            3.5,
+            epsilon = 1e-12
+        );
+    }
+
+    #[test]
+    fn prox_group_zeroes_block_when_norm_below_threshold() {
+        // step·λ·w = 1·1·1 = 1; ‖[0.3, 0.4]‖ = 0.5 < 1 ⇒ zero out.
+        let pen = GroupLasso::new(1.0, 2);
+        let mut beta = array![0.3_f64, 0.4, 99.0, 99.0];
+        let block = beta.slice_mut(ndarray::s![0..2]);
+        pen.prox_group(0, block, 1.0);
+        assert_abs_diff_eq!(beta[0], 0.0);
+        assert_abs_diff_eq!(beta[1], 0.0);
+    }
+
+    #[test]
+    fn prox_group_shrinks_block_when_norm_above_threshold() {
+        // step·λ·w = 1; ‖[3, 4]‖ = 5; scale = 1 − 1/5 = 0.8.
+        let pen = GroupLasso::new(1.0, 2);
+        let mut beta = array![3.0_f64, 4.0, 0.0, 0.0];
+        let block = beta.slice_mut(ndarray::s![0..2]);
+        pen.prox_group(0, block, 1.0);
+        assert_abs_diff_eq!(beta[0], 2.4, epsilon = 1e-12);
+        assert_abs_diff_eq!(beta[1], 3.2, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn prox_group_indexes_weights_by_g() {
+        // Group 0: weight 0 ⇒ no shrinkage.
+        // Group 1: weight 1 ⇒ standard threshold.
+        let pen = GroupLasso::with_weights(1.0, array![0.0, 1.0]);
+        let mut beta = array![3.0_f64, 4.0, 0.3, 0.4];
+        // Apply group 0 prox to first block: should leave it untouched.
+        let b0 = beta.slice_mut(ndarray::s![0..2]);
+        pen.prox_group(0, b0, 1.0);
+        assert_abs_diff_eq!(beta[0], 3.0);
+        assert_abs_diff_eq!(beta[1], 4.0);
+        // Apply group 1 prox to second block: ‖0.3, 0.4‖ = 0.5 < 1 ⇒ zero.
+        let b1 = beta.slice_mut(ndarray::s![2..4]);
+        pen.prox_group(1, b1, 1.0);
+        assert_abs_diff_eq!(beta[2], 0.0);
+        assert_abs_diff_eq!(beta[3], 0.0);
+    }
+
+    #[test]
+    fn weights_view_returns_user_supplied() {
+        let pen = GroupLasso::with_weights(0.5, array![0.5, 2.0]);
+        let w = pen.weights();
+        assert_eq!(w.len(), 2);
+        assert_abs_diff_eq!(w[0], 0.5);
+        assert_abs_diff_eq!(w[1], 2.0);
+    }
+
+    #[test]
+    fn default_weights_are_ones() {
+        let pen = GroupLasso::new(0.5, 3);
+        for v in pen.weights().iter() {
+            assert_abs_diff_eq!(*v, 1.0);
+        }
+    }
+}

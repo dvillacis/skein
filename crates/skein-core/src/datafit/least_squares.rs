@@ -131,3 +131,201 @@ impl Datafit for LeastSquares {
         Some((r_sq / n) * scale * (1.0 - 0.5 * scale) - scale * beta_dot_grad)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::design::DenseMatrix;
+    use approx::assert_abs_diff_eq;
+    use ndarray::array;
+
+    fn small_design() -> DenseMatrix {
+        // 3 × 2 design with non-trivial column norms.
+        DenseMatrix::new(array![[1.0_f64, -1.0], [2.0, 0.0], [-1.0, 3.0],])
+    }
+
+    #[test]
+    fn value_unweighted_is_half_mean_squared_residual() {
+        let y = array![1.0_f64, 2.0, 3.0];
+        let df = LeastSquares::new(y.clone());
+        // r = (1, -1, 2); ‖r‖² = 6; (1/(2n))·6 = 1.0
+        let r = array![1.0_f64, -1.0, 2.0];
+        assert_abs_diff_eq!(df.value(r.view()), 1.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn value_weighted_uses_supplied_weights() {
+        let y = array![0.0_f64, 0.0, 0.0];
+        let w = array![2.0_f64, 1.0, 0.0];
+        let df = LeastSquares::with_sample_weights(y, w);
+        let r = array![1.0_f64, 1.0, 100.0];
+        // Σ w_i r_i² = 2·1 + 1·1 + 0·10000 = 3
+        // value = (1/(2·3))·3 = 0.5
+        assert_abs_diff_eq!(df.value(r.view()), 0.5, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn init_residual_returns_x_beta_minus_y() {
+        let design = small_design();
+        let y = array![0.5_f64, -1.0, 2.0];
+        let df = LeastSquares::new(y);
+        let beta = array![1.0_f64, 1.0];
+        // Xβ = (0, 2, 2); residual = Xβ − y = (-0.5, 3, 0)
+        let r = df.init_residual(&design, beta.view());
+        assert_abs_diff_eq!(r[0], -0.5, epsilon = 1e-12);
+        assert_abs_diff_eq!(r[1], 3.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(r[2], 0.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn coord_grad_unweighted_matches_xj_dot_r_over_n() {
+        let design = small_design();
+        let y = array![0.0_f64, 0.0, 0.0];
+        let df = LeastSquares::new(y);
+        let r = array![1.0_f64, 2.0, -1.0];
+        // Column 0: (1, 2, -1) · (1, 2, -1) = 1 + 4 + 1 = 6 / 3 = 2
+        // Column 1: (-1, 0, 3) · (1, 2, -1) = -1 + 0 − 3 = -4 / 3
+        assert_abs_diff_eq!(df.coord_grad(&design, 0, r.view()), 2.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(
+            df.coord_grad(&design, 1, r.view()),
+            -4.0 / 3.0,
+            epsilon = 1e-12
+        );
+    }
+
+    #[test]
+    fn coord_grad_weighted_matches_weighted_inner_product() {
+        let design = small_design();
+        let y = array![0.0_f64, 0.0, 0.0];
+        let w = array![1.0_f64, 0.0, 2.0];
+        let df = LeastSquares::with_sample_weights(y, w);
+        let r = array![1.0_f64, 2.0, -1.0];
+        // Column 0: w·r = (1, 0, -2); (1, 2, -1) · (1, 0, -2) = 1 + 0 + 2 = 3 / 3 = 1
+        // Column 1: (-1, 0, 3) · (1, 0, -2) = -1 + 0 − 6 = -7 / 3
+        assert_abs_diff_eq!(df.coord_grad(&design, 0, r.view()), 1.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(
+            df.coord_grad(&design, 1, r.view()),
+            -7.0 / 3.0,
+            epsilon = 1e-12
+        );
+    }
+
+    #[test]
+    fn full_grad_matches_per_coord_grad_loop_unweighted() {
+        let design = small_design();
+        let y = array![0.5_f64, -1.0, 2.0];
+        let df = LeastSquares::new(y);
+        let r = array![1.0_f64, 2.0, -1.0];
+        let g = df.full_grad(&design, r.view());
+        for j in 0..design.n_features() {
+            assert_abs_diff_eq!(g[j], df.coord_grad(&design, j, r.view()), epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn full_grad_matches_per_coord_grad_loop_weighted() {
+        let design = small_design();
+        let y = array![0.5_f64, -1.0, 2.0];
+        let w = array![1.5_f64, 0.5, 1.0];
+        let df = LeastSquares::with_sample_weights(y, w);
+        let r = array![1.0_f64, 2.0, -1.0];
+        let g = df.full_grad(&design, r.view());
+        for j in 0..design.n_features() {
+            assert_abs_diff_eq!(g[j], df.coord_grad(&design, j, r.view()), epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn coord_lipschitz_unweighted_is_col_sq_norm_over_n() {
+        let design = small_design();
+        let y = array![0.0_f64, 0.0, 0.0];
+        let df = LeastSquares::new(y);
+        // ‖col_0‖² = 1+4+1 = 6 → 2; ‖col_1‖² = 1+0+9 = 10 → 10/3
+        assert_abs_diff_eq!(df.coord_lipschitz(&design, 0), 2.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(df.coord_lipschitz(&design, 1), 10.0 / 3.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn coord_lipschitz_weighted_is_weighted_col_sq_norm_over_n() {
+        let design = small_design();
+        let y = array![0.0_f64, 0.0, 0.0];
+        let w = array![1.0_f64, 0.0, 2.0];
+        let df = LeastSquares::with_sample_weights(y, w);
+        // col 0: 1·1 + 0·4 + 2·1 = 3 → 1.0
+        // col 1: 1·1 + 0·0 + 2·9 = 19 → 19/3
+        assert_abs_diff_eq!(df.coord_lipschitz(&design, 0), 1.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(df.coord_lipschitz(&design, 1), 19.0 / 3.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn sample_weights_accessor_round_trips() {
+        let y = array![0.0_f64, 0.0, 0.0];
+        let df_none = LeastSquares::new(y.clone());
+        assert!(df_none.sample_weights().is_none());
+
+        let w = array![0.5_f64, 1.5, 2.0];
+        let df_w = LeastSquares::with_sample_weights(y, w.clone());
+        let view = df_w.sample_weights().expect("weights must be present");
+        for i in 0..3 {
+            assert_abs_diff_eq!(view[i], w[i]);
+        }
+    }
+
+    #[test]
+    fn lasso_dual_obj_returns_none_when_sample_weights_set() {
+        // Documented carve-out — formula not yet adjusted for diagonal
+        // weight. Lock the contract so the path solver continues to fall
+        // back to prox-grad stationarity for weighted LS.
+        let design = small_design();
+        let y = array![0.0_f64, 0.0, 0.0];
+        let w = array![1.0_f64, 1.0, 1.0];
+        let df = LeastSquares::with_sample_weights(y, w);
+        let beta = array![0.0_f64, 0.0];
+        let r = array![0.0_f64, 0.0, 0.0];
+        let g = array![0.0_f64, 0.0];
+        assert!(df
+            .lasso_dual_obj(&design, beta.view(), r.view(), g.view(), 1.0)
+            .is_none());
+    }
+
+    #[test]
+    fn lasso_dual_obj_unweighted_matches_closed_form() {
+        let design = small_design();
+        let y = array![0.5_f64, -1.0, 2.0];
+        let df = LeastSquares::new(y);
+        let beta = array![0.3_f64, -0.2];
+        let r = df.init_residual(&design, beta.view());
+        let g = df.full_grad(&design, r.view());
+        let scale = 0.7;
+        let n = design.n_samples() as f64;
+        let r_sq = r.dot(&r);
+        let bg = beta.dot(&g);
+        let expected = (r_sq / n) * scale * (1.0 - 0.5 * scale) - scale * bg;
+        let actual = df
+            .lasso_dual_obj(&design, beta.view(), r.view(), g.view(), scale)
+            .expect("unweighted LS must return a closed-form dual");
+        assert_abs_diff_eq!(actual, expected, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn weights_length_mismatch_panics() {
+        let y = array![0.0_f64, 0.0, 0.0];
+        let w = array![1.0_f64, 1.0]; // wrong length
+        let result = std::panic::catch_unwind(|| LeastSquares::with_sample_weights(y, w));
+        assert!(
+            result.is_err(),
+            "constructor must reject mismatched weights"
+        );
+    }
+
+    #[test]
+    fn y_accessor_returns_supplied_target() {
+        let y = array![1.0_f64, 2.0, 3.0];
+        let df = LeastSquares::new(y.clone());
+        let view = df.y();
+        assert_eq!(view.len(), 3);
+        for i in 0..3 {
+            assert_abs_diff_eq!(view[i], y[i]);
+        }
+    }
+}

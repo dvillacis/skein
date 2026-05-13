@@ -156,18 +156,25 @@ where
         let mut ws: Vec<usize> = match config.screening {
             Screening::Off => (0..n_groups).collect(),
             Screening::Strong => {
-                if k == 0 || lam >= prev_lambda.unwrap() {
+                // Loop invariant: every iteration before returning sets
+                // `prev_lambda = Some(lam)` and `prev_residual = Some(...)`,
+                // so `k > 0 ⇒ both are Some`. The `k == 0` short-circuit
+                // ensures we never evaluate the unwraps in iteration 0.
+                if k == 0 || lam >= prev_lambda.expect("prev_lambda is Some when k > 0") {
                     (0..n_groups).collect()
                 } else {
                     block_strong_rule_screen(
                         design,
                         datafit,
-                        prev_residual.as_ref().unwrap().view(),
+                        prev_residual
+                            .as_ref()
+                            .expect("prev_residual is Some when k > 0")
+                            .view(),
                         weights.view(),
                         warm.view(),
                         groups,
                         lam,
-                        prev_lambda.unwrap(),
+                        prev_lambda.expect("prev_lambda is Some when k > 0"),
                     )
                 }
             }
@@ -177,9 +184,15 @@ where
                 let res_view = if k == 0 {
                     let r = datafit.init_residual(design, warm.view());
                     prev_residual = Some(r);
-                    prev_residual.as_ref().unwrap().view()
+                    prev_residual
+                        .as_ref()
+                        .expect("just set prev_residual = Some(r)")
+                        .view()
                 } else {
-                    prev_residual.as_ref().unwrap().view()
+                    prev_residual
+                        .as_ref()
+                        .expect("loop invariant: prev_residual is Some when k > 0")
+                        .view()
                 };
                 block_gap_safe_screen(
                     design,

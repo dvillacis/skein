@@ -31,6 +31,7 @@ ncvreg + grpreg + jsonlite + survival, then run:
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -40,6 +41,12 @@ skein = pytest.importorskip("skein_glm")
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 ACTIVE_EPS = 1e-6
+
+# Set SKEIN_REQUIRE_FIXTURES=1 in CI so missing fixtures fail loudly
+# instead of silently skipping. Local devs without R installed see the
+# original soft-skip behavior. Fixtures are checked into git, so the
+# only way they go missing in CI is a deletion that should be caught.
+_REQUIRE_FIXTURES = os.environ.get("SKEIN_REQUIRE_FIXTURES") == "1"
 
 
 def _load_fixture(name: str) -> dict | None:
@@ -61,10 +68,13 @@ def _load_fixture(name: str) -> dict | None:
 def _skipped_if_missing(name: str) -> dict:
     fix = _load_fixture(name)
     if fix is None:
-        pytest.skip(
+        msg = (
             f"fixture {name}.json missing; run "
             "`Rscript tests/fixtures/generate.R` to generate"
         )
+        if _REQUIRE_FIXTURES:
+            pytest.fail(msg)
+        pytest.skip(msg)
     return fix
 
 
@@ -334,9 +344,12 @@ def test_fixtures_directory_exists():
 def test_at_least_one_fixture_present():
     fixtures = sorted(FIXTURES_DIR.glob("*.json"))
     if not fixtures:
-        pytest.skip(
+        msg = (
             "no fixtures found; run `Rscript tests/fixtures/generate.R` "
             "to generate (requires R + glmnet + ncvreg + grpreg + "
             "jsonlite + survival)"
         )
+        if _REQUIRE_FIXTURES:
+            pytest.fail(msg)
+        pytest.skip(msg)
     assert len(fixtures) >= 1

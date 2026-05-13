@@ -198,7 +198,10 @@ where
                 } else {
                     r_owned = datafit.init_residual(design, warm.view());
                     prev_residual = Some(r_owned);
-                    prev_residual.as_ref().unwrap().view()
+                    prev_residual
+                        .as_ref()
+                        .expect("just set prev_residual = Some(r_owned)")
+                        .view()
                 };
                 priority_rule_screen(
                     design,
@@ -214,9 +217,18 @@ where
                     // Cold start at this λ; warm β = 0 ⇒ residual = -y.
                     let r = datafit.init_residual(design, warm.view());
                     prev_residual = Some(r);
-                    prev_residual.as_ref().unwrap().view()
+                    prev_residual
+                        .as_ref()
+                        .expect("just set prev_residual = Some(r)")
+                        .view()
                 } else {
-                    prev_residual.as_ref().unwrap().view()
+                    // Loop invariant: every iteration before returning sets
+                    // `prev_residual = Some(final_residual)` (see end of
+                    // outer loop), so `k > 0 ⇒ prev_residual.is_some()`.
+                    prev_residual
+                        .as_ref()
+                        .expect("loop invariant: prev_residual is Some when k > 0")
+                        .view()
                 };
                 gap_safe_screen(design, datafit, res_view, warm.view(), weights.view(), lam)
             }
@@ -842,7 +854,11 @@ fn anderson_extrapolate_pair(
 
     // Apply c to both sequences. Same Anderson formula as for a single
     // sequence (`last - U · c`), independently for each.
-    let last_a = seq_a.last().unwrap();
+    // Both `.last()` calls below are infallible: the early return at
+    // line 804 guarantees `seq_a.len() == seq_b.len() ≥ 3`.
+    let last_a = seq_a
+        .last()
+        .expect("seq_a non-empty: len() ≥ 3 checked above");
     let a_acc = last_a - &u_a.dot(&c);
 
     let mut u_b = Array2::<f64>::zeros((p_b, n_diff));
@@ -851,7 +867,9 @@ fn anderson_extrapolate_pair(
             u_b[[j, i]] = seq_b[i + 1][j] - seq_b[i][j];
         }
     }
-    let last_b = seq_b.last().unwrap();
+    let last_b = seq_b
+        .last()
+        .expect("seq_b non-empty: len() ≥ 3 checked above");
     let b_acc = last_b - &u_b.dot(&c);
 
     Some((a_acc, b_acc))

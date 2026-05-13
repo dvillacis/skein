@@ -98,4 +98,30 @@ noting the host change.
 
 ## Status
 
-Skeleton only. Real bench numbers land as M9.3 progresses.
+Live numbers committed for: `lasso_ls`, `lasso_ls_sparse`, `mcp_ls`,
+`mcp_ls_sparse`, `scad_ls`, `scad_ls_sparse` at sizes **small** and
+**medium**. See `results/*.json`.
+
+## Open gaps (ROADMAP M12-P1)
+
+- **No `large` (n=100k, p=10k) snapshots committed.** The scenario
+  drivers and `Size("large")` already exist; the gap is that nobody
+  has run them on a snapshot-eligible host. To fill, on the host
+  whose `host_id` should be canonical:
+
+  ```bash
+  python benches/run.py \
+      --scenarios lasso_ls lasso_ls_sparse mcp_ls mcp_ls_sparse scad_ls scad_ls_sparse \
+      --packages all \
+      --sizes large
+  ```
+
+  Expect multi-hour runtime; each comparator may OOM on `large` and
+  that's fine (the runner records the failure and skips).
+
+- **No glasso scenarios.** M11 (graphical models) shipped without
+  bench coverage — `sklearn.covariance.GraphicalLasso` and R
+  `glasso` would be the natural comparators. Adding this requires
+  either extending the `Problem` dataclass to carry a covariance /
+  precision-style problem (no `y`) or scaffolding a parallel
+  `cov_problem.py`. Tracked as a sub-item of M12-P1; not yet started.
