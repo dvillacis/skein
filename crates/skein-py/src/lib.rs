@@ -968,6 +968,7 @@ where
     info.set_item("final_objs", report.final_objs)?;
     info.set_item("working_set_sizes", report.working_set_sizes)?;
     info.set_item("kkt_passes", report.kkt_passes)?;
+    info.set_item("per_lambda_wall_ns", report.per_lambda_wall_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),
@@ -5241,6 +5242,7 @@ where
     info.set_item("final_objs", report.final_objs)?;
     info.set_item("working_set_sizes", report.working_set_sizes)?;
     info.set_item("kkt_passes", report.kkt_passes)?;
+    info.set_item("per_lambda_wall_ns", report.per_lambda_wall_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),

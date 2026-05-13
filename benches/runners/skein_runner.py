@@ -42,7 +42,11 @@ def _build_estimator(
     # Lazy import so import-time cost doesn't pollute timings.
     from skein_glm import estimators as e
 
-    common = dict(lambdas=np.asarray(lambda_grid), tol=tol, screening=screening)
+    # Gaussian Path estimators accept `screening` (strong rule + gap-safe);
+    # GLM Path estimators don't expose it (they go through prox-Newton).
+    common = dict(lambdas=np.asarray(lambda_grid), tol=tol)
+    if problem.family == "gaussian":
+        common["screening"] = screening
 
     if problem.family == "gaussian":
         if penalty == "lasso":
@@ -63,6 +67,45 @@ def _build_estimator(
             return e.GroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
         if penalty == "group_scad":
             return e.GroupSCADPathRegressor(groups=problem.groups, a=gamma, **common)
+    if problem.family == "logistic":
+        if penalty == "lasso":
+            return e.LogisticLassoPathRegressor(**common)
+        if penalty == "elastic_net":
+            return e.LogisticElasticNetPathRegressor(alpha=0.5, **common)
+        if penalty == "mcp":
+            return e.LogisticMCPPathRegressor(gamma=gamma, **common)
+        if penalty == "scad":
+            return e.LogisticSCADPathRegressor(a=gamma, **common)
+        if penalty == "group_lasso":
+            return e.LogisticGroupLassoPathRegressor(groups=problem.groups, **common)
+        if penalty == "group_mcp":
+            return e.LogisticGroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
+    if problem.family == "poisson":
+        if penalty == "lasso":
+            return e.PoissonLassoPathRegressor(**common)
+        if penalty == "elastic_net":
+            return e.PoissonElasticNetPathRegressor(alpha=0.5, **common)
+        if penalty == "mcp":
+            return e.PoissonMCPPathRegressor(gamma=gamma, **common)
+        if penalty == "scad":
+            return e.PoissonSCADPathRegressor(a=gamma, **common)
+        if penalty == "group_lasso":
+            return e.PoissonGroupLassoPathRegressor(groups=problem.groups, **common)
+        if penalty == "group_mcp":
+            return e.PoissonGroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
+    if problem.family == "cox":
+        # Cox in skein uses (time, status) via fit(X, time, event=status);
+        # the lasso path is exposed through CoxMCPPathRegressor(gamma=∞).
+        if penalty == "lasso":
+            return e.CoxMCPPathRegressor(gamma=1e6, **common)
+        if penalty == "mcp":
+            return e.CoxMCPPathRegressor(gamma=gamma, **common)
+        if penalty == "scad":
+            return e.CoxSCADPathRegressor(a=gamma, **common)
+        if penalty == "group_lasso":
+            return e.CoxGroupLassoPathRegressor(groups=problem.groups, **common)
+        if penalty == "group_mcp":
+            return e.CoxGroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
     raise NotImplementedError(f"skein runner: ({problem.family}, {penalty}) not yet wired")
 
 
@@ -78,7 +121,15 @@ def fit(
 ) -> RunResult:
     est = _build_estimator(problem, penalty, lambda_grid, tol, screening, gamma)
     t0 = time.perf_counter()
-    est.fit(problem.x, problem.y)
+    if problem.family == "cox":
+        # Cox's fit signature is fit(x, time, event). Event status is
+        # stashed in problem.meta by the cox_truth simulator.
+        event = problem.meta.get("event") if problem.meta else None
+        if event is None:
+            raise ValueError("skein runner: Cox cell needs problem.meta['event']")
+        est.fit(problem.x, problem.y, np.asarray(event, dtype=np.int64))
+    else:
+        est.fit(problem.x, problem.y)
     elapsed = time.perf_counter() - t0
 
     # Path estimators expose `coefs_` (n_lambdas, p) and `intercepts_` (n_lambdas,).

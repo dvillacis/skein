@@ -185,7 +185,7 @@ that scenario lands in M9.3.
 ## Postscript — sparse-regime bench (`lasso_ls_sparse`)
 
 Added `benches/scenarios/lasso_ls_sparse.py` with `λ_min/λ_max =
-5e-2` (vs the deep-path `1e-3`). Same problem generator (`k_active=10,
+5e-2` (vs the dense-path `1e-3`). Same problem generator (`k_active=10,
 n=10k, p=1k, snr=5`); the only thing that changes is how far the path
 runs before λ stops shrinking. With the sparse grid the active set at
 the smallest λ stays at the true support size (10) instead of
@@ -197,16 +197,16 @@ delivering wallclock value the saturated regime hides.
 
 **Results (medium, n=10k, p=1k)**:
 
-| comparator | deep regime | sparse regime |
+| comparator | dense regime | sparse regime |
 |---|---|---|
 | sklearn (`lasso_path`)        | 18.3× slower | **17.3× slower** |
 | glmnet (R, via Rscript)       |  3.6× slower | **3.1× slower** |
 | skglm (per-λ runner — unfair) |  0.3× (we're faster) | 0.3× |
 | celer (per-λ runner — unfair) |  0.3× | 0.4× |
 
-skein medium drops from 3.29 s (deep) to **2.53 s (sparse)** — the
+skein medium drops from 3.29 s (dense) to **2.53 s (sparse)** — the
 priority WS keeps the working set at 10–20 features along the entire
-path (vs growing to 1000 in the deep regime), and the adaptive inner
+path (vs growing to 1000 in the dense regime), and the adaptive inner
 tol's iteration savings finally compound:
 
   ws across path:  10–20 features   (was 10 → 1000)
@@ -234,7 +234,7 @@ packages now get the same warm-start advantage skein and sklearn have.
 
 **Apples-to-apples results (medium, n=10k, p=1k, 100-λ path)**:
 
-| package | deep regime | sparse regime |
+| package | dense regime | sparse regime |
 |---|---|---|
 | sklearn (`lasso_path`)              | 188 ms | 147 ms |
 | glmnet (R, via Rscript)             | 950 ms | 707 ms |
@@ -244,8 +244,8 @@ packages now get the same warm-start advantage skein and sklearn have.
 
 Two real findings:
 
-1. **skein beats both celer and skglm in the deep regime**. When the
-   path runs deep into the saturated tail, our M10.3 structural
+1. **skein beats both celer and skglm in the dense regime**. When the
+   path runs into the saturated tail, our M10.3 structural
    changes + strong-rule-equivalent priority WS combine to beat
    celer's dual-extrapolation overhead and skglm's per-feature numba
    dispatch. We stay 17× behind sklearn (BLAS gap) and 3.5× behind
@@ -255,7 +255,7 @@ Two real findings:
    5.4× faster than skein**. Their dual-extrapolation builds a
    tighter screening sphere as the path progresses, so the WS shrinks
    aggressively when the true support is small. skein's PGD-based
-   screening only compresses fit time 1.3× from deep to sparse;
+   screening only compresses fit time 1.3× from dense to sparse;
    celer compresses 8.5×.
 
 The first is encouraging, but the second is the bigger lesson:
@@ -267,13 +267,13 @@ restructuring.
 
 Order of remaining levers, post-runner-fairness:
 
-  C. ndarray `blas` feature: ~3× on deep, would close most of the
+  C. ndarray `blas` feature: ~3× on dense, would close most of the
      gap to sklearn / glmnet. The single largest move.
   E. Anderson on residual instead of β (smaller code, ~1.05–1.2×).
   F. Dual extrapolation (celer's lever): would close the celer-sparse
      gap. Significant new code.
 
-skglm at 5.24s deep / 3.47s sparse — note that skglm's *AndersonCD*
+skglm at 5.24s dense / 3.47s sparse — note that skglm's *AndersonCD*
 is what drives our `subdiff_distance` adoption philosophy in the
 adaptive PGD work. skglm uses numba @njit for the inner CD; we use
 ndarray's pure-Rust dot path. Numba's BLAS dispatch on
@@ -304,7 +304,7 @@ macOS path is what enabled the M10.1 prediction to be tested.)
 
 **Results (medium lasso/LS, n=10k, p=1k, 100-λ path)**:
 
-| package        | deep before | deep with BLAS | sparse before | sparse with BLAS |
+| package        | dense before | dense with BLAS | sparse before | sparse with BLAS |
 |---|---|---|---|---|
 | sklearn        | 188 ms      | 181 ms         | 147 ms        | 147 ms |
 | glmnet (R)     | 950 ms      | 883 ms         | 707 ms        | 810 ms |
@@ -314,22 +314,22 @@ macOS path is what enabled the M10.1 prediction to be tested.)
 
 skein-relative-to-comparators (medium, with BLAS):
 
-- vs sklearn:  **9.6× deep, 6.5× sparse** (was 18× / 17×)
-- vs glmnet:   **2.0× deep, 1.18× sparse** (was 3.5× / 3.5× — sparse is essentially matched!)
-- vs celer:    0.44× deep (we're 2.3× faster), 2.1× sparse (was 0.84× / 5.4×)
-- vs skglm:    0.33× deep (we're 3× faster), 0.28× sparse (3.6× faster)
+- vs sklearn:  **9.6× dense, 6.5× sparse** (was 18× / 17×)
+- vs glmnet:   **2.0× dense, 1.18× sparse** (was 3.5× / 3.5× — sparse is essentially matched!)
+- vs celer:    0.44× dense (we're 2.3× faster), 2.1× sparse (was 0.84× / 5.4×)
+- vs skglm:    0.33× dense (we're 3× faster), 0.28× sparse (3.6× faster)
 
 **Read-out**:
 
 The M10.1 prediction was ~3× from BLAS dispatch on `col_dot`. The
-realised speedup (1.9× deep / 2.6× sparse) is somewhat below that but
+realised speedup (1.9× dense / 2.6× sparse) is somewhat below that but
 qualitatively correct — the BLAS replaces the per-call `dot_generic`
 floor with `ddot`, and the extra 0.4× to 1.4× went to other parts of
 the path solver (the prox-grad-distance verifier, the priority-WS
 ranking) that haven't been BLAS-accelerated.
 
 The biggest practical change: **skein is now within striking distance
-of glmnet** (essentially matched in sparse, 2× off in deep). We still
+of glmnet** (essentially matched in sparse, 2× off in dense). We still
 sit ~10× behind sklearn's `lasso_path` Cython — that's a tight inner
 loop with no path-level structural overhead, hard to match without a
 similar Cython-grade rewrite. But for the niche this library targets

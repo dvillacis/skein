@@ -1,0 +1,11 @@
+# Snakemake profile: headline run on a single Apple Silicon laptop.
+# Total wall-clock budget ~12 hours.
+cores: 1
+jobs: 1
+keep-going: True
+printshellcmds: True
+rerun-incomplete: True
+use-conda: False
+restart-times: 1
+default-resources:
+  - mem_mb=16000

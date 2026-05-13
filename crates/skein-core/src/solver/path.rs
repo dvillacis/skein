@@ -87,6 +87,24 @@ pub enum Screening {
     GapSafe,
 }
 
+/// Active-set saturation threshold above which screening is bypassed.
+///
+/// When the warm-started β at λ_k already has >50 % of features active,
+/// strong-rule / gap-safe screening at λ_{k+1} costs more than it saves:
+/// the screen prunes ~80 % of columns from the priority working set, but
+/// the KKT verifier then has to re-iterate to add back the features the
+/// screen wrongly dropped. Net result on `benches/v2 ls_lasso/medium/deep`
+/// (release profile, n=10k, p=1k, 100-λ deep grid, 5 seeds):
+///
+///   screening = off       : 1.60 s (avg WS = 1000)
+///   screening = strong    : 2.19 s (avg WS = 220, kkt = 128)
+///   screening = gap_safe  : 2.32 s (avg WS = 261, kkt = 128)
+///
+/// Threshold = 0.5 is conservative — it fires only after the active set
+/// is genuinely saturated, leaves all small-active-set λs (the regime
+/// where screening actually pays off) untouched. See ROADMAP M13.1.
+const SCREENING_SATURATION_THRESHOLD: f64 = 0.5;
+
 #[derive(Debug, Clone)]
 pub struct PathConfig {
     /// Number of λ values to sweep when `lambdas` is `None`.
@@ -185,7 +203,23 @@ where
         //   anything missed.
         // - GapSafe: gap-safe sphere screen; works at every λ, including
         //   the first (uses the cold-start residual = -y).
-        let mut ws: Vec<usize> = match config.screening {
+        //
+        // M13.1 — adaptive saturation bypass: once the warm β has more
+        // than SCREENING_SATURATION_THRESHOLD × p nonzero entries, the
+        // strong / gap-safe rules pay screening setup *and* extra KKT
+        // re-iterations to add back features they wrongly pruned. In
+        // that regime we degrade to a full-feature sweep, which the
+        // measurement in the threshold's docstring shows is faster.
+        let active_count = warm.iter().filter(|&&b| b != 0.0).count();
+        let saturated = !matches!(config.screening, Screening::Off)
+            && (active_count as f64) > SCREENING_SATURATION_THRESHOLD * (p as f64);
+        let effective_screening = if saturated {
+            Screening::Off
+        } else {
+            config.screening
+        };
+
+        let mut ws: Vec<usize> = match effective_screening {
             Screening::Off => (0..p).collect(),
             Screening::Strong => {
                 // Use the previous λ's residual when available; cold-start
@@ -291,9 +325,10 @@ where
                 cd_solve_subset(warm, &ws, design, datafit, &*pen, &inner_cd_cfg);
             warm = new_beta;
 
-            // Without screening, the WS is the full set; one pass and
-            // we trust the inner CD's convergence.
-            if matches!(config.screening, Screening::Off) {
+            // Without screening (either by config or via the M13.1
+            // saturation bypass above), the WS is the full set; one
+            // pass and we trust the inner CD's convergence.
+            if matches!(effective_screening, Screening::Off) {
                 break (r, report);
             }
 
@@ -1454,6 +1489,92 @@ mod tests {
                 assert_abs_diff_eq!(b_off[[k, j]], b_on[[k, j]], epsilon = 1e-6);
             }
         }
+    }
+
+    // ---- M13.1: adaptive screening saturation bypass ------------------
+
+    #[test]
+    fn saturation_bypass_disables_screening_at_high_active_density() {
+        // Construct a problem where the warm-started β at λ_k has
+        // >50% of features nonzero, so the M13.1 saturation check should
+        // trip and the next λ's working set should be the full p
+        // (matching screening=Off) rather than the priority-pruned set.
+        //
+        // Setup: n=200, p=8 (low p so few λs saturate the support fast),
+        // sparse-truth β with the very first λ already pushing past 50%.
+        let n = 200;
+        let p = 8;
+        let mut state: u64 = 4242;
+        let mut sample = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state as f64) / (u64::MAX as f64) * 2.0 - 1.0
+        };
+
+        let mut x_flat = Vec::with_capacity(n * p);
+        for _ in 0..(n * p) {
+            x_flat.push(sample());
+        }
+        let mut beta_true = ndarray::Array1::<f64>::zeros(p);
+        // Dense truth so the saturation regime kicks in quickly.
+        for j in 0..p {
+            beta_true[j] = 0.5 + 0.5 * sample();
+        }
+        let x = ndarray::Array2::from_shape_vec((n, p), x_flat).unwrap();
+        let y_signal = x.dot(&beta_true);
+        let mut y = y_signal.clone();
+        for v in y.iter_mut() {
+            *v += 0.01 * sample();
+        }
+        let design = DenseMatrix::new(x);
+        let datafit = LeastSquares::new(y);
+
+        let mk_cfg = |s: Screening| PathConfig {
+            n_lambdas: 30,
+            lambda_min_ratio: 1e-3,
+            lambdas: None,
+            cd: CdConfig {
+                max_iter: 5000,
+                tol: 1e-10,
+                acceleration: Some(5),
+            },
+            screening: s,
+            p0: 4,
+        };
+
+        let (b_off, rep_off) = solve_path(
+            &design,
+            &datafit,
+            |lam| Box::new(Mcp::new(lam, 1e6, p)),
+            &mk_cfg(Screening::Off),
+        );
+        let (b_strong, rep_strong) = solve_path(
+            &design,
+            &datafit,
+            |lam| Box::new(Mcp::new(lam, 1e6, p)),
+            &mk_cfg(Screening::Strong),
+        );
+
+        // Correctness: same coefs at every λ.
+        for k in 0..b_off.nrows() {
+            for j in 0..p {
+                assert_abs_diff_eq!(b_off[[k, j]], b_strong[[k, j]], epsilon = 1e-5);
+            }
+        }
+
+        // Behavioural assertion: once the active set crosses 50% of p
+        // (here, ≥5 of 8 features), the saturation bypass should kick
+        // in and the strong-rule WS at the *next* λ should match the
+        // off WS (== p). For at least some λ in the tail of the path
+        // the strong WS must equal p, proving the bypass fired.
+        let strong_ws_at_p = rep_strong.working_set_sizes.contains(&p);
+        assert!(
+            strong_ws_at_p,
+            "saturation bypass did not fire on a dense-truth problem: \
+             strong WS sizes = {:?}, off WS sizes = {:?}",
+            rep_strong.working_set_sizes, rep_off.working_set_sizes,
+        );
     }
 
     // ---- screening: actually drops features on a sparse-truth problem ---

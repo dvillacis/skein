@@ -40,6 +40,20 @@ docs = [
     "sphinx-copybutton>=0.5",
     "sphinx-design>=0.6",
 ]
+bench = [
+    # publication-quality benchmark suite — see benches/v2/README.md
+    "snakemake>=8",
+    "pyarrow>=15",       # feather IPC transport for R comparators
+    "pyyaml>=6",
+    "pandas>=2.1",
+    "matplotlib>=3.8",
+    "seaborn>=0.13",
+    # comparator packages
+    "skglm>=0.3",
+    "celer>=0.7",
+    "statsmodels>=0.14",
+    "lifelines>=0.27",
+]
 
 [project.urls]
 Repository = "https://github.com/dvillacis/skein"

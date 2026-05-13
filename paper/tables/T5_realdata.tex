@@ -1,0 +1,15 @@
+\begin{table}[t]
+  \centering
+  \caption{CV deviance (mean $\pm$ s.d. across folds) at $\lambda_{\min}$, selected support size, and CV wall-clock.}
+  \label{tab:realdata}
+\begin{tabular}{llrrlrrrrl}
+\toprule
+Dataset & Estimator & n & p & Family & CV dev (mean) & CV dev (std) & |Ŝ| at λ_min & CV time (s) & Source \\
+\midrule
+bardet & group_lasso & 189 & 16 & gaussian & 16.699600 & 4.836100 & 16 & 7.740000 & real \\
+bardet & group_mcp & 189 & 16 & gaussian & 16.752900 & 4.864900 & 16 & 2.550000 & real \\
+pbc & lasso & 276 & 17 & cox & 159.452700 & 31.512000 & 8 & 13.660000 & real \\
+pbc & mcp & 276 & 17 & cox & 163.873300 & 34.666200 & 9 & 17.650000 & real \\
+\bottomrule
+\end{tabular}
+\end{table}

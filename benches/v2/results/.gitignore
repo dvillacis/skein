@@ -1,0 +1,8 @@
+# Snakemake-generated cell rows are large and host-specific.
+# Commit only the per-scenario aggregates (one tier up).
+cells/
+*.env.json
+realdata/
+stability/
+cv_parallel/
+criterion.jsonl

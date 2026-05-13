@@ -5,9 +5,10 @@ Weighted structured nonconvex sparse models. Rust core + Python API.
 > **Documentation:** the [docs site](docs/index.md) has the full
 > conceptual reference (penalties, datafits, weights, backends),
 > porting guides for `glmnet` / `ncvreg` / `grpreg`, worked examples,
-> and an auto-generated API reference. Hosted on Read the Docs once
-> the project is connected (config in `.readthedocs.yaml`); preview
-> locally with `mkdocs serve`. CI builds it `--strict` on every PR.
+> and an auto-generated API reference. Built with Sphinx + Furo and
+> hosted on Read the Docs (config in `.readthedocs.yaml`); preview
+> locally with `sphinx-build -b html docs docs/_build/html`. CI builds
+> it with `-W` (warnings = errors) on every PR.
 
 `skein` targets a niche that's well-served in R (`grpreg`, `ncvreg`) but
 missing in Python at production quality: nonconvex group-structured
@@ -17,65 +18,88 @@ per-group.
 
 ## Status
 
-v0.1 development. Core algorithms and the headline GLM family are in
-place; design-matrix backends (sparse, mmap, chunked) are next. See
-[ROADMAP.md](ROADMAP.md) for the full plan.
+v0.7. Full nonconvex / group / GLM stack is in place; M5 model
+selection + inference + threaded CV folds shipped; M11 graphical lasso
+family (single + joint) shipped; M12 hardening pass closed the
+penalty / datafit unit-test gaps and added a CI smoke job for the
+PyO3 layer. See [ROADMAP.md](ROADMAP.md) for the full plan and the M13
+performance findings opened by the `benches/v2` release-profile run.
 
 **Done so far:**
 
 - **Solvers** — production CD core (path solver, strong rule + KKT
-  verification, gap-safe screening, Anderson acceleration); group block-CD
-  with LLA outer loop for nonconvex group penalties; Rayon-parallel
-  group sweeps; operator-norm Lipschitz via power iteration.
-- **Datafits** — least squares, binomial logistic, Poisson (log link),
-  Cox PH (Breslow ties). All glued together by a `GlmDatafit` trait that
-  exposes a weighted-LS surrogate; the M1/M2 inner solvers absorb every
-  GLM unchanged.
-- **Penalties** — MCP, SCAD, group lasso, group MCP, sparse-group lasso,
-  sparse-group MCP. Per-feature and per-group weights honored
-  throughout.
+  verification, gap-safe screening, Anderson acceleration, M13.1
+  saturation bypass); group block-CD with LLA outer loop for nonconvex
+  group penalties (M13.4 Phase 2.3 weight-space short-circuit);
+  Rayon-parallel group sweeps; operator-norm Lipschitz via power
+  iteration.
+- **Datafits** — least squares, binomial logistic, Poisson (log link,
+  with offsets), Cox PH (Breslow + Efron ties), multinomial softmax,
+  Huber. All glued together by a `GlmDatafit` trait that exposes a
+  weighted-LS surrogate; the M1/M2 inner solvers absorb every GLM
+  unchanged.
+- **Penalties** — lasso, MCP, SCAD, elastic net, bridge `|β|^q`, group
+  lasso, group MCP, group SCAD, group elastic net, sparse-group lasso,
+  sparse-group MCP, sparse-group SCAD. Per-feature and per-group
+  weights honored throughout.
+- **Design-matrix backends** — `DenseMatrix`, `SparseCSC`, lazy
+  `Standardized<D>`, `MmapMatrix` (f64 + f32), row-block `Chunked<C>`,
+  `Augmented<D>`, `MultiTaskDesign<D>` — all behind one trait, freely
+  composable.
 - **Python** — sklearn-compatible estimators for every (datafit ×
-  penalty) combination; type stubs; warm-started λ-paths; standardization
-  with original-scale `coef_` / `intercept_` recovery (dense backend).
-- **Graphical models** — sparse precision matrix estimation
+  penalty) combination (~150 classes); type stubs; warm-started
+  λ-paths; standardization with original-scale `coef_` / `intercept_`
+  recovery on dense and sparse.
+- **Model selection + inference (M5)** — K-fold CV across every
+  `*PathCV` class (threaded folds via PyO3 GIL release, ~2.3–2.5×
+  speedup); AIC/BIC/EBIC tuning; stability selection (MB bootstrap);
+  debiased / desparsified lasso for LS + binomial + Poisson with Wald
+  CIs and p-values.
+- **Graphical models (M11)** — sparse precision matrix estimation
   (`GraphicalLasso` / `GraphicalMCP` / `GraphicalSCAD`) and joint
   estimation across `K` related populations (`JointGraphicalLasso` /
   `JointGraphicalMCP`, Danaher–Wang–Witten 2014 group form via ADMM),
-  with EBIC tuning. Nonconvex penalties on edges close the
-  shrinkage-bias gap that `sklearn.covariance.GraphicalLasso` and R's
-  `glasso` / `qgraph` / `bootnet` leave open.
+  with EBIC tuning and bootnet-style bootstrap edge stability.
+  Nonconvex penalties on edges close the shrinkage-bias gap that
+  `sklearn.covariance.GraphicalLasso` and R's `glasso` / `qgraph` /
+  `bootnet` leave open.
+- **Distribution + docs (M8) + hardening (M12)** — CI + cibuildwheel +
+  Read the Docs + Sphinx site (concepts + R-porting + extending +
+  examples + API ref) + R numerical regression suite vs glmnet /
+  ncvreg / grpreg + stable Rust API contract. M12 added penalty +
+  datafit unit-test coverage, an integration test directory, a CI
+  smoke job for the PyO3 layer, and an R-fixture gate.
 
-**M8 (Distribution & DX) is done:** CI + cibuildwheel + Read the Docs +
-25-page mkdocs site (concepts + R-porting + extending + examples + API
-ref) + R numerical regression suite vs glmnet/ncvreg/grpreg + stable
-Rust API contract. The library is `pip install`-able once published,
-documented end-to-end, and pinned against R reference fits so we don't
-silently drift.
-
-**Coming next:** algorithmic features — M5.x adaptive weights and
-stability selection are the next high-value milestones; both leverage
-the existing per-feature/per-group weight axes that are already wired
-through every solver.
+**Coming next:** the M13 performance workstream — `group_mcp` LLA
+overhead at medium scale (Phase 2.3 shipped, native group-MCP BCD
+scoped as M13.4b), per-λ fixed-cost cut for convex Lasso (M13.2), and
+the publication benchmark suite at `benches/v2/` that backs the
+software paper.
 
 ## Layout
 
 ```
 crates/skein-core/   pure Rust: traits + algorithms (no Python)
 crates/skein-py/     PyO3 bindings (cdylib → skein_glm._core)
-python/skein/        sklearn-compatible estimators + ABCs for extensions
-tests/               pytest smoke tests
-benches/             criterion (Rust) + asv (Python)
+python/skein_glm/    sklearn-compatible estimators + ABCs for extensions
+tests/               pytest suite (Rust extension required)
+benches/             v1 cross-package harness (skein vs sklearn / skglm / celer / glmnet / ncvreg / grpreg)
+benches/v2/          publication-quality Snakemake suite backing the paper
+crates/skein-core/benches/   internal Rust criterion microbenches
+paper/               figure + table bundle regenerated by benches/v2
+docs/                Sphinx site (Read the Docs)
 ```
 
 The Rust traits (`DesignMatrix`, `Datafit`, `GlmDatafit`, `Penalty`,
-`GroupPenalty`) and their Python ABC mirrors (`skein.penalties.Penalty`,
-etc.) are the extension surface for downstream per-paper projects.
+`GroupPenalty`) and their Python ABC mirrors
+(`skein_glm.penalties.Penalty`, etc.) are the extension surface for
+downstream per-paper projects.
 
 ## Quick start
 
 ```python
 import numpy as np
-from skein import MCPPathRegressor, LogisticGroupMCPPathRegressor, CoxMCPRegressor
+from skein_glm import MCPPathRegressor, LogisticGroupMCPPathRegressor, CoxMCPRegressor
 
 # Nonconvex sparse least squares with a λ-path.
 rng = np.random.default_rng(0)
@@ -108,15 +132,24 @@ skein is benchmarked against sklearn / skglm / celer / glmnet / ncvreg
 on shared λ-grids via the harness under `benches/`. Headline numbers
 (Apple M1, 16 GB; median of N timed trials after a warm-up):
 
+Each scenario is run in two regimes that name what the *solution* does
+at the tail of the λ-path, not the path geometry:
+
+- **dense** — `λ_min/λ_max = 1e-3`; the active set saturates near the
+  smallest λ (typical "I want the full path including the over-fit
+  tail" usage).
+- **sparse** — `λ_min/λ_max = 5e-2`; the path stops near support
+  recovery, support stays small throughout.
+
 | scenario | size | skein | next-fastest comparator |
 |---|---|---|---|
-| Lasso LS — deep   | medium (n=10k, p=1k)  | 1.17 s     | sklearn 0.125 s |
+| Lasso LS — dense  | medium (n=10k, p=1k)  | 1.17 s     | sklearn 0.125 s |
 | Lasso LS — sparse | medium                | 0.78 s     | sklearn 0.099 s |
-| MCP   LS — deep   | medium                | **1.37 s** | skglm 3.35 s    |
+| MCP   LS — dense  | medium                | **1.37 s** | skglm 3.35 s    |
 | MCP   LS — sparse | medium                | **0.75 s** | ncvreg 1.17 s   |
-| MCP   LS — deep   | large (n=100k, p=10k) | **510 s**  | skglm 666 s     |
+| MCP   LS — dense  | large (n=100k, p=10k) | **510 s**  | skglm 666 s     |
 | MCP   LS — sparse | large                 | **497 s**  | skglm 702 s     |
-| SCAD  LS — deep   | medium                | **1.78 s** | ncvreg 7.99 s   |
+| SCAD  LS — dense  | medium                | **1.78 s** | ncvreg 7.99 s   |
 | SCAD  LS — sparse | medium                | **0.90 s** | ncvreg 1.86 s   |
 
 skein is the fastest on every nonconvex row across every size; on
@@ -130,18 +163,26 @@ per-size tables) and
 the lasso/LS profiling work that drove M10.
 
 Reproduce with `python benches/run.py --scenarios mcp_ls
-mcp_ls_sparse --sizes small,medium`.
+mcp_ls_sparse --sizes small,medium`. The publication-quality
+benchmark suite under [`benches/v2/`](benches/v2/README.md) drives the
+paper figures and tables; see
+[`docs/benchmarks/index.md`](docs/benchmarks/index.md) for the layered
+overview.
 
 ## Build
 
 ```bash
 # Rust core only (fast iteration on algorithms)
-cargo test -p skein-core
+cargo test -p skein-core --lib
 
 # Full Python package (requires maturin in your env)
 maturin develop --release
 pytest
 ```
+
+See [`docs/installation.md`](docs/installation.md) for from-source and
+development installs, and [`CLAUDE.md`](CLAUDE.md) for the contributor
+quickstart (pre-PR checks, solver-change pre-flight protocol, etc.).
 
 ## License
 

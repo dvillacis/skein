@@ -1,0 +1,204 @@
+# Declarative benchmark matrix. Snakemake reads this and expands cells.
+#
+# A "cell" is a tuple (scenario, size, seed, package). One cell → one
+# JSONL row in results/cells/. Aggregates collapse seeds and packages.
+
+sizes:
+  small:   { n: 1000,   p: 200,   sparsity: 0.0 }
+  medium:  { n: 10000,  p: 1000,  sparsity: 0.0 }
+  large:   { n: 50000,  p: 5000,  sparsity: 0.0 }
+  xlarge:  { n: 100000, p: 10000, sparsity: 0.0 }    # opt-in only
+
+regimes:
+  # Internal regime keys are kept short. The path extent is named by
+  # what the *solution* does at the tail:
+  #   - "deep"   = λ-grid extends to 1e-3 · λ_max; solutions are
+  #                **dense** at the smallest λs (active set saturates).
+  #                Surfaced in user-facing prose as "dense regime".
+  #   - "sparse" = λ-grid stops at 5e-2 · λ_max; path stops near
+  #                support recovery, solutions stay sparse throughout.
+  # Existing cell filenames carry the internal "__deep__" / "__sparse__"
+  # token; renaming the key would invalidate committed snapshots.
+  deep:      { lambda_min_ratio: 1.0e-3, n_lambdas: 100 }
+  sparse:    { lambda_min_ratio: 5.0e-2, n_lambdas: 50  }
+  screening: { lambda_min_ratio: 1.0e-4, n_lambdas: 200 }
+
+defaults:
+  tol: 1.0e-7
+  trials: 5
+  warmup: 1
+
+# --------------------------------------------------------------------
+# Headline matrix — runs on every release. Drives main-paper figures
+# F2, F3, F4, F5, F7 and tables T2, T3, T4.
+# --------------------------------------------------------------------
+headline:
+  # (Least-squares family) ------------------------------------------
+  - id: ls_lasso
+    datafit: gaussian
+    penalty: lasso
+    sizes: [small, medium, large]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein, sklearn, celer, skglm]
+    r_packages: [glmnet]
+
+  - id: ls_mcp
+    datafit: gaussian
+    penalty: mcp
+    sizes: [small, medium, large]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein, skglm]
+    r_packages: [ncvreg]
+
+  - id: ls_scad
+    datafit: gaussian
+    penalty: scad
+    sizes: [small, medium, large]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: [ncvreg]
+
+  - id: ls_elasticnet
+    datafit: gaussian
+    penalty: elastic_net
+    sizes: [small, medium, large]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein, sklearn]
+    r_packages: [glmnet]
+
+  # (Group / sparse-group LS) ---------------------------------------
+  - id: ls_group_lasso
+    datafit: gaussian
+    penalty: group_lasso
+    sizes: [small, medium]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: [grpreg]
+
+  - id: ls_group_mcp
+    datafit: gaussian
+    penalty: group_mcp
+    sizes: [small, medium]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: [grpreg]
+
+  - id: ls_sparse_group_mcp
+    datafit: gaussian
+    penalty: sparse_group_mcp
+    sizes: [small, medium]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: []    # no direct comparator
+
+  # (Logistic) ------------------------------------------------------
+  - id: logistic_lasso
+    datafit: logistic
+    penalty: lasso
+    sizes: [small, medium]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: [glmnet]
+
+  - id: logistic_mcp
+    datafit: logistic
+    penalty: mcp
+    sizes: [small, medium]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: [ncvreg]
+
+  # (Poisson) -------------------------------------------------------
+  - id: poisson_lasso
+    datafit: poisson
+    penalty: lasso
+    sizes: [small, medium]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: [glmnet]
+
+  - id: poisson_mcp
+    datafit: poisson
+    penalty: mcp
+    sizes: [small, medium]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: []   # no nonconvex Poisson elsewhere
+
+  # (Cox) -----------------------------------------------------------
+  - id: cox_lasso
+    datafit: cox
+    penalty: lasso
+    sizes: [small, medium]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: [glmnet]
+
+  - id: cox_mcp
+    datafit: cox
+    penalty: mcp
+    sizes: [small, medium]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: []
+
+  # (Graphical) -----------------------------------------------------
+  - id: glasso_l1
+    datafit: gaussian_inv_cov
+    penalty: lasso
+    sizes: [small]
+    regimes: [deep]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein, sklearn]
+    r_packages: [glasso]
+
+  - id: glasso_mcp
+    datafit: gaussian_inv_cov
+    penalty: mcp
+    sizes: [small]
+    regimes: [deep]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: []
+
+# --------------------------------------------------------------------
+# Appendix matrix — one cell per estimator. Populates the coverage
+# table (T1) and exercises every public class once.
+# --------------------------------------------------------------------
+appendix:
+  # Filled by generators in scenarios/appendix.py; this list will be
+  # auto-expanded in Phase D from estimator introspection.
+
+# --------------------------------------------------------------------
+# Real-dataset case studies.
+# --------------------------------------------------------------------
+real_datasets:
+  - id: riboflavin
+    family: gaussian
+    estimators: [lasso, mcp, scad, adaptive_lasso]
+    cv_folds: 10
+  - id: leukemia
+    family: logistic
+    estimators: [lasso, mcp, elastic_net]
+    cv_folds: 10
+  - id: tcga_brca
+    family: cox
+    estimators: [lasso, mcp, group_lasso]
+    cv_folds: 5
+  - id: bardet
+    family: gaussian
+    estimators: [group_lasso, group_mcp]
+    cv_folds: 10

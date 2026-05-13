@@ -1,0 +1,357 @@
+"""Snakemake DAG: config → cells → aggregates → figures/tables → paper bundle.
+
+Profiles in profiles/ select which fraction of the matrix runs.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+import yaml
+
+ROOT = Path(workflow.basedir)
+CONFIG = yaml.safe_load((ROOT / "config.yaml").read_text())
+RESULTS = ROOT / "results"
+PAPER = ROOT.parent.parent / "paper"
+# Project root holds the `benches` package; needs to be on PYTHONPATH
+# inside the snakemake-spawned shells.
+proj_root = str(ROOT.parent.parent)
+
+
+# --------------------------------------------------------------------
+# Cell expansion
+# --------------------------------------------------------------------
+
+def headline_cells():
+    """Return list of (scenario_id, size, regime, seed, package, kind) tuples.
+
+    kind ∈ {"python", "r"}. Each tuple → one JSONL row.
+    """
+    out = []
+    for s in CONFIG["headline"]:
+        for size in s["sizes"]:
+            for regime in s["regimes"]:
+                for seed in s["seeds"]:
+                    for pkg in s["packages"]:
+                        out.append((s["id"], size, regime, seed, pkg, "python"))
+                    for pkg in s.get("r_packages", []):
+                        out.append((s["id"], size, regime, seed, pkg, "r"))
+    return out
+
+
+HEADLINE_CELLS = headline_cells()
+HEADLINE_SCENARIOS = sorted({c[0] for c in HEADLINE_CELLS})
+
+
+def cell_path(scenario, size, regime, seed, package):
+    return RESULTS / "cells" / f"{scenario}__{size}__{regime}__seed{seed}__{package}.jsonl"
+
+
+def aggregate_path(scenario):
+    return RESULTS / "scenarios" / f"{scenario}.aggregate.json"
+
+
+# --------------------------------------------------------------------
+# Top-level targets
+# --------------------------------------------------------------------
+
+rule all:
+    """Default: build the paper bundle for the full headline matrix.
+
+    Includes all figures (F1..F10) and tables (T1..T6) that the v2
+    suite knows how to produce. Some figures (F4/F5/F6/F7/F8/F9/F10)
+    depend on driver scripts run outside the DAG — Snakemake will
+    surface a "missing input" error if those haven't been run yet.
+    """
+    input:
+        PAPER / "figures" / "F1_coverage_matrix.pdf",
+        PAPER / "figures" / "F2_headline_timing.pdf",
+        PAPER / "figures" / "F3_scaling_curves.pdf",
+        PAPER / "figures" / "F4_agreement.pdf",
+        PAPER / "figures" / "F5_recovery_curves.pdf",
+        PAPER / "figures" / "F6_realdata_boxplots.pdf",
+        PAPER / "figures" / "F7_ic_selection_accuracy.pdf",
+        PAPER / "figures" / "F8_stability_fdr_power.pdf",
+        PAPER / "figures" / "F9_screening_parallel.pdf",
+        PAPER / "figures" / "F10_cv_parallel_speedup.pdf",
+        PAPER / "tables"  / "T1_estimator_surface.tex",
+        PAPER / "tables"  / "T2_headline_timings.tex",
+        PAPER / "tables"  / "T4_recovery.tex",
+        PAPER / "tables"  / "T5_realdata.tex",
+        PAPER / "tables"  / "T6_environment.tex",
+
+
+rule smoke:
+    """CI smoke target — just two cells, no figures."""
+    input:
+        cell_path("ls_lasso", "small", "deep", 0, "skein"),
+        cell_path("ls_mcp",   "small", "deep", 0, "skein"),
+
+
+# LS-only headline target: tractable in dev-profile maturin builds.
+# Excludes Logistic/Poisson/Cox/Graphical (which need --release for
+# reasonable wall-clock). Useful for end-to-end pipeline shakedowns and
+# CI canary runs without paying for the GLM slowdown.
+LS_HEADLINE_SCENARIOS = [
+    "ls_lasso", "ls_mcp", "ls_scad", "ls_elasticnet",
+    "ls_group_lasso", "ls_group_mcp",
+]
+LS_HEADLINE_AGGS = [str(aggregate_path(s)) for s in LS_HEADLINE_SCENARIOS
+                    if s in HEADLINE_SCENARIOS]
+
+
+rule ls_headline:
+    """Build paper artifacts from just the LS family — runs in ~minutes
+    on M1 even in dev profile."""
+    input:
+        PAPER / "figures" / "F1_coverage_matrix.pdf",
+        PAPER / "figures" / "F2_headline_timing.pdf",
+        PAPER / "figures" / "F3_scaling_curves.pdf",
+        PAPER / "figures" / "F4_agreement.pdf",
+        PAPER / "figures" / "F5_recovery_curves.pdf",
+        PAPER / "figures" / "F6_realdata_boxplots.pdf",
+        PAPER / "figures" / "F7_ic_selection_accuracy.pdf",
+        PAPER / "tables"  / "T1_estimator_surface.tex",
+        PAPER / "tables"  / "T2_headline_timings.tex",
+        PAPER / "tables"  / "T4_recovery.tex",
+        PAPER / "tables"  / "T5_realdata.tex",
+
+
+# --------------------------------------------------------------------
+# Cell rule
+# --------------------------------------------------------------------
+
+rule run_cell:
+    """Run one (scenario, size, regime, seed, package) cell.
+
+    Calls report/_run_cell.py which captures environment, runs trials,
+    computes metrics, and writes the JSONL row + env.json.
+    """
+    output:
+        jsonl = RESULTS / "cells" / "{scenario}__{size}__{regime}__seed{seed}__{package}.jsonl",
+        env   = RESULTS / "cells" / "{scenario}__{size}__{regime}__seed{seed}__{package}.env.json",
+    params:
+        config = str(ROOT / "config.yaml"),
+    threads: 1
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report._run_cell "
+        "--scenario {wildcards.scenario} --size {wildcards.size} "
+        "--regime {wildcards.regime} --seed {wildcards.seed} "
+        "--package {wildcards.package} --config {params.config} "
+        "--out {output.jsonl} --env-out {output.env}"
+
+
+# --------------------------------------------------------------------
+# Aggregate rule (per scenario)
+# --------------------------------------------------------------------
+
+def cells_for_scenario(scenario):
+    return [
+        str(cell_path(sc, size, regime, seed, pkg))
+        for (sc, size, regime, seed, pkg, _) in HEADLINE_CELLS
+        if sc == scenario
+    ]
+
+
+rule aggregate:
+    input:
+        lambda wc: cells_for_scenario(wc.scenario),
+    output:
+        RESULTS / "scenarios" / "{scenario}.aggregate.json",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.aggregate "
+        "--scenario {wildcards.scenario} --inputs {input} --out {output}"
+
+
+# --------------------------------------------------------------------
+# Figures
+# --------------------------------------------------------------------
+
+rule figure_coverage_matrix:
+    output:
+        PAPER / "figures" / "F1_coverage_matrix.pdf",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.coverage_matrix --out {output}"
+
+
+rule figure_headline_timing:
+    input:
+        expand(str(RESULTS / "scenarios" / "{sc}.aggregate.json"),
+               sc=HEADLINE_SCENARIOS),
+    output:
+        PAPER / "figures" / "F2_headline_timing.pdf",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.figures headline_timing "
+        "--inputs {input} --out {output}"
+
+
+rule figure_scaling_curves:
+    input:
+        expand(str(RESULTS / "scenarios" / "{sc}.aggregate.json"),
+               sc=HEADLINE_SCENARIOS),
+    output:
+        PAPER / "figures" / "F3_scaling_curves.pdf",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.figures scaling_curves "
+        "--inputs {input} --out {output}"
+
+
+rule figure_agreement:
+    input:
+        expand(str(RESULTS / "scenarios" / "{sc}.aggregate.json"),
+               sc=HEADLINE_SCENARIOS),
+    output:
+        PAPER / "figures" / "F4_agreement.pdf",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.figures agreement "
+        "--inputs {input} --out {output}"
+
+
+rule figure_recovery_curves:
+    input:
+        expand(str(RESULTS / "scenarios" / "{sc}.aggregate.json"),
+               sc=HEADLINE_SCENARIOS),
+    output:
+        PAPER / "figures" / "F5_recovery_curves.pdf",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.figures recovery_curves "
+        "--inputs {input} --out {output}"
+
+
+rule figure_ic_selection:
+    input:
+        expand(str(RESULTS / "scenarios" / "{sc}.aggregate.json"),
+               sc=HEADLINE_SCENARIOS),
+    output:
+        PAPER / "figures" / "F7_ic_selection_accuracy.pdf",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.figures ic_selection "
+        "--inputs {input} --out {output}"
+
+
+# Real-dataset case studies — produced by the standalone run_realdata
+# driver (not orchestrated by snakemake since the cell shape is
+# different and there's only ~10 cells total).
+
+REALDATA_RESULTS = sorted(
+    str(p) for p in (RESULTS / "realdata").glob("*.jsonl")
+) if (RESULTS / "realdata").exists() else []
+
+
+rule figure_realdata:
+    input:
+        REALDATA_RESULTS,
+    output:
+        PAPER / "figures" / "F6_realdata_boxplots.pdf",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.figures realdata_boxplots "
+        "--inputs {input} --out {output}"
+
+
+rule table_realdata:
+    input:
+        REALDATA_RESULTS,
+    output:
+        PAPER / "tables" / "T5_realdata.tex",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.tables realdata "
+        "--inputs {input} --out {output}"
+
+
+# Stability / ablation figures produced by ad-hoc drivers.
+
+rule figure_stability:
+    input:
+        RESULTS / "stability" / "stability.jsonl",
+    output:
+        PAPER / "figures" / "F8_stability_fdr_power.pdf",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.figures stability_fdr_power "
+        "--inputs {input} --out {output}"
+
+
+rule figure_screening_parallel:
+    input:
+        RESULTS / "criterion.jsonl",
+    output:
+        PAPER / "figures" / "F9_screening_parallel.pdf",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.figures screening_parallel "
+        "--inputs {input} --out {output}"
+
+
+rule figure_cv_parallel:
+    input:
+        RESULTS / "cv_parallel" / "cv_parallel.jsonl",
+    output:
+        PAPER / "figures" / "F10_cv_parallel_speedup.pdf",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.figures cv_parallel_speedup "
+        "--inputs {input} --out {output}"
+
+
+rule paper_bundle:
+    """Materialize paper/manifest.json + paper/BUNDLE.md from whatever
+    figures/tables exist. Does NOT run drivers — pair with `all` to
+    fully populate first."""
+    input:
+        # All artifacts expected by the bundle script. If any are
+        # missing the script reports them (and exits 1 if --strict).
+        PAPER / "figures" / "F1_coverage_matrix.pdf",
+        PAPER / "tables"  / "T1_estimator_surface.tex",
+    output:
+        PAPER / "manifest.json",
+        PAPER / "BUNDLE.md",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.paper_bundle "
+        "--paper-dir {PAPER}"
+
+
+# --------------------------------------------------------------------
+# Tables
+# --------------------------------------------------------------------
+
+rule table_estimator_surface:
+    output:
+        PAPER / "tables" / "T1_estimator_surface.tex",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.tables estimator_surface --out {output}"
+
+
+rule table_headline_timings:
+    input:
+        expand(str(RESULTS / "scenarios" / "{sc}.aggregate.json"),
+               sc=HEADLINE_SCENARIOS),
+    output:
+        PAPER / "tables" / "T2_headline_timings.tex",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.tables headline_timings "
+        "--inputs {input} --out {output}"
+
+
+rule table_recovery:
+    input:
+        expand(str(RESULTS / "scenarios" / "{sc}.aggregate.json"),
+               sc=HEADLINE_SCENARIOS),
+    output:
+        PAPER / "tables" / "T4_recovery.tex",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.tables recovery "
+        "--inputs {input} --out {output}"
+
+
+rule table_environment:
+    """Auto-rendered from the env.json files produced alongside cells."""
+    input:
+        expand(str(RESULTS / "cells" /
+                   "{scenario}__{size}__{regime}__seed{seed}__{package}.env.json"),
+               zip,
+               scenario=[c[0] for c in HEADLINE_CELLS],
+               size=    [c[1] for c in HEADLINE_CELLS],
+               regime=  [c[2] for c in HEADLINE_CELLS],
+               seed=    [c[3] for c in HEADLINE_CELLS],
+               package= [c[4] for c in HEADLINE_CELLS]),
+    output:
+        PAPER / "tables" / "T6_environment.tex",
+    shell:
+        "PYTHONPATH={proj_root} {sys.executable} -m benches.v2.report.tables environment "
+        "--inputs {input} --out {output}"

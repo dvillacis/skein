@@ -1,0 +1,8 @@
+# Snakemake profile: appendix matrix — every public estimator at one
+# cell (small size, seed 0). Populates T1 coverage table.
+cores: 1
+jobs: 1
+keep-going: True
+printshellcmds: True
+default-resources:
+  - mem_mb=4000

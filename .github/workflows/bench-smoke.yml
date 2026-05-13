@@ -1,0 +1,100 @@
+name: Bench smoke
+
+# Lightweight regression canary for benches/v2. Runs two small LS cells
+# (one Lasso, one MCP) under skein only, in dev profile, and verifies
+# that the cell driver emits a JSONL row + a coef sidecar. Not a
+# correctness check — that's what `cargo test` / `pytest` are for. The
+# goal is catching pipeline breakage (renamed runner, broken
+# Snakemake rule, missing module export) on every PR.
+#
+# The full headline matrix is *not* run in CI — it needs a release
+# build + multi-hour wall-clock, which is the maintainer's job, not
+# every-PR's.
+
+on:
+  pull_request:
+    paths:
+      - 'benches/v2/**'
+      - 'benches/runners/**'
+      - 'benches/problems.py'
+      - 'crates/skein-core/**'
+      - 'crates/skein-py/**'
+      - 'python/skein_glm/**'
+      - 'pyproject.toml'
+  push:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: bench smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install skein + bench extras (dev profile)
+        env:
+          # Force dev-profile maturin — release would dominate the wall-clock.
+          MATURIN_PEP517_ARGS: "--profile dev"
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e '.[bench]' -v
+          python -c "import skein_glm; print(skein_glm.__version__)"
+
+      - name: Run smoke cells
+        run: |
+          python -m benches.v2.report._run_cell \
+            --scenario ls_lasso --size small --regime sparse --seed 0 \
+            --package skein --config benches/v2/config.yaml \
+            --out /tmp/smoke_lasso.jsonl \
+            --env-out /tmp/smoke_lasso.env.json
+          python -m benches.v2.report._run_cell \
+            --scenario ls_mcp --size small --regime sparse --seed 0 \
+            --package skein --config benches/v2/config.yaml \
+            --out /tmp/smoke_mcp.jsonl \
+            --env-out /tmp/smoke_mcp.env.json
+
+      - name: Assert smoke cells produced valid output
+        run: |
+          python <<'PYEOF'
+          import json, sys
+          from pathlib import Path
+          for tag in ("lasso", "mcp"):
+              row_path = Path(f"/tmp/smoke_{tag}.jsonl")
+              env_path = Path(f"/tmp/smoke_{tag}.env.json")
+              coefs    = Path(f"/tmp/smoke_{tag}.coefs.npy")
+              assert row_path.exists(), f"missing JSONL: {row_path}"
+              assert env_path.exists(), f"missing env.json: {env_path}"
+              row = json.loads(row_path.read_text())
+              assert row["status"] == "ok", f"smoke {tag}: status={row['status']!r} ({row.get('reason')})"
+              assert row["fit_time_s"] > 0, f"smoke {tag}: fit_time_s = 0"
+              assert row["active_set_size"] > 0, f"smoke {tag}: empty support"
+              assert row.get("recovery") is not None, f"smoke {tag}: missing recovery"
+              env = json.loads(env_path.read_text())
+              assert env.get("host_id"), f"smoke {tag}: env capture missing host_id"
+              # coef sidecar is opportunistic — only verify it's there.
+              if not coefs.exists():
+                  print(f"WARN: smoke {tag}: missing coef sidecar {coefs}")
+              print(f"OK  smoke {tag}: time={row['fit_time_s']:.3f}s "
+                    f"active={row['active_set_size']} host={env['host_id']}")
+          PYEOF
+
+      - name: Build paper artifacts from cached aggregates (figures + tables)
+        # Only run the no-data-fetch artifacts (T1 introspection + F1
+        # coverage matrix) — those don't need the headline matrix.
+        run: |
+          mkdir -p paper/figures paper/tables
+          python -m benches.v2.report.coverage_matrix \
+            --out paper/figures/F1_coverage_matrix.pdf
+          python -m benches.v2.report.tables estimator_surface \
+            --out paper/tables/T1_estimator_surface.tex
+          test -s paper/figures/F1_coverage_matrix.pdf
+          test -s paper/tables/T1_estimator_surface.tex

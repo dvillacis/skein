@@ -25,6 +25,7 @@ use crate::solver::block_path::{block_lambda_max, BlockPathConfig};
 use crate::solver::cd::CdReport;
 use crate::solver::path::{lambda_grid, Screening};
 use ndarray::{Array1, Array2, ArrayView1};
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct BlockPathLLAReport {
@@ -41,6 +42,11 @@ pub struct BlockPathLLAReport {
     pub working_set_sizes: Vec<usize>,
     /// Total KKT-loop passes (summed across LLA outer iters) at each λ.
     pub kkt_passes: Vec<usize>,
+    /// Wall-clock nanoseconds spent solving each λ (the outer LLA loop +
+    /// inner KKT cycle + bookkeeping at that λ; excludes path-level setup
+    /// like `lambda_grid` and the Lipschitz cache). Added in M13.4 Phase 1
+    /// for per-λ profiling.
+    pub per_lambda_wall_ns: Vec<u64>,
 }
 
 /// Solve a non-convex group-penalty problem along a λ-path with warm
@@ -87,6 +93,7 @@ where
     let mut final_objs_out = Vec::with_capacity(n_lams);
     let mut working_set_sizes_out = Vec::with_capacity(n_lams);
     let mut kkt_passes_out = Vec::with_capacity(n_lams);
+    let mut per_lambda_wall_ns_out = Vec::with_capacity(n_lams);
 
     // Per-group operator-norm Lipschitz, computed once for the whole path.
     let group_lip = group_lipschitz_cache(design, groups);
@@ -95,7 +102,22 @@ where
     let mut prev_residual: Option<Array1<f64>> = None;
     let mut prev_lambda: Option<f64> = None;
 
+    // M13.4 Phase 2.3 — weight-space LLA fixed-point tolerance. Once the
+    // surrogate weights have stopped moving between outer iters by more
+    // than this threshold, the next inner solve would reproduce the
+    // current warm — declare LLA converged without paying for that solve.
+    // Sized at 1000× the coefficient-space `outer_tol` so it sits well
+    // above the inner-CD's coefficient-jitter floor (β jitter of ~`inner_tol`
+    // can produce weight jitter of ~`inner_tol / (λγ)`, which at the
+    // smallest λ on a deep grid reaches ~1e-4). A 1e-3 threshold for
+    // `outer_tol=1e-6` lets the LLA loop break out as soon as the surrogate
+    // is "essentially the same" between iterations — typically within 3-4
+    // outer iters at the dense tail. Floor at 1e-8 guards against
+    // `outer_tol=0` configs (e.g. tight-tol gate tests).
+    let weight_short_circuit_tol = (outer_tol * 1000.0).max(1e-8);
+
     for (k, &lam) in lambdas.iter().enumerate() {
+        let lam_start = Instant::now();
         let mut last_inner_iters_total = 0usize;
         let mut last_kkt_passes_total = 0usize;
         let mut last_ws_size = n_groups;
@@ -105,15 +127,33 @@ where
             .unwrap_or_else(|| datafit.init_residual(design, warm.view()));
         let mut outer_converged = false;
         let mut outer_iters_done = 0usize;
+        let mut prev_weights: Option<Array1<f64>> = None;
 
         for outer in 0..max_outer {
-            outer_iters_done = outer + 1;
             let inner_pen = make_inner(warm.view(), groups, lam);
             // The strong rule and KKT verifier need a per-group weight
             // vector — for SGL inner this is the L2 weights. Owned copy
             // since `inner_pen.weights()` borrows from `inner_pen` which
             // we want to keep alive across the loop.
             let weights: Array1<f64> = inner_pen.weights().to_owned();
+
+            // Phase 2.3 short-circuit: if ψ(β_{t-1}) ≈ ψ(β_{t-2}), the
+            // surrogate hasn't changed since the last outer iter, so the
+            // next inner solve would just return warm. β has settled into
+            // the LLA fixed point in weight space; break before the
+            // expensive screening + block-CD + KKT cycle.
+            if let Some(pw) = prev_weights.as_ref() {
+                let max_dw = weights
+                    .iter()
+                    .zip(pw.iter())
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0_f64, f64::max);
+                if max_dw < weight_short_circuit_tol {
+                    outer_converged = true;
+                    break;
+                }
+            }
+            outer_iters_done = outer + 1;
 
             // Strong-rule screen against the previous λ's residual + the
             // CURRENT surrogate weights. For the first λ, no prev residual
@@ -214,6 +254,9 @@ where
                 outer_converged = true;
                 break;
             }
+
+            // Stash this iter's weights for the next iter's Phase 2.3 check.
+            prev_weights = Some(weights);
         }
 
         betas.row_mut(k).assign(&warm);
@@ -223,6 +266,7 @@ where
         final_objs_out.push(last_inner_obj);
         working_set_sizes_out.push(last_ws_size);
         kkt_passes_out.push(last_kkt_passes_total);
+        per_lambda_wall_ns_out.push(lam_start.elapsed().as_nanos() as u64);
 
         prev_residual = Some(last_residual);
         prev_lambda = Some(lam);
@@ -238,6 +282,7 @@ where
             final_objs: final_objs_out,
             working_set_sizes: working_set_sizes_out,
             kkt_passes: kkt_passes_out,
+            per_lambda_wall_ns: per_lambda_wall_ns_out,
         },
     )
 }

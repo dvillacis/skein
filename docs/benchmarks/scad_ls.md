@@ -13,7 +13,7 @@ solver's `warm_start=True`, matching the shape of skglm's built-in
 `MCPRegression.path` / `Lasso.path`. Comparison stays apples-to-
 apples.
 
-## Headline — deep regime (λ_min/λ_max = 1e-3)
+## Headline — dense regime (λ_min/λ_max = 1e-3)
 
 | size            | skein 0.5.1 | skglm 0.5    | ncvreg 3.16.0 | skein / skglm |
 |---|---|---|---|---|
@@ -53,13 +53,13 @@ recovery rather than reaching the saturated tail.
 
 The skein/skglm ratio is striking — skglm's per-α overhead in the
 manual SCAD path makes the sparse regime *worse* in absolute terms
-than the deep one for skglm (7.6 s sparse vs 9.5 s deep at medium is
-basically a wash), while skein roughly halves its time. The skein
+than the dense one for skglm (7.6 s sparse vs 9.5 s dense at medium
+is basically a wash), while skein roughly halves its time. The skein
 sparse advantage holds at medium (0.90 s vs 1.78 s, ~50 %).
 
-† R skipped at large for the same OOM reason as the deep regime.
+† R skipped at large for the same OOM reason as the dense regime.
 
-‡ skglm sparse@large was aborted after the deep run consumed ~9.4 h
+‡ skglm sparse@large was aborted after the dense run consumed ~9.4 h
 on the bench host. By extrapolation from the medium 0.12× ratio,
 the projection is ~3 700 s (~62 min) per trial, but it was killed
 mid-trial to free the host. The skein sparse@large number is from a
@@ -134,10 +134,10 @@ Raw JSON: `benches/results/scad_ls.json`,
 
 1. **skein is the fastest SCAD path solver on every size and
    regime.** The gap to skglm widens dramatically with scale —
-   ~5× at medium, **~21×** at large deep — because skglm has no
+   ~5× at medium, **~21×** at large dense — because skglm has no
    native SCAD `.path()` and the manual α-loop pays per-α setup
    overhead that skglm's MCP estimator amortizes internally. The
-   single skglm large/deep fit took 3.1 hours (vs 9 minutes for
+   single skglm large/dense fit took 3.1 hours (vs 9 minutes for
    skein); the large/sparse skglm run was aborted on the bench
    host before its first trial completed.
 2. **Correctness mirrors MCP exactly**: bit-identical to skglm,

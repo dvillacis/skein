@@ -1,0 +1,130 @@
+{
+  "expected": [
+    "figures/F10_cv_parallel_speedup.pdf",
+    "figures/F1_coverage_matrix.pdf",
+    "figures/F2_headline_timing.pdf",
+    "figures/F3_scaling_curves.pdf",
+    "figures/F4_agreement.pdf",
+    "figures/F5_recovery_curves.pdf",
+    "figures/F6_realdata_boxplots.pdf",
+    "figures/F7_ic_selection_accuracy.pdf",
+    "figures/F8_stability_fdr_power.pdf",
+    "figures/F9_screening_parallel.pdf",
+    "tables/T1_estimator_surface.tex",
+    "tables/T2_headline_timings.tex",
+    "tables/T4_recovery.tex",
+    "tables/T5_realdata.tex",
+    "tables/T6_environment.tex"
+  ],
+  "files": {
+    "figures/F10_cv_parallel_speedup.pdf": {
+      "driver": "report/run_cv_parallel.py \u2192 figures.py cv_parallel_speedup",
+      "mtime": 1778693214.6121686,
+      "paper_section": "\u00a7Ablation",
+      "size_bytes": 16779,
+      "source": "results/cv_parallel/cv_parallel.jsonl"
+    },
+    "figures/F1_coverage_matrix.pdf": {
+      "driver": "report/coverage_matrix.py",
+      "mtime": 1778689551.2574472,
+      "paper_section": "\u00a7Introduction",
+      "size_bytes": 12951,
+      "source": "benches/v2/runners/registry.py (LADDER)"
+    },
+    "figures/F2_headline_timing.pdf": {
+      "driver": "report/figures.py headline_timing",
+      "mtime": 1778710631.1111612,
+      "paper_section": "\u00a7Results",
+      "size_bytes": 12962,
+      "source": "results/scenarios/*.aggregate.json (size=medium, regime=deep)"
+    },
+    "figures/F3_scaling_curves.pdf": {
+      "driver": "report/figures.py scaling_curves",
+      "mtime": 1778710632.1829348,
+      "paper_section": "\u00a7Results",
+      "size_bytes": 18768,
+      "source": "results/scenarios/*.aggregate.json (all sizes, regime=deep)"
+    },
+    "figures/F4_agreement.pdf": {
+      "driver": "report/figures.py agreement",
+      "mtime": 1778710633.7561102,
+      "paper_section": "\u00a7Correctness",
+      "size_bytes": 31728,
+      "source": "results/scenarios/*.aggregate.json (cells with agreement_vs_skein_mean)"
+    },
+    "figures/F5_recovery_curves.pdf": {
+      "driver": "report/figures.py recovery_curves",
+      "mtime": 1778708213.0458658,
+      "paper_section": "\u00a7Recovery",
+      "size_bytes": 47703,
+      "source": "results/scenarios/*.aggregate.json (recovery_per_lambda_mean)"
+    },
+    "figures/F6_realdata_boxplots.pdf": {
+      "driver": "report/run_realdata.py \u2192 figures.py realdata_boxplots",
+      "mtime": 1778692834.9926379,
+      "paper_section": "\u00a7Applications",
+      "size_bytes": 22270,
+      "source": "results/realdata/*.jsonl"
+    },
+    "figures/F7_ic_selection_accuracy.pdf": {
+      "driver": "report/figures.py ic_selection",
+      "mtime": 1778708213.8079636,
+      "paper_section": "\u00a7Selection",
+      "size_bytes": 16266,
+      "source": "results/scenarios/*.aggregate.json (selection_mean)"
+    },
+    "figures/F8_stability_fdr_power.pdf": {
+      "driver": "report/run_stability.py \u2192 figures.py stability_fdr_power",
+      "mtime": 1778693118.591287,
+      "paper_section": "\u00a7Selection",
+      "size_bytes": 18614,
+      "source": "results/stability/stability.jsonl"
+    },
+    "figures/F9_screening_parallel.pdf": {
+      "driver": "cargo bench \u2192 report/ingest_criterion.py \u2192 figures.py screening_parallel",
+      "mtime": 1778693250.542599,
+      "paper_section": "\u00a7Ablation",
+      "size_bytes": 13410,
+      "source": "results/criterion.jsonl"
+    },
+    "tables/T1_estimator_surface.tex": {
+      "driver": "report/tables.py estimator_surface",
+      "mtime": 1778689664.6462052,
+      "paper_section": "\u00a7Introduction",
+      "size_bytes": 1369,
+      "source": "skein_glm.* (introspection)"
+    },
+    "tables/T2_headline_timings.tex": {
+      "driver": "report/tables.py headline_timings",
+      "mtime": 1778710634.4587367,
+      "paper_section": "\u00a7Results",
+      "size_bytes": 1286,
+      "source": "results/scenarios/*.aggregate.json (size=medium, regime=deep)"
+    },
+    "tables/T4_recovery.tex": {
+      "driver": "report/tables.py recovery",
+      "mtime": 1778708581.9633749,
+      "paper_section": "\u00a7Recovery",
+      "size_bytes": 4784,
+      "source": "results/scenarios/*.aggregate.json (selection_mean, regime=deep)"
+    },
+    "tables/T5_realdata.tex": {
+      "driver": "report/tables.py realdata",
+      "mtime": 1778692835.576466,
+      "paper_section": "\u00a7Applications",
+      "size_bytes": 706,
+      "source": "results/realdata/*.jsonl"
+    },
+    "tables/T6_environment.tex": {
+      "driver": "report/tables.py environment",
+      "mtime": 1778695022.8315587,
+      "paper_section": "\u00a7Reproducibility",
+      "size_bytes": 530,
+      "source": "results/cells/*.env.json (host_id, BLAS, package versions)"
+    }
+  },
+  "generated_at": 1778710634,
+  "git_dirty": true,
+  "git_rev": "d7bd7270c6b69e99245fd23ad938dd04bc292ad3",
+  "missing": []
+}

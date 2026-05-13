@@ -1,0 +1,23 @@
+\begin{table}[t]
+  \centering
+  \caption{Median over 5 seeds with min/max envelope; one warm-up call discarded.}
+  \label{tab:headline_timings}
+\begin{tabular}{llrrrrrrr}
+\toprule
+Scenario & Package & n & p & Median (s) & Min (s) & Max (s) & Active & Seeds \\
+\midrule
+ls_elasticnet & skein & 10000 & 1000 & 3.059000 & 2.814000 & 3.182000 & 893 & 5 \\
+ls_elasticnet & sklearn & 10000 & 1000 & 0.278000 & 0.218000 & 0.303000 & 893 & 5 \\
+ls_group_lasso & grpreg & 10000 & 1000 & 11.394000 & 11.097000 & 11.445000 & 1000 & 5 \\
+ls_group_lasso & skein & 10000 & 1000 & 8.039000 & 6.879000 & 8.212000 & 1000 & 5 \\
+ls_group_mcp & grpreg & 10000 & 1000 & 12.563000 & 8.673000 & 12.928000 & 1000 & 5 \\
+ls_group_mcp & skein & 10000 & 1000 & 41.921000 & 39.314000 & 43.788000 & 1000 & 5 \\
+ls_lasso & skein & 10000 & 1000 & 2.913000 & 2.632000 & 3.143000 & 791 & 5 \\
+ls_lasso & skglm & 10000 & 1000 & 4.803000 & 4.561000 & 5.067000 & 791 & 5 \\
+ls_lasso & sklearn & 10000 & 1000 & 0.201000 & 0.190000 & 0.246000 & 790 & 5 \\
+ls_mcp & skein & 10000 & 1000 & 3.679000 & 3.384000 & 4.244000 & 793 & 5 \\
+ls_mcp & skglm & 10000 & 1000 & 4.612000 & 4.322000 & 5.416000 & 793 & 5 \\
+ls_scad & skein & 10000 & 1000 & 3.436000 & 3.325000 & 3.540000 & 792 & 5 \\
+\bottomrule
+\end{tabular}
+\end{table}

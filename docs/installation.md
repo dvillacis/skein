@@ -36,7 +36,7 @@ maturin develop --release
 `maturin develop` builds the Rust extension and registers an editable
 install. Subsequent edits to the Rust core require re-running
 `maturin develop --release`; edits to pure-Python code under
-`python/skein/` take effect immediately.
+`python/skein_glm/` take effect immediately.
 
 ## Development install
 
@@ -48,12 +48,12 @@ pip install -e ".[dev,docs]"
 ```
 
 The `[dev]` extras pull in `pytest`, `pytest-cov`, `ruff`, and `mypy`;
-`[docs]` adds `mkdocs`, `mkdocs-material`, and `mkdocstrings`. After
-that:
+`[docs]` adds Sphinx (`sphinx`, `furo`, `myst-parser`,
+`sphinx-copybutton`, `sphinx-design`). After that:
 
 ```bash
 # Rust tests (fast iteration, no Python rebuild needed).
-cargo test -p skein-core
+cargo test -p skein-core --lib
 
 # Python tests (require maturin develop first).
 pytest
@@ -64,8 +64,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 ruff check python/ tests/
 mypy python/
 
-# Docs preview at http://127.0.0.1:8000.
-mkdocs serve
+# Docs (build to docs/_build/html). CI runs with -W (warnings = errors).
+sphinx-build -b html docs docs/_build/html
 ```
 
 ## Platform notes

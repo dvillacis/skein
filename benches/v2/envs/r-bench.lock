@@ -1,0 +1,10 @@
+# R environment for the comparator runners. Use renv:
+#   R -e "renv::init(); renv::install(c('glmnet@4.1-8','ncvreg@3.16','grpreg@3.6','arrow@17.0'))"
+#   R -e "renv::snapshot()"
+# This file lists the expected versions; renv.lock has the authoritative pin.
+
+glmnet  4.1-8
+ncvreg  3.16
+grpreg  3.6
+arrow   17.0      # required for the feather IPC transport (replaces JSON)
+jsonlite 1.8      # only used for the env.json sessionInfo dump

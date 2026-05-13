@@ -1,0 +1,7 @@
+.snakemake/
+__pycache__/
+# Per-cell coef sidecars and dev-profile runs are reproducible bench
+# output (≥100 MB) — committed aggregates under results/scenarios/ are
+# what figures / tables consume. Re-run snakemake locally to repopulate.
+results/cells/
+results/cells-dev-profile/

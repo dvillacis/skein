@@ -1,0 +1,21 @@
+\begin{table}[t]
+  \centering
+  \caption{Count of public estimator classes per (datafit, penalty); $\checkmark$ marks cells with at least one direct external comparator (sklearn, glmnet, ncvreg, grpreg, skglm, celer, lifelines). -- marks skein-only cells benchmarked against synthetic ground truth instead.}
+  \label{tab:estimator_surface}
+\begin{tabular}{lcccccccccccc}
+\toprule
+Penalty & Bridge & EN & Lasso & MCP & SCAD & grEN & grLasso & grMCP & grSCAD & sgLasso & sgMCP & sgSCAD \\
+Datafit &  &  &  &  &  &  &  &  &  &  &  &  \\
+\midrule
+Cox &  &  &  & 2 $\checkmark$ & 2 -- &  & 2 -- & 2 -- &  & 2 -- & 2 -- & 2 -- \\
+Gaussian & 2 -- & 2 $\checkmark$ &  & 2 $\checkmark$ & 2 $\checkmark$ & 2 -- & 2 $\checkmark$ & 2 $\checkmark$ & 2 $\checkmark$ & 2 -- & 2 -- & 2 -- \\
+Graphical &  &  & 1 $\checkmark$ & 1 -- & 1 -- &  &  &  &  &  &  &  \\
+Huber &  &  &  & 2 -- & 2 -- &  &  &  &  &  &  &  \\
+JointGraphical &  &  & 1 -- & 1 -- &  &  &  &  &  &  &  &  \\
+Logistic &  & 2 $\checkmark$ & 2 $\checkmark$ & 2 $\checkmark$ & 2 $\checkmark$ &  & 2 -- & 2 -- &  & 2 -- & 2 -- & 2 -- \\
+MultiTask &  & 3 -- & 3 -- & 3 -- & 3 -- &  &  &  &  &  &  &  \\
+Multinomial &  & 1 -- & 1 -- & 1 -- & 1 -- &  &  &  &  &  &  &  \\
+Poisson &  & 2 $\checkmark$ & 2 $\checkmark$ & 2 $\checkmark$ & 2 -- &  & 2 -- & 2 -- &  & 2 -- & 2 -- & 2 -- \\
+\bottomrule
+\end{tabular}
+\end{table}

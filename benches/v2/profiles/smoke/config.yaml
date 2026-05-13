@@ -1,0 +1,8 @@
+# Snakemake profile: CI smoke run. Two cells, no figures.
+cores: 1
+jobs: 1
+keep-going: False
+printshellcmds: True
+default-resources:
+  - mem_mb=2000
+# Used as: snakemake --profile profiles/smoke smoke

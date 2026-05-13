@@ -1,0 +1,71 @@
+\begin{table}[t]
+  \centering
+  \caption{Support-F1, $\beta$-RMSE, and selected support size at AIC / BIC / EBIC-selected $\lambda$ along the dense-tail path (`lambda_min_ratio = 1e-3`).}
+  \label{tab:recovery}
+\begin{tabular}{llrlrrrr}
+\toprule
+Scenario & Package & n & Criterion & F1 & RMSE & |Ŝ| & Seeds \\
+\midrule
+ls_elasticnet & skein & 1000 & AIC & 0.310000 & 0.019800 & 66.600000 & 5 \\
+ls_elasticnet & skein & 1000 & BIC & 0.687000 & 0.028100 & 20.000000 & 5 \\
+ls_elasticnet & skein & 1000 & EBIC & 0.776000 & 0.030400 & 16.000000 & 5 \\
+ls_elasticnet & skein & 10000 & AIC & 0.218000 & 0.003500 & 103.600000 & 5 \\
+ls_elasticnet & skein & 10000 & BIC & 0.705000 & 0.004800 & 19.000000 & 5 \\
+ls_elasticnet & skein & 10000 & EBIC & 0.809000 & 0.005200 & 14.800000 & 5 \\
+ls_elasticnet & sklearn & 1000 & AIC & 0.300000 & 0.019600 & 68.000000 & 5 \\
+ls_elasticnet & sklearn & 1000 & BIC & 0.703000 & 0.028300 & 19.400000 & 5 \\
+ls_elasticnet & sklearn & 1000 & EBIC & 0.770000 & 0.030000 & 16.200000 & 5 \\
+ls_elasticnet & sklearn & 10000 & AIC & 0.228000 & 0.003600 & 100.600000 & 5 \\
+ls_elasticnet & sklearn & 10000 & BIC & 0.727000 & 0.004900 & 18.200000 & 5 \\
+ls_elasticnet & sklearn & 10000 & EBIC & 0.795000 & 0.005100 & 15.200000 & 5 \\
+ls_group_lasso & skein & 1000 & AIC & 0.836000 & 0.019800 & 36.000000 & 5 \\
+ls_group_lasso & skein & 1000 & BIC & 0.964000 & 0.022200 & 27.000000 & 5 \\
+ls_group_lasso & skein & 1000 & EBIC & 0.982000 & 0.022800 & 26.000000 & 5 \\
+ls_group_lasso & skein & 10000 & AIC & 0.917000 & 0.003000 & 30.000000 & 5 \\
+ls_group_lasso & skein & 10000 & BIC & 1.000000 & 0.003300 & 25.000000 & 5 \\
+ls_group_lasso & skein & 10000 & EBIC & 1.000000 & 0.003300 & 25.000000 & 5 \\
+ls_group_mcp & skein & 1000 & AIC & 1.000000 & 0.013100 & 25.000000 & 5 \\
+ls_group_mcp & skein & 1000 & BIC & 1.000000 & 0.013100 & 25.000000 & 5 \\
+ls_group_mcp & skein & 1000 & EBIC & 1.000000 & 0.013100 & 25.000000 & 5 \\
+ls_group_mcp & skein & 10000 & AIC & 1.000000 & 0.001400 & 25.000000 & 5 \\
+ls_group_mcp & skein & 10000 & BIC & 1.000000 & 0.001400 & 25.000000 & 5 \\
+ls_group_mcp & skein & 10000 & EBIC & 1.000000 & 0.001400 & 25.000000 & 5 \\
+ls_lasso & skein & 1000 & AIC & 0.613000 & 0.012800 & 24.600000 & 5 \\
+ls_lasso & skein & 1000 & BIC & 0.907000 & 0.016000 & 12.400000 & 5 \\
+ls_lasso & skein & 1000 & EBIC & 0.950000 & 0.017000 & 11.200000 & 5 \\
+ls_lasso & skein & 10000 & AIC & 0.616000 & 0.002300 & 30.600000 & 5 \\
+ls_lasso & skein & 10000 & BIC & 0.936000 & 0.002700 & 11.400000 & 5 \\
+ls_lasso & skein & 10000 & EBIC & 0.962000 & 0.002800 & 10.800000 & 5 \\
+ls_lasso & skglm & 1000 & AIC & 0.613000 & 0.012800 & 24.600000 & 5 \\
+ls_lasso & skglm & 1000 & BIC & 0.907000 & 0.016000 & 12.400000 & 5 \\
+ls_lasso & skglm & 1000 & EBIC & 0.950000 & 0.017000 & 11.200000 & 5 \\
+ls_lasso & skglm & 10000 & AIC & 0.616000 & 0.002300 & 30.600000 & 5 \\
+ls_lasso & skglm & 10000 & BIC & 0.936000 & 0.002700 & 11.400000 & 5 \\
+ls_lasso & skglm & 10000 & EBIC & 0.962000 & 0.002800 & 10.800000 & 5 \\
+ls_lasso & sklearn & 1000 & AIC & 0.653000 & 0.013100 & 23.400000 & 5 \\
+ls_lasso & sklearn & 1000 & BIC & 0.883000 & 0.015500 & 13.000000 & 5 \\
+ls_lasso & sklearn & 1000 & EBIC & 0.967000 & 0.017500 & 10.800000 & 5 \\
+ls_lasso & sklearn & 10000 & AIC & 0.616000 & 0.002300 & 30.600000 & 5 \\
+ls_lasso & sklearn & 10000 & BIC & 0.936000 & 0.002700 & 11.400000 & 5 \\
+ls_lasso & sklearn & 10000 & EBIC & 0.962000 & 0.002800 & 10.800000 & 5 \\
+ls_mcp & skein & 1000 & AIC & 0.809000 & 0.007500 & 19.000000 & 5 \\
+ls_mcp & skein & 1000 & BIC & 1.000000 & 0.005100 & 10.000000 & 5 \\
+ls_mcp & skein & 1000 & EBIC & 1.000000 & 0.005100 & 10.000000 & 5 \\
+ls_mcp & skein & 10000 & AIC & 0.732000 & 0.001700 & 55.200000 & 5 \\
+ls_mcp & skein & 10000 & BIC & 1.000000 & 0.000800 & 10.000000 & 5 \\
+ls_mcp & skein & 10000 & EBIC & 1.000000 & 0.000800 & 10.000000 & 5 \\
+ls_mcp & skglm & 1000 & AIC & 0.809000 & 0.007500 & 19.000000 & 5 \\
+ls_mcp & skglm & 1000 & BIC & 1.000000 & 0.005100 & 10.000000 & 5 \\
+ls_mcp & skglm & 1000 & EBIC & 1.000000 & 0.005100 & 10.000000 & 5 \\
+ls_mcp & skglm & 10000 & AIC & 0.732000 & 0.001700 & 55.200000 & 5 \\
+ls_mcp & skglm & 10000 & BIC & 1.000000 & 0.000800 & 10.000000 & 5 \\
+ls_mcp & skglm & 10000 & EBIC & 1.000000 & 0.000800 & 10.000000 & 5 \\
+ls_scad & skein & 1000 & AIC & 0.967000 & 0.005300 & 10.800000 & 5 \\
+ls_scad & skein & 1000 & BIC & 1.000000 & 0.005100 & 10.000000 & 5 \\
+ls_scad & skein & 1000 & EBIC & 1.000000 & 0.005100 & 10.000000 & 5 \\
+ls_scad & skein & 10000 & AIC & 0.964000 & 0.000900 & 10.800000 & 5 \\
+ls_scad & skein & 10000 & BIC & 1.000000 & 0.000800 & 10.000000 & 5 \\
+ls_scad & skein & 10000 & EBIC & 1.000000 & 0.000800 & 10.000000 & 5 \\
+\bottomrule
+\end{tabular}
+\end{table}

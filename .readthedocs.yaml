@@ -1,9 +1,9 @@
 # ReadTheDocs build configuration.
 # https://docs.readthedocs.io/en/stable/config-file/v2.html
 #
-# Hosts the mkdocs-material site published locally via `mkdocs serve`.
-# Builds the Rust extension during `pip install` so mkdocstrings can
-# import `skein` and introspect Python class docstrings.
+# Hosts the Sphinx + Furo site (config in docs/conf.py). Builds the
+# Rust extension during `pip install` so Sphinx autodoc can import
+# `skein_glm` and introspect Python class docstrings.
 
 version: 2
 
@@ -16,7 +16,7 @@ build:
     # pyproject build-system) to compile the Rust extension during
     # the install step. Without this, `from skein_glm._core import …` in
     # `python/skein_glm/__init__.py` would fail at docs-build time and
-    # mkdocstrings couldn't introspect any class.
+    # Sphinx autodoc couldn't introspect any class.
     #
     # Need Rust ≥ 1.85 so cargo can parse manifests with Cargo's
     # `edition2024` feature, which `wit-bindgen-core 0.51.0` (pulled

@@ -122,22 +122,23 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Status
 
-v0.7 is a complete, tested implementation: **292 cargo + 412 pytest
-tests, all green** at last snapshot. Sparse + dense + mmap + chunked
-+ multi-task backends all interoperate; every datafit × penalty
-combination is wired end-to-end with sklearn-style `fit` / `predict` /
-`predict_proba` / `score`. The graphical-model family ships with a
-gram-form CD inner solver (for single-population glasso) and an
-ADMM kernel (for joint glasso). Every Rust path solver releases the
-GIL during compute, so Python-side `joblib` parallelism is real
-rather than a no-op. Wheels are built via `cibuildwheel` for Linux
-(x86_64 + aarch64), macOS (x86_64 + arm64), and Windows (AMD64).
+v0.7 is a complete, tested implementation. Sparse + dense + mmap +
+chunked + multi-task backends all interoperate; every datafit ×
+penalty combination is wired end-to-end with sklearn-style `fit` /
+`predict` / `predict_proba` / `score`. The graphical-model family
+ships with a gram-form CD inner solver (for single-population glasso)
+and an ADMM kernel (for joint glasso). Every Rust path solver
+releases the GIL during compute, so Python-side `joblib` parallelism
+is real rather than a no-op. Wheels are built via `cibuildwheel` for
+Linux (x86_64 + aarch64), macOS (x86_64 + arm64), and Windows
+(AMD64). M12 added penalty + datafit unit-test coverage, an
+integration test directory, and a CI smoke job for the PyO3 layer;
+M13 surfaces the open performance gaps from the `benches/v2` release-
+profile run (see the [roadmap](roadmap.md)).
 
 What's not yet in: multi-response GLMs for Poisson / Cox (M7.3),
-comparison benchmarks vs `glmnet` / `ncvreg` / `grpreg` / `skglm` /
-`EstimateGroupNetwork` (M8 / M9 follow-ups), polychoric / polyserial
-correlation helpers for ordinal Likert data, an R facade. See the
-[roadmap](roadmap.md) for the full picture.
+polychoric / polyserial correlation helpers for ordinal Likert data,
+an R facade. See the [roadmap](roadmap.md) for the full picture.
 
 ```{toctree}
 :hidden:
@@ -235,6 +236,7 @@ api/abcs
 :hidden:
 :caption: Benchmarks
 
+benchmarks/index
 benchmarks/lasso_ls_correctness
 benchmarks/mcp_ls
 benchmarks/scad_ls
@@ -246,6 +248,7 @@ benchmarks/scad_ls
 
 perf/lasso_ls_profile
 perf/celer_skglm_study
+perf/m13_4_profile
 ```
 
 ```{toctree}

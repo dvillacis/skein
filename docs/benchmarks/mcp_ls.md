@@ -41,10 +41,10 @@ running into the saturated tail. Active set stays at **10** (the
 true support) along the entire path, on every package, at every
 size — clean cross-package agreement on recovered support.
 
-Absolute numbers are a fraction of the deep regime at small and
+Absolute numbers are a fraction of the dense regime at small and
 medium (~20–50 %), but **the sparse advantage collapses at large**:
-skein loses only ~3 % relative to the deep regime (510 → 497 s) and
-skglm actually runs ~5 % *slower* on sparse than on deep (666 → 702
+skein loses only ~3 % relative to the dense regime (510 → 497 s) and
+skglm actually runs ~5 % *slower* on sparse than on dense (666 → 702
 s). Two likely contributors:
 
 - At `p=10k`, fixed per-λ overhead (KKT eval, strong-rule scoring,
@@ -52,15 +52,15 @@ s). Two likely contributors:
   active set is. That overhead becomes a meaningful fraction of
   wall time even though the inner CD loops are small.
 - The 100-λ sparse grid still reaches λ_min = λ_max · 5e-2; on a
-  large noisy design that's deep enough to saturate the active set
-  near the bottom of the path, eroding the structural advantage that
+  large noisy design that's enough to saturate the active set near
+  the bottom of the path, eroding the structural advantage that
   showed up at medium.
 
 The skein/skglm ratio still grows with size (0.20 → 0.35 → 0.71)
-mirroring the deep regime, for the same reason: as `n · p` grows,
+mirroring the dense regime, for the same reason: as `n · p` grows,
 both solvers converge on roughly equivalent BLAS-bound inner loops.
 
-† R skipped at large for the same OOM reason as the deep regime.
+† R skipped at large for the same OOM reason as the dense regime.
 
 ## Correctness — pairwise agreement on the path
 
@@ -130,9 +130,10 @@ with `python benches/correctness/plot_agreement.py mcp_ls`).
   the lasso/LS snapshots that were taken on a different machine.
 - **Timing**: 1 discarded warm-up call + N timed trials (N=3 at
   medium, N=2 at large, N=5 at small). Headline is the median.
-- **λ-grid**: geometric, glmnet-style — `λ_max = max|Xᵀy| / n`, deep
-  ratio `1e-3`, sparse ratio `5e-2`. 100 λ for medium and large, 30
-  for small.
+- **λ-grid**: geometric, glmnet-style — `λ_max = max|Xᵀy| / n`,
+  dense-regime ratio `1e-3` (path runs into the saturated tail),
+  sparse-regime ratio `5e-2` (path stops near support recovery).
+  100 λ for medium and large, 30 for small.
 - **γ**: 3.0 across all three packages (skein default, skglm explicit,
   ncvreg default). Pinned in the scenario file rather than relying on
   per-package defaults so the comparison is robust to upstream
