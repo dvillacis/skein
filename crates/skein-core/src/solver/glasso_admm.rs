@@ -28,7 +28,6 @@
 //! is the first ADMM kernel in skein; if a second use case appears, the
 //! outer loop can be lifted out of this file. Don't pre-generalise.
 
-use crate::groups::Groups;
 use crate::penalty::GroupPenaltyFactory;
 use crate::prox::logdet_eigen_prox;
 use ndarray::{Array1, Array2, ArrayView2};
@@ -111,19 +110,10 @@ pub fn joint_glasso_solve(
         assert_eq!(ew.dim(), (p, p), "edge_weights must be (p, p)");
     }
 
-    // Build the group structure: one group per upper-triangular edge,
-    // each containing `K` indices into a flat (n_edges × K) buffer.
+    // One group per upper-triangular edge — only the count is needed
+    // here; the K-vector that goes through `prox_group` per edge is
+    // assembled inline in the Z-update below.
     let n_edges = p * (p - 1) / 2;
-    let mut ptr = Vec::with_capacity(n_edges + 1);
-    let mut idx = Vec::with_capacity(n_edges * n_pops);
-    ptr.push(0);
-    for e in 0..n_edges {
-        for k in 0..n_pops {
-            idx.push(e * n_pops + k);
-        }
-        ptr.push(idx.len());
-    }
-    let _groups = Groups::from_csr(ptr, idx).expect("group construction");
 
     // Per-edge coupling weights, in upper-triangular row-major order.
     let mut group_weights = Array1::<f64>::ones(n_edges.max(1));

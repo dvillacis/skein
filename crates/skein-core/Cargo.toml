@@ -49,3 +49,15 @@ tempfile = "3"
 [[bench]]
 name = "block_cd"
 harness = false
+
+[[bench]]
+name = "lla_outer"
+harness = false
+
+[[bench]]
+name = "prox_newton_glm"
+harness = false
+
+[[bench]]
+name = "glasso"
+harness = false

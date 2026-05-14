@@ -40,16 +40,8 @@
 
 use super::{GlmDatafit, LeastSquares};
 use crate::design::DesignMatrix;
+use crate::numerics::{ETA_CLAMP, W_FLOOR};
 use ndarray::{Array1, ArrayView1};
-
-/// Clamp η before exp() to bound `μ = exp(η)` in `[exp(-30), exp(30)]`
-/// (≈ 9.4e-14 to 1.07e13). Outside this band the rate has saturated and
-/// the surrogate stops being informative.
-const ETA_CLAMP: f64 = 30.0;
-
-/// Lower bound on `w_i = μ_i` to keep the working response finite when
-/// the rate underflows.
-const W_FLOOR: f64 = 1e-6;
 
 /// Poisson regression with non-negative count outcomes and the canonical
 /// log link.

@@ -37,11 +37,8 @@
 
 use super::{GlmDatafit, LeastSquares};
 use crate::design::DesignMatrix;
+use crate::numerics::W_FLOOR;
 use ndarray::{Array1, ArrayView1};
-
-/// Lower bound on the IRLS weight `δ/|r_i|` for very large residuals,
-/// keeping the surrogate numerically well-conditioned.
-const W_FLOOR: f64 = 1e-6;
 
 /// Huber robust regression with the standard piecewise loss.
 ///

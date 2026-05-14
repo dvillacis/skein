@@ -17,6 +17,7 @@ use openblas_src as _;
 pub mod datafit;
 pub mod design;
 pub mod groups;
+pub mod numerics;
 pub mod penalty;
 pub mod prox;
 pub mod solver;

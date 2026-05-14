@@ -58,4 +58,78 @@ impl Groups {
     pub fn group(&self, g: usize) -> &[usize] {
         &self.idx[self.ptr[g]..self.ptr[g + 1]]
     }
+
+    /// `true` if any feature index appears in more than one group.
+    ///
+    /// Disjoint groups are the assumption baked into the per-group
+    /// operator-norm Lipschitz used by both serial and Jacobi-parallel
+    /// block-CD; overlapping groups break that analysis (and silently
+    /// corrupt Jacobi updates, where two threads compute against the
+    /// same snapshot β and then both write to a shared coordinate).
+    /// The parallel block-CD entry point (`block_cd_solve_subset_parallel`)
+    /// uses this check to fall back to serial Gauss-Seidel — see the
+    /// note there.
+    ///
+    /// O(`idx.len()` + `max_idx`) — single pass with a bitset sized to
+    /// the largest column index referenced.
+    pub fn has_overlap(&self) -> bool {
+        if self.idx.is_empty() {
+            return false;
+        }
+        let max_idx = *self.idx.iter().max().expect("non-empty checked above");
+        let mut seen = vec![false; max_idx + 1];
+        for &j in &self.idx {
+            if seen[j] {
+                return true;
+            }
+            seen[j] = true;
+        }
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn has_overlap_singletons_is_false() {
+        let g = Groups::singletons(10);
+        assert!(!g.has_overlap());
+    }
+
+    #[test]
+    fn has_overlap_contiguous_blocks_is_false() {
+        let g = Groups::contiguous_blocks(13, 4);
+        assert!(!g.has_overlap());
+    }
+
+    #[test]
+    fn has_overlap_disjoint_csr_is_false() {
+        // Two groups: {0,2,4} and {1,3}. No shared index.
+        let g = Groups::from_csr(vec![0, 3, 5], vec![0, 2, 4, 1, 3]).unwrap();
+        assert!(!g.has_overlap());
+    }
+
+    #[test]
+    fn has_overlap_shared_index_is_true() {
+        // Two groups: {0,1,2} and {2,3}. Index 2 is in both.
+        let g = Groups::from_csr(vec![0, 3, 5], vec![0, 1, 2, 2, 3]).unwrap();
+        assert!(g.has_overlap());
+    }
+
+    #[test]
+    fn has_overlap_repeated_within_single_group_is_true() {
+        // A pathological group {0, 0, 1} — same column listed twice in
+        // one group is also overlap by the bitset check.
+        let g = Groups::from_csr(vec![0, 3], vec![0, 0, 1]).unwrap();
+        assert!(g.has_overlap());
+    }
+
+    #[test]
+    fn has_overlap_empty_groups_is_false() {
+        // Zero groups, empty idx.
+        let g = Groups::from_csr(vec![0], vec![]).unwrap();
+        assert!(!g.has_overlap());
+    }
 }

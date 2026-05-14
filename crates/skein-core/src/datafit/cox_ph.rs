@@ -49,15 +49,8 @@
 
 use super::{GlmDatafit, LeastSquares};
 use crate::design::DesignMatrix;
+use crate::numerics::{ETA_CLAMP, W_FLOOR};
 use ndarray::{Array1, ArrayView1};
-
-/// Clamp η before exp() to bound `exp(η) ∈ [exp(-30), exp(30)]`.
-const ETA_CLAMP: f64 = 30.0;
-
-/// Lower bound on the diagonal Hessian to keep the working response
-/// finite when `w_i` collapses (e.g. unique-event sample where the
-/// diagonal entry can degenerate).
-const W_FLOOR: f64 = 1e-6;
 
 /// Tie-handling method for `CoxPH`. See module docs for the math.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

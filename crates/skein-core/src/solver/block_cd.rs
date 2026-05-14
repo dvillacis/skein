@@ -21,6 +21,14 @@ use crate::penalty::GroupPenalty;
 use crate::solver::cd::{CdConfig, CdReport};
 use ndarray::{Array1, ArrayView1};
 use rayon::prelude::*;
+use std::sync::Once;
+
+/// One-time stderr warning when the parallel block-CD entry point is
+/// invoked with overlapping groups. Fires at most once per process; any
+/// downstream call after that silently uses the serial fallback. Behind
+/// a `Once` so embedded users (the Python facade in particular) don't
+/// see N copies on a long path × CV grid.
+static OVERLAP_FALLBACK_WARNED: Once = Once::new();
 
 /// Group block-CD with cold start at β = 0. Thin wrapper over
 /// [`block_cd_solve_subset`] with the full group set.
@@ -101,6 +109,15 @@ pub(crate) fn group_lipschitz(design: &dyn DesignMatrix, cols: &[usize]) -> f64 
 /// groups). For pathologically correlated groups the iterates may
 /// oscillate; switch to the serial [`block_cd_solve_subset`] in that case.
 ///
+/// **Overlapping groups are silently downgraded to serial.** The Jacobi
+/// snapshot+fold scheme writes `beta[j] = new_block[k]` (assignment, not
+/// increment), so two threads that both hold column `j` overwrite each
+/// other's update for that coordinate and corrupt the residual fold. If
+/// `groups.has_overlap()`, this function dispatches to
+/// [`block_cd_solve_subset_with_cache`] instead and emits a one-time
+/// stderr warning. The serial path is mathematically the right thing to
+/// do in that case (Gauss-Seidel composes safely under overlap).
+///
 /// Empty `group_subset` returns immediately. Groups with `L_g = 0` are
 /// skipped.
 pub fn block_cd_solve_subset_parallel(
@@ -147,6 +164,32 @@ pub(crate) fn block_cd_solve_subset_parallel_with_cache(
         groups.n_groups(),
         "group_lip length must equal n_groups"
     );
+
+    // C5 safety: Jacobi updates corrupt shared coordinates under
+    // overlap (snapshot-fold writes `beta[j] = new_block[k]`, so two
+    // threads holding column `j` overwrite each other). Dispatch to the
+    // serial Gauss-Seidel path; that's the correct algorithm for
+    // overlapping groups. Warn once so the misuse doesn't ship silently
+    // — repeating per-λ × per-fold would be noise spam from joblib.
+    if groups.has_overlap() {
+        OVERLAP_FALLBACK_WARNED.call_once(|| {
+            eprintln!(
+                "skein-core: parallel block-CD requested with overlapping groups; \
+                 falling back to serial Gauss-Seidel (Jacobi snapshot-fold corrupts \
+                 shared coordinates). This warning fires once per process."
+            );
+        });
+        return block_cd_solve_subset_with_cache(
+            beta_init,
+            group_subset,
+            group_lip,
+            design,
+            datafit,
+            penalty,
+            groups,
+            config,
+        );
+    }
 
     let mut beta = beta_init;
     let mut r = datafit.init_residual(design, beta.view());
@@ -944,6 +987,78 @@ mod tests {
         for j in 0..p {
             assert_abs_diff_eq!(beta_serial[j], beta_parallel[j], epsilon = 1e-6);
         }
+    }
+
+    #[test]
+    fn block_cd_subset_parallel_with_overlapping_groups_falls_back_to_serial() {
+        // Two groups sharing column 1: G0 = {0, 1}, G1 = {1, 2}. Jacobi
+        // would corrupt β[1] (both threads write it from different
+        // snapshots); the parallel entry point must detect overlap and
+        // dispatch to serial. We verify by running serial directly and
+        // checking bit-identical output.
+        //
+        // sparse_group_problem returns p=8 features; we only need 3, so
+        // build a small problem inline to keep groups well-defined.
+        let n = 40;
+        let p = 3;
+        let mut state = 7_u64;
+        let mut sample = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            ((state as f64) / (u64::MAX as f64)) * 2.0 - 1.0
+        };
+        let x = Array2::<f64>::from_shape_fn((n, p), |_| sample());
+        let true_beta = array![1.0, -0.5, 0.8];
+        let noise = Array1::<f64>::from_shape_fn(n, |_| 0.02 * sample());
+        let y = x.dot(&true_beta) + &noise;
+        let design = DenseMatrix::new(x);
+        let datafit = LeastSquares::new(y);
+
+        // Overlap: {0,1} and {1,2}.
+        let groups = Groups::from_csr(vec![0, 2, 4], vec![0, 1, 1, 2]).unwrap();
+        assert!(
+            groups.has_overlap(),
+            "test setup invariant — fixture must overlap"
+        );
+
+        let penalty = GroupLasso::new(0.05, groups.n_groups());
+        let cfg = CdConfig {
+            max_iter: 2000,
+            tol: 1e-12,
+            acceleration: None,
+        };
+        let group_subset: Vec<usize> = (0..groups.n_groups()).collect();
+
+        let (beta_serial, rep_serial) = block_cd_solve_subset(
+            Array1::<f64>::zeros(p),
+            &group_subset,
+            &design,
+            &datafit,
+            &penalty,
+            &groups,
+            &cfg,
+        );
+        let (beta_parallel, rep_parallel) = block_cd_solve_subset_parallel(
+            Array1::<f64>::zeros(p),
+            &group_subset,
+            &design,
+            &datafit,
+            &penalty,
+            &groups,
+            &cfg,
+        );
+
+        // Parallel-with-overlap fell back to serial ⇒ bit-identical β
+        // and matching iteration count / convergence flag.
+        for j in 0..p {
+            assert_eq!(
+                beta_serial[j], beta_parallel[j],
+                "fallback must produce bit-identical β at coord {j}"
+            );
+        }
+        assert_eq!(rep_serial.iter, rep_parallel.iter);
+        assert_eq!(rep_serial.converged, rep_parallel.converged);
     }
 
     #[test]

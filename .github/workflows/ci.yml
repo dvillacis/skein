@@ -27,6 +27,21 @@ jobs:
         run: cargo fmt --all -- --check
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: solver pre-flight (tight-tol screening)
+        # CLAUDE.md mandates running this single test in isolation before
+        # the full suite after any convergence-logic change. Reason: the
+        # test pins cd.tol = 1e-12; if a future change makes a stopping
+        # condition unreachable (e.g. `gap < tol²` → 1e-24), the test
+        # loops forever instead of failing. Cargo runs the lib suite in
+        # parallel, so one runaway test starves every core and the whole
+        # `cargo test` step hangs until the job timeout.
+        #
+        # Running it as its own short step with `timeout-minutes` fails
+        # fast and points at the right culprit, rather than blocking on
+        # the full suite for hours with no signal. Healthy run takes
+        # well under a second; 2 min is generous.
+        timeout-minutes: 2
+        run: cargo test -p skein-core --lib solve_path_screening_on_matches_screening_off_within_tol -- --nocapture
       - name: cargo test
         run: cargo test -p skein-core --lib
 

@@ -235,7 +235,11 @@ fn anderson_extrapolate(iterates: &[Array1<f64>]) -> Option<Array1<f64>> {
     }
     let c = &c_unnorm / sum;
 
-    let last = iterates.last().unwrap();
+    // Infallible: the early return at the top of the function guarantees
+    // `iterates.len() >= 3`, so `last()` is `Some`.
+    let last = iterates
+        .last()
+        .expect("iterates non-empty: len() ≥ 3 checked above");
     let uc = u.dot(&c);
     Some(last - &uc)
 }
