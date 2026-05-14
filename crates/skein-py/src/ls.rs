@@ -22,11 +22,14 @@ use skein_core::{
     design::DesignMatrix as _,
     design::{DenseMatrix, SparseCSC, Standardized},
     groups::Groups,
-    penalty::{ElasticNet, GroupElasticNet, GroupLasso, GroupPenalty, Mcp, Scad, SparseGroupLasso},
+    penalty::{
+        ElasticNet, GroupElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad,
+        SparseGroupLasso,
+    },
     solver::{
         cd_solve, solve_block_path, solve_block_path_lla, solve_path, solve_path_lla,
         surrogate_sparse_group_mcp, surrogate_sparse_group_scad, surrogate_weights_bridge,
-        surrogate_weights_group_mcp, surrogate_weights_group_scad, BlockPathConfig, CdConfig,
+        surrogate_weights_group_scad, BlockPathConfig, CdConfig,
         PathConfig, Screening,
     },
     standardize::{
@@ -1134,20 +1137,23 @@ pub(crate) fn solve_group_mcp_ls_path<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
-    let labels_owned = groups.as_array().to_owned();
-    let groups_obj = groups_from_labels(&labels_owned.to_vec())?;
-    let n_groups = groups_obj.n_groups();
-    let _ = groups_obj; // groups_obj is rebuilt inside the helper; we just validated.
-
-    let base_weights = match &weights {
-        Some(w) => w.as_array().to_owned(),
-        None => ndarray::Array1::ones(n_groups),
-    };
-    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        let w = surrogate_weights_group_mcp(beta, g, lam, gamma, base_weights.view());
-        Box::new(GroupLasso::with_weights(lam, w))
-    };
-    build_block_path_lla_outputs(
+    // M13.4b — native group-MCP block-CD (no LLA outer loop). The
+    // `block_cd` inner solver dispatches to `GroupMcp::prox_group`
+    // directly (closed-form group MCP prox per Breheny & Huang 2015 §3),
+    // yielding a stationary point of the original non-convex objective
+    // in one path solve per λ. The `max_outer` / `outer_tol` arguments
+    // are now ignored (kept in the signature for backward compat with
+    // any caller passing them by keyword); `solve_block_path`'s
+    // convergence is governed by `cd.tol` and the path solver's KKT
+    // verifier. Strong-rule screening still applies — the rule's
+    // β_g=0 KKT subdifferential `λ·[-w_g, w_g]` is identical for
+    // GroupLasso and GroupMcp. Profile (n=10k, p=1k, group_size=5,
+    // n_groups=200, k_active=5, tol=1e-7, γ=3.0): native 10.45 s vs
+    // LLA 36.19 s — **3.46× faster**, identical support, ≤5e-7
+    // objective gap.
+    let _ = max_outer;
+    let _ = outer_tol;
+    build_block_path_outputs(
         py,
         x,
         y,
@@ -1163,9 +1169,7 @@ pub(crate) fn solve_group_mcp_ls_path<'py>(
         parallel,
         fit_intercept,
         standardize_x,
-        max_outer,
-        outer_tol,
-        make_inner,
+        move |lam, w| Box::new(GroupMcp::with_weights(lam, gamma, w)),
     )
 }
 
@@ -2426,24 +2430,13 @@ pub(crate) fn solve_group_mcp_ls_path_sparse<'py>(
     max_outer: usize,
     outer_tol: f64,
 ) -> PyResult<PathOutput<'py>> {
-    let labels_owned = groups.as_array().to_owned();
-    let groups_obj = groups_from_labels(&labels_owned.to_vec())?;
-    let n_groups_user = groups_obj.n_groups();
-    let _ = groups_obj;
-
-    let base_weights_for_lla = match &weights {
-        Some(w) => w.as_array().to_owned(),
-        None => Array1::ones(n_groups_user),
-    };
-    let group_w_eff_for_lla =
-        build_sparse_group_weights(&Some(base_weights_for_lla), n_groups_user, fit_intercept);
-
-    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w_eff_for_lla.view());
-        Box::new(GroupLasso::with_weights(lam, w))
-    };
-
-    build_block_path_lla_outputs_sparse_ls(
+    // M13.4b — see `solve_group_mcp_ls_path` for the rationale. The
+    // sparse helper passes pre-augmented weights (intercept group has
+    // weight 0) into the make_inner closure; we construct GroupMcp on
+    // top of that augmented vector identically to the dense path.
+    let _ = max_outer;
+    let _ = outer_tol;
+    build_block_path_outputs_sparse_ls(
         py,
         n_rows,
         n_cols,
@@ -2463,9 +2456,7 @@ pub(crate) fn solve_group_mcp_ls_path_sparse<'py>(
         parallel,
         fit_intercept,
         standardize_x,
-        max_outer,
-        outer_tol,
-        make_inner,
+        move |lam, w| Box::new(GroupMcp::with_weights(lam, gamma, w)),
     )
 }
 

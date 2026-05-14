@@ -15,6 +15,32 @@ use crate::design::DesignMatrix;
 use crate::penalty::Penalty;
 use crate::solver::cd::{cd_solve_subset, solve_small, CdConfig, CdReport};
 use ndarray::{Array1, Array2, ArrayView1};
+use std::time::Instant;
+
+/// Per-λ phase timing breakdown emitted by [`solve_path`] when the
+/// `SKEIN_PROFILE_PATH` env var is set. Used by M13.2 to attribute the
+/// observed per-λ fixed cost (~22 ms / λ at medium Lasso) to a phase.
+/// Not part of the v0.x stability promise — instrumentation only.
+#[derive(Default, Debug, Clone, Copy)]
+struct PhaseTimings {
+    /// Penalty creation, weights extraction, saturation-bypass check.
+    setup_ns: u64,
+    /// Initial working-set construction (priority/strong/gap-safe).
+    /// Costs an O(np) matvec for `Strong`/`GapSafe`.
+    screening_ns: u64,
+    /// Per-coord Lipschitz cache build. O(p) for unweighted LS, O(np)
+    /// for weighted LS / GLM.
+    lipschitz_ns: u64,
+    /// Sum of `cd_solve_subset` time across all KKT-loop passes at this λ.
+    inner_cd_ns: u64,
+    /// Sum of Anderson dual extrapolation time.
+    dual_extrap_ns: u64,
+    /// Sum of `compute_outer_state` time (KKT-violator scan + dual obj).
+    /// Costs an O(np) matvec via `full_grad`.
+    outer_state_ns: u64,
+    /// Per-pass bookkeeping: WS update, screening prune, history clones.
+    bookkeeping_ns: u64,
+}
 
 /// Smallest λ at which β = 0 satisfies the KKT conditions for a separable
 /// L1-like penalty (lasso, MCP, SCAD: subdifferential at 0 is `λ w_j [-1, 1]`).
@@ -187,8 +213,25 @@ where
 
     let mut warm = Array1::<f64>::zeros(p);
     let mut prev_residual: Option<Array1<f64>> = None;
+    // M13.2 cache — gradient `X^T r / n` from the END of the previous λ's
+    // KKT loop. The warm-start residual for λ_{k+1} is the post-CD
+    // residual from λ_k, so this gradient is exactly what
+    // `priority_rule_screen` needs at the start of λ_{k+1}. Cleared
+    // whenever we can't trust it (cold start, saturated bypass — those
+    // skip `compute_outer_state` so no fresh grad is computed).
+    let mut prev_grad: Option<Array1<f64>> = None;
+
+    let profile = std::env::var("SKEIN_PROFILE_PATH").is_ok();
+    let mut phase_log: Vec<PhaseTimings> = if profile {
+        Vec::with_capacity(n_lams)
+    } else {
+        Vec::new()
+    };
 
     for (k, &lam) in lambdas.iter().enumerate() {
+        let mut t = PhaseTimings::default();
+        let phase_start = if profile { Some(Instant::now()) } else { None };
+
         let pen = make_penalty(lam);
         let weights: Array1<f64> = pen.weights().to_owned();
 
@@ -219,6 +262,11 @@ where
             config.screening
         };
 
+        if let Some(ts) = &phase_start {
+            t.setup_ns = ts.elapsed().as_nanos() as u64;
+        }
+        let screening_start = if profile { Some(Instant::now()) } else { None };
+
         let mut ws: Vec<usize> = match effective_screening {
             Screening::Off => (0..p).collect(),
             Screening::Strong => {
@@ -237,14 +285,29 @@ where
                         .expect("just set prev_residual = Some(r_owned)")
                         .view()
                 };
-                priority_rule_screen(
-                    design,
-                    datafit,
-                    r_view,
-                    weights.view(),
-                    warm.view(),
-                    config.p0,
-                )
+                // M13.2: reuse the gradient `compute_outer_state` already
+                // produced at the end of the previous λ. Same residual,
+                // same matrix, same answer — saves an O(np) matvec per λ
+                // (~10% wall on medium Lasso). Falls back to recomputing
+                // when no cache (cold start or after a saturated-bypass λ).
+                let n_support = warm.iter().filter(|&&b| b != 0.0).count();
+                let ws_size = (n_support * 2).max(config.p0).min(p);
+                if ws_size == 0 {
+                    Vec::new()
+                } else if ws_size >= p {
+                    (0..p).collect()
+                } else if let Some(g) = &prev_grad {
+                    priority_rule_screen_with_grad(g.view(), weights.view(), warm.view(), ws_size)
+                } else {
+                    priority_rule_screen(
+                        design,
+                        datafit,
+                        r_view,
+                        weights.view(),
+                        warm.view(),
+                        config.p0,
+                    )
+                }
             }
             Screening::GapSafe => {
                 let res_view = if k == 0 {
@@ -268,6 +331,11 @@ where
             }
         };
 
+        if let Some(ts) = &screening_start {
+            t.screening_ns = ts.elapsed().as_nanos() as u64;
+        }
+        let lipschitz_start = if profile { Some(Instant::now()) } else { None };
+
         // Cache per-coord Lipschitz constants once per λ. For unweighted
         // LS this is an O(1) table lookup per call, but weighted-LS /
         // GLM datafits compute it via a column scan, so caching avoids
@@ -275,6 +343,10 @@ where
         // the full feature set in the verifier loop below.
         let coord_lipschitz: Vec<f64> =
             (0..p).map(|j| datafit.coord_lipschitz(design, j)).collect();
+
+        if let Some(ts) = &lipschitz_start {
+            t.lipschitz_ns = ts.elapsed().as_nanos() as u64;
+        }
 
         let mut passes = 0usize;
         let mut inner_cd_cfg = config.cd.clone();
@@ -303,6 +375,14 @@ where
         // smaller λ.
         let mut screened: Vec<bool> = vec![false; p];
 
+        // M13.2: holds `outer.grad` from the most recent
+        // `compute_outer_state` call at this λ. Lifted into `prev_grad`
+        // after the loop so the next λ's `priority_rule_screen` can
+        // skip its own matvec. Stays `None` when the loop breaks via
+        // the `Screening::Off` short-circuit (no `compute_outer_state`
+        // was called → no fresh grad).
+        let mut last_outer_grad: Option<Array1<f64>> = None;
+
         let (final_residual, last_report): (Array1<f64>, CdReport) = loop {
             passes += 1;
 
@@ -321,9 +401,13 @@ where
                 config.cd.tol * 10.0
             };
 
+            let cd_start = if profile { Some(Instant::now()) } else { None };
             let (new_beta, r, report) =
                 cd_solve_subset(warm, &ws, design, datafit, &*pen, &inner_cd_cfg);
             warm = new_beta;
+            if let Some(ts) = &cd_start {
+                t.inner_cd_ns += ts.elapsed().as_nanos() as u64;
+            }
 
             // Without screening (either by config or via the M13.1
             // saturation bypass above), the WS is the full set; one
@@ -341,6 +425,7 @@ where
             beta_history.push(warm.clone());
             residual_history.push(r.clone());
 
+            let bookkeeping_chunk_start = if profile { Some(Instant::now()) } else { None };
             // Try Anderson on the residual sequence. When successful,
             // gives `(β_acc, r_acc)` consistent with `r = Xβ − y`.
             let extrapolation = if residual_history.len() >= 3 {
@@ -348,8 +433,12 @@ where
             } else {
                 None
             };
+            if let Some(ts) = &bookkeeping_chunk_start {
+                t.dual_extrap_ns += ts.elapsed().as_nanos() as u64;
+            }
 
-            let outer = compute_outer_state(
+            let outer_start = if profile { Some(Instant::now()) } else { None };
+            let mut outer = compute_outer_state(
                 design,
                 datafit,
                 &*pen,
@@ -364,6 +453,14 @@ where
                     .map(|(r_acc, beta_acc)| (r_acc.view(), beta_acc.view())),
                 &mut best_dual_obj,
             );
+            if let Some(ts) = &outer_start {
+                t.outer_state_ns += ts.elapsed().as_nanos() as u64;
+            }
+            // M13.2: stash this pass's gradient so the next λ can skip
+            // its own `full_grad` matvec. `take` empties `outer.grad`
+            // (we don't read it downstream), avoiding a clone.
+            last_outer_grad = Some(std::mem::take(&mut outer.grad));
+            let bookkeeping_start = if profile { Some(Instant::now()) } else { None };
             prev_outer_pgd = outer.max_pgd;
 
             // Update the gap-safe screening mask, then prune the WS.
@@ -425,8 +522,16 @@ where
             }
             ws.sort_unstable();
             ws.dedup();
+            if let Some(ts) = &bookkeeping_start {
+                t.bookkeeping_ns += ts.elapsed().as_nanos() as u64;
+            }
         };
 
+        // The two `continue` paths in the KKT loop don't enter the
+        // `bookkeeping_start` region; their per-pass cost (mostly the
+        // `prev_outer_pgd` assignment) shows up as untracked time in
+        // the per-λ total. Acceptable for first-pass profiling; if the
+        // gap turns out to matter we'd add an explicit start there too.
         betas.row_mut(k).assign(&warm);
         iters.push(last_report.iter);
         converged.push(last_report.converged);
@@ -435,6 +540,19 @@ where
         kkt_passes_out.push(passes);
 
         prev_residual = Some(final_residual);
+        // Hand the per-λ gradient cache off to the next λ. `None` here
+        // is correct for the saturated-bypass case (we broke via the
+        // `Screening::Off` short-circuit, so no fresh gradient was
+        // computed) and forces the next λ to recompute if needed.
+        prev_grad = last_outer_grad;
+
+        if profile {
+            phase_log.push(t);
+        }
+    }
+
+    if profile {
+        report_phase_log(&phase_log);
     }
 
     (
@@ -471,6 +589,90 @@ where
 /// verifier pull in violators, and the WS size grows monotonically
 /// with the support, matching the actual active-set dynamics.
 ///
+/// Pretty-print the per-λ phase breakdown to stderr — fired from
+/// [`solve_path`] when `SKEIN_PROFILE_PATH` is set in the environment.
+/// M13.2 attribution tool; not part of the v0.x API.
+fn report_phase_log(log: &[PhaseTimings]) {
+    if log.is_empty() {
+        return;
+    }
+    let mut tot = PhaseTimings::default();
+    for t in log {
+        tot.setup_ns += t.setup_ns;
+        tot.screening_ns += t.screening_ns;
+        tot.lipschitz_ns += t.lipschitz_ns;
+        tot.inner_cd_ns += t.inner_cd_ns;
+        tot.dual_extrap_ns += t.dual_extrap_ns;
+        tot.outer_state_ns += t.outer_state_ns;
+        tot.bookkeeping_ns += t.bookkeeping_ns;
+    }
+    let n = log.len() as u64;
+    let total_ns = tot.setup_ns
+        + tot.screening_ns
+        + tot.lipschitz_ns
+        + tot.inner_cd_ns
+        + tot.dual_extrap_ns
+        + tot.outer_state_ns
+        + tot.bookkeeping_ns;
+    let pct = |x: u64| -> f64 {
+        if total_ns == 0 {
+            0.0
+        } else {
+            100.0 * (x as f64) / (total_ns as f64)
+        }
+    };
+    eprintln!();
+    eprintln!("solve_path phase breakdown ({} λs)", n);
+    eprintln!("  phase                total (ms)   per-λ (µs)   % of tracked");
+    eprintln!(
+        "  setup              {:>10.3}   {:>10.1}   {:>5.1}%",
+        tot.setup_ns as f64 / 1e6,
+        (tot.setup_ns as f64 / n as f64) / 1e3,
+        pct(tot.setup_ns)
+    );
+    eprintln!(
+        "  screening (init WS){:>10.3}   {:>10.1}   {:>5.1}%",
+        tot.screening_ns as f64 / 1e6,
+        (tot.screening_ns as f64 / n as f64) / 1e3,
+        pct(tot.screening_ns)
+    );
+    eprintln!(
+        "  lipschitz cache    {:>10.3}   {:>10.1}   {:>5.1}%",
+        tot.lipschitz_ns as f64 / 1e6,
+        (tot.lipschitz_ns as f64 / n as f64) / 1e3,
+        pct(tot.lipschitz_ns)
+    );
+    eprintln!(
+        "  inner_cd           {:>10.3}   {:>10.1}   {:>5.1}%",
+        tot.inner_cd_ns as f64 / 1e6,
+        (tot.inner_cd_ns as f64 / n as f64) / 1e3,
+        pct(tot.inner_cd_ns)
+    );
+    eprintln!(
+        "  dual_extrap        {:>10.3}   {:>10.1}   {:>5.1}%",
+        tot.dual_extrap_ns as f64 / 1e6,
+        (tot.dual_extrap_ns as f64 / n as f64) / 1e3,
+        pct(tot.dual_extrap_ns)
+    );
+    eprintln!(
+        "  outer_state (KKT)  {:>10.3}   {:>10.1}   {:>5.1}%",
+        tot.outer_state_ns as f64 / 1e6,
+        (tot.outer_state_ns as f64 / n as f64) / 1e3,
+        pct(tot.outer_state_ns)
+    );
+    eprintln!(
+        "  bookkeeping        {:>10.3}   {:>10.1}   {:>5.1}%",
+        tot.bookkeeping_ns as f64 / 1e6,
+        (tot.bookkeeping_ns as f64 / n as f64) / 1e3,
+        pct(tot.bookkeeping_ns)
+    );
+    eprintln!(
+        "  TRACKED            {:>10.3}   {:>10.1}",
+        total_ns as f64 / 1e6,
+        (total_ns as f64 / n as f64) / 1e3
+    );
+}
+
 /// One BLAS gemv to compute the gradient; one O(p) scan to rank.
 /// Argpartition (`select_nth_unstable_by`) avoids a full sort.
 fn priority_rule_screen(
@@ -493,9 +695,25 @@ fn priority_rule_screen(
     }
 
     let grad = datafit.full_grad(design, residual);
-    // `score[j]` is the priority; INFINITY for pinned features, else
-    // `|grad_j| / w_j`. We sort by score descending and take the top
-    // `ws_size`.
+    priority_rule_screen_with_grad(grad.view(), weights, beta, ws_size)
+}
+
+/// Variant of [`priority_rule_screen`] that takes a precomputed gradient
+/// instead of running its own `full_grad`. Used by the path solver to
+/// reuse the gradient computed by `compute_outer_state` at the end of
+/// the previous λ — the warm-start residual at λ_{k+1} is the
+/// post-CD residual at λ_k, so the same matvec result is valid.
+/// (M13.2 cache; saves ~10% wall on medium Lasso.)
+fn priority_rule_screen_with_grad(
+    grad: ArrayView1<'_, f64>,
+    weights: ArrayView1<'_, f64>,
+    beta: ArrayView1<'_, f64>,
+    ws_size: usize,
+) -> Vec<usize> {
+    let p = grad.len();
+    debug_assert_eq!(weights.len(), p);
+    debug_assert_eq!(beta.len(), p);
+
     let mut scored: Vec<(usize, f64)> = (0..p)
         .map(|j| {
             let w = weights[j];
@@ -508,11 +726,7 @@ fn priority_rule_screen(
         })
         .collect();
 
-    // Argpartition: descending order by score. The top `ws_size`
-    // entries (by some permutation) end up in `scored[..ws_size]`.
     scored.select_nth_unstable_by(ws_size - 1, |a, b| {
-        // Reverse so largest score sorts first; treat NaN as smallest
-        // (it shouldn't appear, but be defensive).
         b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
     });
 
@@ -634,6 +848,12 @@ struct OuterState {
     /// screening only applies on penalties whose lasso-form dual is
     /// tight at the optimum.
     safely_inactive: Vec<usize>,
+    /// Full gradient `X^T r / n` computed during the KKT verifier scan.
+    /// Surfaced so the path solver can reuse it as the warm-start
+    /// gradient for the next λ's `priority_rule_screen` (M13.2 cache —
+    /// the warm-start residual at λ_{k+1} is the post-CD residual at
+    /// λ_k, so the gradient on that residual is identical).
+    grad: Array1<f64>,
 }
 
 // Path-solver inner helper; eleven args read as a single pass-through of
@@ -822,6 +1042,7 @@ fn compute_outer_state(
         gap,
         lambda_bound,
         safely_inactive,
+        grad,
     }
 }
 

@@ -26,7 +26,7 @@ load-bearing piece; everything after stacks on top of it.
 | M10 — Performance improvements | ⏳ partial | M10.1 profile (`col_dot` is the floor without BLAS) + M10.3 five waves: (1) col_axpy + F-order DenseMatrix + path-solver fixes; (2) adaptive inner tol via PGD + KKT-priority WS; (3) `blas-accelerate` feature; (4) (skipped — inner active-set CD didn't pay off); (5) F-series — duality gap + Anderson on residuals + gap-safe sphere screening, all gated and tested. **Skein medium lasso/LS: 7.6 s → 0.78 s sparse / 1.17 s deep — 6.5–10× total. Within 1.5× of glmnet on sparse, 1.9× on deep; ~8–9× behind sklearn's Cython `lasso_path`.** F-series wallclock-neutral on M9.3 scenarios — infrastructure correct but post-pass screening fires only on multi-pass λs (most converge in 1). M10.4 verified across deep + sparse regimes. Pending: G. cross-platform BLAS (OpenBLAS/MKL), H. pre-pass gap-safe screening, I. Cython-grade rewrite (off-roadmap). |
 | M11 — Graphical models | ✅ done | Single-population glasso (L1 / MCP / SCAD) + joint glasso across `K` populations (Danaher–Wang–Witten group form via ADMM) + EBIC tuner; M11.3 bootnet-style bootstrap edge stability shipped. |
 | M12 — Hardening (robustness, test coverage, CI) | ✅ done | Penalty + datafit unit-test coverage closed; Rust integration test directory added; R-fixture gate in CI; PyO3-layer smoke job (`.github/workflows/bench-smoke.yml`); pre-flight tight-tol screening test now a separate fail-fast CI step with 2-min timeout (R3, ci.yml); numerical guards (`W_FLOOR=1e-6`, `ETA_CLAMP=30.0`) centralized in `crates/skein-core/src/numerics.rs` (R4); R1 unwrap audit closed (`block_path_lla.rs` documented; `cd.rs::anderson_extrapolate` documented; dead `Groups::from_csr` call removed from `glasso_admm.rs`; remaining hits are test-only setup invariants); `Groups::has_overlap()` + parallel block-CD overlap detection with serial Gauss-Seidel fallback + `Once`-gated stderr warning + fixture (C5); criterion bench tree expanded with `lla_outer.rs`, `prox_newton_glm.rs`, `glasso.rs` alongside existing `block_cd.rs`, README updated (P2); `skein-py/src/lib.rs` 10,628 → 275 lines, every datafit family in its own module: `glasso.rs`, `glm.rs`, `ls.rs`, `mmap_chunked.rs`, `multinomial.rs`, `multitask.rs` (P4). No new algorithmic surface. |
-| M13 — Performance findings from `benches/v2` | ⏳ partial | M13.1 adaptive screening saturation bypass shipped (regression test gates correctness); M13.4 Phase 2.3 LLA fixed-point short-circuit shipped (`block_path_lla.rs`). Remaining: M13.2 per-λ fixed-cost cut for convex Lasso, M13.4b native group-MCP BCD, M13.5 MCP one-outer-iter short-circuit. |
+| M13 — Performance findings from `benches/v2` | ⏳ partial | M13.1 adaptive screening saturation bypass shipped; M13.2 cross-λ gradient cache shipped (-10.4% wall on medium Lasso); M13.4 Phase 2.3 LLA fixed-point short-circuit shipped; **M13.4b native group-MCP BCD shipped (-3.46× wall on medium ls_group_mcp; flips skein/grpreg from 3.34× slower to 1.20× faster)**; M13.6 re-characterized post-M13.2 (memory-bandwidth wall in inner CD past medium scale, not fixed-cost overhead). Remaining: M13.5 MCP one-outer-iter short-circuit; group-MCP variants for logistic/Poisson/Cox still on LLA. |
 
 Test count at this snapshot: **350 cargo + 412 pytest, all green.**
 
@@ -2067,24 +2067,46 @@ Verified by:
   asserts the bypass fires on a dense-truth problem and produces
   bit-identical coefficients to `Screening::Off`.
 
-### M13.2 — Per-λ fixed cost dominates convex Lasso, not inner CD (NEW)
+### ✅ M13.2 — Cross-λ gradient cache (SHIPPED)
 
-Tightening `tol` from 1e-4 to 1e-7 changes wall-clock by ~3 % at medium
-Lasso. `info_` reports 214 total CD iters across 100 λs (≈ 2.14 / λ).
-At p=1000, one CD sweep ≈ 1 ms and one KKT matvec ≈ 3.85 ms on M1
-Accelerate; the bare-minimum per-λ work is ~8.5 ms but the observed
-per-λ cost is **~22 ms**. The unexplained ~13 ms / λ is fixed-cost
-path / screening / setup work that doesn't shrink when CD converges
-quickly.
+**Profile (`SKEIN_PROFILE_PATH=1 lasso_ls_medium`, n=10k, p=1k, 100 λs,
+tol=1e-6, M1 Accelerate):**
 
-**Actions:**
-- Add a per-λ flamegraph cell to the v2 suite — single skein Lasso fit
-  via `cargo flamegraph` (or `py-spy --native`) so the ~13 ms / λ
-  overhead is attributed to a function.
-- Likely suspects to inspect: `path.rs` λ_max recomputation, screening
-  set construction, KKT statistic recomputation, working-set bookkeeping
-  between λ steps. F.5 / F.4 of M10 already reused gradients across λ;
-  whether the *strong-rule* recomputation does so is the question.
+| Phase | per-λ before | per-λ after | Δ |
+|---|---:|---:|---:|
+| screening (init WS) | 2918 µs | **209 µs** | -2709 µs |
+| inner_cd | 22518 µs | 22226 µs | (noise) |
+| outer_state (KKT) | 2814 µs | 2864 µs | (noise) |
+| other | <10 µs | <10 µs | — |
+| **wall** | **2.847 s** | **2.552 s** | **-10.4 %** |
+
+The earlier "13 ms unattributed" claim was an overestimate based on a
+different bench setup; the env-var-gated `PhaseTimings` instrumentation
+in `solve_path` (kept as observability) attributed the per-λ cost to:
+- 79 % inner CD (genuine CD work — ~3.5 sweeps × ~800 active features
+  × col_dot at n=10k);
+- 10 % `priority_rule_screen` matvec at λ start;
+- 10 % `compute_outer_state` matvec at KKT-loop end.
+
+**Both matvecs compute `X^T r / n` on the same residual** — the
+post-CD residual at λ_k *is* the warm-start residual at λ_{k+1}. Fix:
+`OuterState` now exposes `grad`; `solve_path` caches it as `prev_grad`
+between λs and feeds it into a new `priority_rule_screen_with_grad(...)`
+variant that skips the recompute. Cache cleared on cold start (k=0)
+and after saturated-bypass λs (Off mode skips `compute_outer_state`,
+so no fresh grad). Iter count + KKT passes unchanged ⇒ no algorithmic
+regression.
+
+**Reproduce:**
+```bash
+cargo build --release --example lasso_ls_medium
+SKEIN_PROFILE_PATH=1 ./target/release/examples/lasso_ls_medium
+```
+
+**Remaining per-λ cost** is ~88 % inner CD + ~11 % `compute_outer_state`
+matvec (at the KKT-loop end, on freshly-CD'd residual — can't share
+with anything). Further wins now have to come from the inner CD's
+~22 ms / λ.
 
 ### M13.3 — Convex Lasso/EN sklearn gap is NOT explained by LLA
 
@@ -2201,14 +2223,75 @@ effect on easy ones. **Phase 2.1 (λ_max short-circuit), 2.2 (empty-WS
 guard), and 2.4 (WS reuse) were deferred** after profiling showed each
 would deliver <1 % wall savings on the bench cell. The remaining ~3×
 gap to grpreg at medium/dense is structural to the LLA approach and
-is scoped as follow-up milestone **M13.4b — native group-MCP BCD**
-(Breheny & Huang 2015 §3 direct prox; no LLA outer loop).
+was closed by follow-up milestone **M13.4b** (see below).
 
 Per-λ instrumentation now includes `info_["per_lambda_wall_ns"]`
 (populated by every `solve_block_path_lla` caller in the PyO3 layer),
 which the new profile target
 `crates/skein-core/examples/group_mcp_ls_medium.rs` exercises.
 Full writeup: `docs/perf/m13_4_profile.md`.
+
+### ✅ M13.4b — Native group-MCP block-CD (SHIPPED)
+
+The LLA wrapper around `GroupLasso(weighted)` was paying ~5× the
+inner-CD work needed to reach the same stationary point of the
+group-MCP objective, because each outer iter re-solves the surrogate
+convex problem from scratch. `GroupMcp::prox_group` already implements
+the closed-form group-MCP prox (Breheny & Huang 2015 §3); the path
+solver `solve_block_path` already accepts arbitrary `GroupPenalty`
+factories. So the fix was a one-line change at the PyO3 layer:
+`solve_group_mcp_ls_path` and `solve_group_mcp_ls_path_sparse` now
+build `GroupMcp::with_weights(λ, γ, w)` directly and call
+`build_block_path_outputs` instead of `build_block_path_lla_outputs`.
+The `max_outer` / `outer_tol` parameters stay in the Python signature
+for backward compat (kwargs still accept them) but are ignored —
+convergence is governed by the inner CD's `tol` and the path solver's
+KKT verifier.
+
+**Strong-rule screening still applies.** The block strong-rule's
+β_g=0 KKT subdifferential `λ·[-w_g, w_g]` is identical for `GroupLasso`
+and `GroupMcp` (they share the same convex envelope at zero), so the
+screen carries over unchanged. We don't need a non-convex-aware
+screening rule.
+
+**Empirical comparison** (`crates/skein-core/examples/group_mcp_lla_vs_native.rs`,
+n=10k, p=1k, group_size=5, n_groups=200, k_active=5, tol=1e-7,
+γ=3.0, M1 Accelerate, single-process isolated):
+
+| solver | wall | inner CD sweeps | KKT passes |
+|---|---:|---:|---:|
+| LLA-wrapped GroupLasso (pre-fix) | 36.2 s | 1 688 | 340 |
+| Native GroupMcp BCD (this fix)   | 10.5 s | 488 | 100 |
+
+**3.46× wall-clock reduction.** The two solvers reach essentially the
+same stationary point: Jaccard = 1.0 on support at every λ, max
+relative objective gap 5.4e-7 (numerical precision), max relative
+ℓ₂ coefficient deviation 0.49 — the larger coefficient deviation
+reflects that group MCP is non-convex (multiple stationary points
+exist), but both solvers land at points achieving the same value of
+the original penalized objective.
+
+Compared against the ROADMAP M13.4 grpreg comparison
+(`grpreg medium/dense = 12.56 s`), native skein is now **1.20× faster
+than grpreg** — flipping the prior "skein 3.34× slower" finding.
+
+**Verified gates:** 350 cargo lib + 5 integration tests pass; full
+412 pytest pass. The pre-existing
+`test_group_mcp_path_recovers_active_groups_via_lla` was renamed to
+`..._via_native_bcd` and its `outer_iters` assertion (LLA-specific
+field) replaced with checks on `iters` / `kkt_passes`.
+
+**Out of scope (kept on LLA for now):** logistic / Poisson / Cox
+group-MCP variants. Their inner block-CD already runs against a
+weighted-LS surrogate from the prox-Newton outer loop, so swapping
+them to native group-MCP would change two layers at once. Worth a
+follow-up but not bundled with M13.4b.
+
+**Reproduce:**
+```bash
+cargo build --release --example group_mcp_lla_vs_native
+./target/release/examples/group_mcp_lla_vs_native
+```
 
 ### M13.5 — MCP path overhead even in convex regime
 
@@ -2223,19 +2306,66 @@ outer iteration, even on the trivial first-iteration-converges case.
 A short-circuit detector ("if outer-step weights change < ε, accept
 and move to next λ") would close most of this.
 
-### M13.6 — Skein has worse scaling exponent than sklearn on Lasso
+### ⏳ M13.6 — Lasso scaling exponent (re-characterized post-M13.2)
 
-100× problem growth (small → medium):
+The original ROADMAP claim — "skein 38.8× vs sklearn 22.3× for 100×
+problem growth, attributable to fixed per-λ overhead" — was based on
+pre-M13.2 numbers. M13.2 eliminated the per-λ `priority_rule_screen`
+matvec, which was the dominant fixed cost. Post-M13.2 measurements
+on the canonical v2 sizes (`small` n=1000, p=200; `medium` n=10000,
+p=1000; `large` n=50000, p=5000), single-fit isolated profile,
+M1 Accelerate, tol=1e-7:
 
-| Implementation | scaling factor |
-|---|---|
-| skein | 38.8× |
-| skglm | (similar to skein) |
-| sklearn | 22.3× |
+| Transition | n×p ratio | wall ratio | factor (wall/np) | verdict |
+|---|---:|---:|---:|---|
+| small → medium | 50× | 37.0× | **0.74×** | sub-linear ✓ |
+| medium → large | 25× | 37.6× | **1.50×** | **super-linear** |
+| small → large  | 1250× | 1392× | 1.11× | mildly super-linear overall |
 
-Sklearn's better exponent says it spends a larger fraction of its
-time in BLAS as problems grow. Skein has constant per-λ overhead that
-does not amortize as well — the same fixed cost identified by M13.2.
+**The sub-linearity at small → medium is real**: M13.2's gradient cache
+amortizes setup work; the lipschitz cache + setup cost dilutes as np
+grows; inner CD's sweep count even drops as p grows (because the
+cold-start λ_max walks become relatively cheaper).
+
+**The super-linearity at medium → large is also real, and it lives in
+inner CD (92 % of wall)**:
+
+| Phase (per-λ) | medium | large | ratio | vs np=25× |
+|---|---:|---:|---:|---:|
+| screening | 214 µs | 10498 µs | 49× | 1.95× super-linear (cold-start matvec scales with full O(np); only 0.9 % of wall) |
+| inner_cd | 27 115 µs | 1 045 615 µs | **38.6×** | **1.54× super-linear** |
+| outer_state | 2 880 µs | 77 721 µs | 27× | 1.08× ≈ linear |
+
+Per coord-visit cost in inner CD: 11 µs (medium) → 100 µs (large) =
+9.1×. n grew 5×, so 5× expected from `col_dot` length; the extra
+**~1.8× is memory-miss overhead**. At n=50 000 a single X column is
+~400 KB (bigger than typical L2); the full design is 2 GB (past L3).
+`col_dot` shifts from compute-bound to memory-bandwidth-bound, and
+each coord visit streams a fresh column from main memory.
+
+**This is a structural wall, not fixed-cost overhead**: BLAS Accelerate
+already does what BLAS can do (the M10.1 profile showed `dot_generic`
+/ Accelerate `cblas_ddot` already takes 80 % of inner-CD self-time).
+Sklearn faces the same wall in principle — but the head-to-head
+comparison at the canonical large size hasn't been re-run since
+M13.2 shipped. The ROADMAP "38.8× / 22.3×" comparison should be
+re-measured before claiming a sklearn gap; it's stale.
+
+**Reproduce:**
+```bash
+cargo build --release --example lasso_ls_scaling
+SKEIN_PROFILE_PATH=1 SKEIN_SCALING_LARGE=1 \
+    ./target/release/examples/lasso_ls_scaling
+```
+
+**Actions (none currently scheduled):**
+- Re-run the v2 `large / deep` cell head-to-head with sklearn /
+  skglm to refresh the cross-package comparison numbers.
+- Inner-CD column-batching for cache reuse (process multiple coords
+  per X-column scan) is the lever that would attack the memory-miss
+  overhead. Structural change to `cd_solve_subset`; M10.I territory.
+- Higher-priority open items (M13.4b native group-MCP BCD, M13.5 MCP
+  one-outer-iter short-circuit) don't depend on this scaling work.
 
 ### M13.7 — Jacobi-parallel block-CD remains a negative result
 

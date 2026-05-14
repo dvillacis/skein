@@ -218,7 +218,10 @@ def test_group_lasso_single_lambda_regressor_smoke():
     assert isinstance(model.intercept_, float)
 
 
-def test_group_mcp_path_recovers_active_groups_via_lla():
+def test_group_mcp_path_recovers_active_groups_via_native_bcd():
+    # M13.4b — LS group MCP now uses native block-CD on `GroupMcp`
+    # directly (no LLA outer loop). Info dict carries `iters` and
+    # `kkt_passes` (the standard block-path report), not `outer_iters`.
     x, y, _, groups = _sparse_group_problem(seed=4)
     model = skein.GroupMCPPathRegressor(
         groups=groups, gamma=3.0, n_lambdas=20, lambda_min_ratio=5e-3,
@@ -227,8 +230,9 @@ def test_group_mcp_path_recovers_active_groups_via_lla():
     last = model.coefs_[-1]
     assert _group_norm(last, groups, 0) > 0.5
     assert _group_norm(last, groups, 2) > 0.5
-    # Outer-iter info field is populated.
-    assert "outer_iters" in model.info_
+    # Standard block-path report fields are populated.
+    assert "iters" in model.info_
+    assert "kkt_passes" in model.info_
 
 
 def test_sparse_group_lasso_within_group_sparsity():
