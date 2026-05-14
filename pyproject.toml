@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "skein-glm"
-version = "0.7.0"
+version = "0.8.0"
 description = "Weighted structured nonconvex sparse models (Python + Rust)"
 readme = "README.md"
 license = { text = "MIT" }

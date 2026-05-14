@@ -29,8 +29,7 @@ use skein_core::{
     solver::{
         cd_solve, solve_block_path, solve_block_path_lla, solve_path, solve_path_lla,
         surrogate_sparse_group_mcp, surrogate_sparse_group_scad, surrogate_weights_bridge,
-        surrogate_weights_group_scad, BlockPathConfig, CdConfig,
-        PathConfig, Screening,
+        surrogate_weights_group_scad, BlockPathConfig, CdConfig, PathConfig, Screening,
     },
     standardize::{
         destandardize_path, rescale_weights_for_standardize, standardize, StandardizeConfig,

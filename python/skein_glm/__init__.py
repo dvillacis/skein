@@ -538,4 +538,4 @@ __all__ = [
     "debiased_poisson_lasso",
 ]
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"

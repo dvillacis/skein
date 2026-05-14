@@ -4,6 +4,219 @@ All notable changes to `skein-glm` are recorded here. The project follows
 semantic versioning, with the pre-1.0 minor-bump-on-feature policy
 documented in `docs/extending/rust-api.md`.
 
+## [0.8.0] — 2026-05-15
+
+Hardening + performance release: **M12 finish (every recommended-ordering
+audit item closed) + M13 wins (M13.2 cross-λ gradient cache, M13.4b
+native group-MCP block-CD)**. No new algorithmic surface; no new
+penalties or datafits. The headline numbers:
+
+- **medium Lasso: -10.4 % wall-clock** (M13.2, gradient-cache reuse
+  between λs in the strong-rule screening + KKT loop)
+- **medium ls_group_mcp: -3.46× wall-clock** (M13.4b, native group-MCP
+  prox replaces LLA outer loop). Flips the prior `grpreg medium/dense
+  3.34× faster` finding to **skein 1.20× faster than grpreg**.
+- `skein-py/src/lib.rs`: **10 628 → 275 lines** (M12 P4 split — every
+  datafit family in its own module).
+
+Test count: **355 cargo + 412 pytest, all green** (350 lib + 5
+integration; up from 292 cargo at 0.7.0).
+
+### Performance — M13.4b: Native group-MCP block-CD
+
+`solve_group_mcp_ls_path[_sparse]` (PyO3 layer) now constructs `GroupMcp`
+directly and calls the standard `solve_block_path` instead of routing
+through `solve_block_path_lla` with a weighted `GroupLasso` surrogate.
+`GroupMcp::prox_group` already implemented the closed-form group-MCP
+prox per Breheny & Huang 2015 §3, and `solve_block_path` already
+accepted arbitrary `GroupPenalty` factories — the LLA wrapper was
+paying ~5× the inner-CD work needed to reach the same stationary point.
+
+Strong-rule screening still applies: the β_g=0 KKT subdifferential
+`λ·[-w_g, w_g]` is identical for `GroupLasso` and `GroupMcp`, so the
+rule carries over unchanged.
+
+`max_outer` / `outer_tol` parameters stay in the Python signature for
+backward compat (kwargs still accept them) but are now ignored.
+Convergence is governed by the inner CD's `tol` and the path solver's
+KKT verifier.
+
+Empirical comparison (`crates/skein-core/examples/group_mcp_lla_vs_native.rs`,
+n=10k, p=1k, group_size=5, n_groups=200, k_active=5, tol=1e-7,
+γ=3.0, M1 Accelerate):
+
+| solver | wall | inner CD sweeps | KKT passes |
+|--------|-----:|----------------:|-----------:|
+| LLA-wrapped GroupLasso (pre-fix) | 36.2 s |  1 688 |  340 |
+| Native GroupMcp BCD (this fix)   | 10.5 s |    488 |  100 |
+
+Cross-solver agreement: Jaccard = 1.0 on support at every λ; max
+relative objective gap 5.4e-7 (numerical precision); max relative
+ℓ₂ coefficient deviation 0.49 (different stationary points of the
+non-convex problem, but both reach the same value of the original
+penalized objective).
+
+**Out of scope (kept on LLA for now):** logistic / Poisson / Cox
+group-MCP variants. Their inner block-CD already runs against a
+weighted-LS surrogate from the prox-Newton outer loop, so swapping
+to native group-MCP would change two layers at once. Worth a
+follow-up but not bundled here.
+
+### Performance — M13.2: Cross-λ gradient cache + path-solver phase profile
+
+`solve_path` (the LS scalar path solver) was computing two `full_grad`
+matvecs per λ: one in `priority_rule_screen` at the START of λ_{k+1}
+on the warm-start residual, and one in `compute_outer_state` at the
+END of λ_k on the post-CD residual — the same residual. `OuterState`
+now exposes its computed `grad`; `solve_path` caches it as `prev_grad`
+and a new `priority_rule_screen_with_grad` variant skips the recompute.
+Cache cleared on cold start (k=0) and after saturated-bypass λs (Off
+mode skips `compute_outer_state`, so no fresh grad).
+
+Result on the `lasso_ls_medium` example (n=10k, p=1k, 100 λs,
+tol=1e-6, M1 Accelerate, single-process isolated): **2.847 s → 2.552 s
+= -10.4 % wall**. Iter count + KKT passes unchanged (348 / 100 in both
+runs) ⇒ no algorithmic regression.
+
+Also added: env-var-gated `PhaseTimings` instrumentation in
+`solve_path` (active only when `SKEIN_PROFILE_PATH` is set, zero
+overhead otherwise). Attributes per-λ time to `setup` / `screening` /
+`lipschitz` / `inner_cd` / `dual_extrap` / `outer_state` /
+`bookkeeping`. Kept as permanent observability for future perf work.
+
+### Performance — M13.6: Re-characterized post-M13.2
+
+The pre-M13.2 ROADMAP claim — "skein 38.8× / sklearn 22.3× super-linear
+scaling, attributable to fixed per-λ overhead" — is stale. With M13.2
+closed, the new `lasso_ls_scaling` example (canonical v2 small / medium
+/ large sizes) shows:
+
+| transition | n×p ratio | wall ratio | factor (wall/np) |
+|---|---:|---:|---:|
+| small → medium | 50× | 37.0× | 0.74× sub-linear |
+| medium → large | 25× | 37.6× | 1.50× super-linear |
+| small → large  | 1250× | 1392× | 1.11× mildly super-linear overall |
+
+The medium → large super-linearity lives entirely in inner CD (92 % of
+wall), and the diagnosis is **memory-bandwidth bound**: at n=50k a
+single X column is ~400 KB (bigger than typical L2); the full design
+is 2 GB (past L3). `col_dot` shifts from compute-bound to memory-bound,
+each coord visit streaming a fresh column from main memory. Same wall
+sklearn faces in principle. Further wins past medium scale require
+either column-batching for cache reuse or an algorithm change — both
+large structural undertakings, not on the v0.8.0 path.
+
+### Hardening — M12 finish
+
+Every recommended-ordering audit item from the v0.7.0 M12 punch list
+closed. No new algorithmic surface.
+
+#### R4 — Centralized numerical guards
+
+New `crates/skein-core/src/numerics.rs` exports `W_FLOOR = 1e-6` and
+`ETA_CLAMP = 30.0`. `binomial_logit` / `poisson_log` / `cox_ph` /
+`huber` datafits import from there instead of redefining. Future
+bumps are one edit.
+
+#### R3 — Solver pre-flight as a fail-fast CI gate
+
+New step in `.github/workflows/ci.yml` runs the tight-tol screening
+test in isolation with `timeout-minutes: 2`, before the full `cargo
+test`. If a future change makes a stopping condition unreachable
+(the `gap < tol²` → `1e-24` incident that motivated CLAUDE.md's
+pre-flight protocol), the test hangs in isolation and fails fast
+instead of starving the parallel suite.
+
+#### R1 — `unwrap` audit closed
+
+Audited the 59 `unwrap()` / `expect()` hits in `crates/skein-core/src/`.
+Production-code findings:
+
+- `cd.rs::anderson_extrapolate` bare `unwrap()` swapped to documented
+  `.expect()` mirroring the loop-invariant pattern in
+  `path.rs::anderson_extrapolate_pair`.
+- `block_path_lla.rs` three undocumented unwraps (which mirror
+  `block_path.rs`'s strong-rule screening pattern) documented to match.
+- `glasso_admm.rs::Groups::from_csr(...).expect(...)` was dead code
+  (built `_groups`, immediately dropped). Removed entirely along with
+  the now-unused `use crate::groups::Groups`.
+
+Remaining hits are test-only setup invariants — acceptable.
+
+#### C5 — Parallel block-CD overlap detection + serial fallback
+
+New `Groups::has_overlap()` public method (O(`idx.len()` + `max_idx`)
+bitset). `block_cd_solve_subset_parallel_with_cache` checks at entry;
+on overlap dispatches to serial Gauss-Seidel and fires a
+`std::sync::Once`-gated stderr warning. Misuse no longer ships
+silently; joblib path × CV loops don't spam the warning. Fixture
+`block_cd_subset_parallel_with_overlapping_groups_falls_back_to_serial`
+verifies bit-identical β between parallel-with-overlap and serial.
+
+#### P2 — Criterion bench tree expansion
+
+Three new microbench files alongside the existing `block_cd.rs`:
+
+- `crates/skein-core/benches/lla_outer.rs` — group MCP outer-iter
+  scaling vs γ (`{1.5, 3.0, 10.0}`) and n_groups (`{16, 64, 256}`).
+- `crates/skein-core/benches/prox_newton_glm.rs` — single-λ logistic +
+  Poisson Lasso at p=64,256.
+- `crates/skein-core/benches/glasso.rs` — single-population glasso
+  scaling p=20,50,100 + joint glasso ADMM at K=2,3 populations.
+
+`crates/skein-core/benches/README.md` rewritten with how-to-run +
+per-scenario descriptions.
+
+#### P4 — `skein-py/src/lib.rs` split
+
+`skein-py/src/lib.rs` went from **10 628 → 275 lines (-97 %)** — pure
+entry point with module declarations + the `#[pymodule]` registration
+block. Every datafit family lives in its own module:
+
+| file | lines | content |
+|---|---:|---|
+| `glasso.rs` | 261 | Single-population + joint glasso ADMM |
+| `mmap_chunked.rs` | 784 | Memory-mapped + row-block chunked LS+MCP / logistic+MCP, f64 + f32 |
+| `multinomial.rs` | 897 | K-class softmax via Böhning majorization, dense + sparse |
+| `multitask.rs` | 1 290 | Multi-task LS via virtual `MultiTaskDesign`, dense + sparse |
+| `ls.rs` | 2 760 | LS scalar + group, dense + sparse, single-fits, plus cross-cutting helpers (`parse_screening`, `groups_from_labels`, CSC readers, glmnet scales, sparse weight builders, `PathOutput` type alias) |
+| `glm.rs` | 4 544 | Logistic + Poisson + Huber + Cox, dense + sparse |
+| `lib.rs` | 275 | Module declarations + `#[pymodule]` entry |
+
+PyO3's `wrap_pyfunction!` accepts module paths via
+`use $function as wrapped_pyfunction`, so registration uses e.g.
+`wrap_pyfunction!(glm::solve_logistic_mcp_path, m)`. Cross-module
+helpers exposed `pub(crate)`; single source of truth per helper.
+Future iteration: editing logistic code only recompiles `glm.rs`,
+not the 10 K-line monolith.
+
+### Reproducing the perf numbers
+
+```bash
+# M13.2 cross-λ gradient cache (medium Lasso 10% wall):
+cargo build --release --example lasso_ls_medium
+SKEIN_PROFILE_PATH=1 ./target/release/examples/lasso_ls_medium
+
+# M13.6 scaling (small / medium / large = canonical v2 sizes):
+cargo build --release --example lasso_ls_scaling
+SKEIN_PROFILE_PATH=1 SKEIN_SCALING_LARGE=1 \
+    ./target/release/examples/lasso_ls_scaling
+
+# M13.4b LLA vs native group-MCP head-to-head:
+cargo build --release --example group_mcp_lla_vs_native
+./target/release/examples/group_mcp_lla_vs_native
+```
+
+### Backward compatibility
+
+- `GroupMCPPathRegressor` / `GroupMCPRegressor` (LS variant only)
+  still accept `max_outer` / `outer_tol` kwargs but ignore them
+  internally. `info_["outer_iters"]` is no longer populated for these
+  estimators — use `info_["iters"]` / `info_["kkt_passes"]` instead.
+  Logistic / Poisson / Cox group-MCP variants are unchanged (still on
+  LLA).
+- All other public APIs unchanged.
+
 ## [0.7.0] — 2026-05-12
 
 Feature release: **M5.x complete + first-class convex GLM primitives +
