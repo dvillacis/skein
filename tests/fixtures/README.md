@@ -42,6 +42,14 @@ install.packages(
     c("glmnet", "ncvreg", "grpreg", "survival", "jsonlite", "Rcpp", "RcppEigen"),
     repos = "https://cloud.r-project.org"
 )
+
+# Optional — only needed for the M14a R-anchor fixtures
+# (`psych_polychoric.json` and `glmnet_cox_active_set.json`).
+# Mainstream R has no Cox debiased lasso, so the Cox anchor compares
+# against `glmnet(family='cox')` active sets; the polychoric anchor
+# uses `psych::polychoric()`. Both blocks in `generate.R` skip
+# cleanly with a message if the package is missing.
+install.packages(c("psych"), repos = "https://cloud.r-project.org")
 ```
 
 ### Regenerate
@@ -78,6 +86,8 @@ something changed in the reference packages or the generator.
 | `glmnet_lasso_gaussian_mid.json`   | glmnet 5.0  | lasso   | gaussian  | `MCPPathRegressor(gamma=1e6)`  (n=500, p=100) |
 | `ncvreg_mcp_gaussian_mid.json`     | ncvreg 3.16 | MCP     | gaussian  | `MCPPathRegressor(gamma=3.0)`  (n=500, p=100) |
 | `glmnet_lasso_binomial_mid.json`   | glmnet 5.0  | lasso   | binomial  | `LogisticMCPPathRegressor(gamma=1e6)` (n=500, p=100) |
+| `psych_polychoric.json`            | psych 2.x   | (correlation) | ordinal | `polychoric_correlation()` (M14a R-anchor; n=500, p=8) |
+| `glmnet_cox_active_set.json`       | glmnet 5.0  | lasso   | cox       | `debiased_cox_lasso()` active set (M14a R-anchor; n=400, p=25) |
 
 The mid-tier (`*_mid.json`) is an M14c.3 addition that exercises the
 path solvers at a size where LLA local-min divergence on nonconvex
@@ -88,6 +98,24 @@ tier, and `active_set_fuzz_frac` 0.15 vs the default 0.10. A
 regression that only fires at scale (e.g. a screening rule applied
 to the wrong λ index, fixed-cost outer overhead that scales
 super-linearly) gets caught here when the small tier would miss it.
+
+The M14a R-anchor fixtures (`psych_polychoric.json` and
+`glmnet_cox_active_set.json`) gate the v0.9 M14a deliverables
+against independent R references. The polychoric anchor is a
+tight elementwise comparison (atol=5e-3) — Olsson two-step ML is
+well-conditioned, both implementations should land on the MLE. The
+Cox anchor is **not** a debiased reference (mainstream R has none
+for Cox); it's a Jaccard ≥ 0.6 active-set agreement vs
+`glmnet(family='cox')` — useful as a regression gate against
+variable-selection bugs, weaker than the polychoric anchor.
+
+Both are designed to be committed to the repo once regenerated
+(small enough — `psych_polychoric.json` ≈ 250 KB,
+`glmnet_cox_active_set.json` ≈ 200 KB). They use their own inline
+`pytest.skip()` on missing fixtures (not the strict
+`_skipped_if_missing` helper), so they soft-skip in CI even under
+`SKEIN_REQUIRE_FIXTURES=1` until a maintainer regenerates and
+commits them. After commit, the tests run everywhere.
 
 Each JSON file contains:
 

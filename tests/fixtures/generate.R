@@ -22,6 +22,13 @@ suppressPackageStartupMessages({
   library(grpreg)
   library(survival)
   library(jsonlite)
+  # Optional — only needed for the M14a R-anchor fixtures
+  # (polychoric / Cox active-set anchors). If absent, those blocks
+  # at the bottom of this file skip cleanly with a warning.
+  has_psych <- requireNamespace("psych", quietly = TRUE)
+  if (!has_psych) {
+    message("psych not installed — psych_polychoric fixture will be skipped")
+  }
 })
 
 set.seed(1)
@@ -444,6 +451,115 @@ make_logistic_problem_mid <- function(seed = 411) {
     lambdas = as.numeric(fit$lambda),
     coefs = coefs,
     intercepts = as.numeric(intercepts)
+  ))
+}
+
+# ============================================================
+# M14a R-anchor fixtures (independent-reference correctness gates)
+# ============================================================
+#
+# These two fixtures anchor the polychoric correlation estimator
+# (M14a.1) and the Cox debiased lasso (M14a.3) against external R
+# references. Different shape from the at-scale fixtures above —
+# they pin a single reference output for cross-package gating, not
+# a full λ-path.
+
+# ---- Fixture 12: psych::polychoric on ordinal Likert ----
+#
+# Schema (consumed by tests/test_preprocessing.py::test_polychoric_matches_r_psych):
+#   X : (n, p) integer matrix of ordinal levels
+#   R : (p, p) latent-Gaussian correlation matrix returned by psych::polychoric()
+#
+# Compared elementwise to atol=5e-3 — Olsson two-step ML is well-
+# conditioned, so both implementations should land essentially on
+# the MLE.
+if (has_psych) {
+  set.seed(801)
+  n <- 500
+  p <- 8
+  # Random PD correlation pattern with moderate off-diagonals.
+  A <- matrix(rnorm(p * p), p, p)
+  R_true <- crossprod(A)
+  d <- sqrt(diag(R_true))
+  R_true <- R_true / outer(d, d)
+  L <- chol(R_true)
+  Z <- matrix(rnorm(n * p), n, p) %*% L
+  # Discretise to 4-level Likert via fixed thresholds.
+  thresholds <- c(-1.0, 0.0, 1.0)
+  X_likert <- apply(Z, 2, function(col) findInterval(col, thresholds))
+  # `psych::polychoric` accepts a data.frame of factors or an
+  # integer matrix; integer matrix is the cleaner input here.
+  fit <- psych::polychoric(X_likert)
+  write_fixture("psych_polychoric", list(
+    package = "psych",
+    package_version = as.character(packageVersion("psych")),
+    n = n,
+    p = p,
+    seed = 801,
+    n_levels = 4,
+    thresholds = thresholds,
+    X = X_likert,
+    R = fit$rho,
+    # Per-column thresholds psych estimated. Not consumed by the test;
+    # useful for debugging if the elementwise match ever breaks.
+    tau = fit$tau
+  ))
+} else {
+  cat("skipped psych_polychoric (psych package not installed)\n")
+}
+
+# ---- Fixture 13: glmnet(family='cox') active set ----
+#
+# Schema (consumed by tests/test_debiased_cox.py::test_against_glmnet_cox_active_set):
+#   X            : (n, p) float design
+#   time, event  : (n,) survival outcome
+#   coef_glmnet  : (p,) glmnet penalized Cox coefficients at lambda_used
+#   lambda_used  : the λ glmnet was queried at
+#
+# **NOT** a debiased reference — mainstream R has no Cox debiased
+# implementation (hdi 0.1-9 supports gaussian + binomial only).
+# The Python test compares *active-set Jaccard* between skein's
+# debiased fit and glmnet's penalized fit on the same problem.
+{
+  set.seed(803)
+  n <- 400
+  p <- 25
+  X <- matrix(rnorm(n * p), n, p)
+  beta_true <- numeric(p)
+  beta_true[1:5] <- c(0.8, -0.6, 0.5, -0.4, 0.3)
+  eta <- X %*% beta_true
+  rate_t <- exp(eta)
+  t_event <- -log(runif(n)) / rate_t
+  t_cens <- rexp(n, rate = 0.5)
+  time <- pmin(t_event, t_cens)
+  event <- as.numeric(t_event <= t_cens)
+  surv_y <- Surv(time, event)
+  # Fit glmnet Cox path; pick the λ that minimises CV partial-
+  # likelihood deviance. This gives a "reasonable" sparse active set
+  # to compare against — the precise λ doesn't matter for the
+  # Jaccard gate as long as it's not at λ_max (empty) or λ_min
+  # (dense).
+  cv_fit <- cv.glmnet(X, surv_y, family = "cox", alpha = 1,
+                      standardize = TRUE, nfolds = 10)
+  lam <- cv_fit$lambda.min
+  fit <- glmnet(X, surv_y, family = "cox", alpha = 1,
+                standardize = TRUE,
+                control = list(thresh = 1e-10), lambda = lam)
+  coef_vec <- as.numeric(coef(fit))  # length p (Cox has no intercept in glmnet)
+  write_fixture("glmnet_cox_active_set", list(
+    package = "glmnet",
+    package_version = as.character(packageVersion("glmnet")),
+    family = "cox",
+    alpha = 1.0,
+    standardize = TRUE,
+    n = n, p = p,
+    seed = 803,
+    X = X,
+    time = as.numeric(time),
+    event = event,
+    beta_true = beta_true,
+    lambda_used = lam,
+    coef_glmnet = coef_vec
   ))
 }
 

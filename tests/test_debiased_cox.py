@@ -12,7 +12,9 @@ Coverage:
 - DebiasedCoxLassoRegressor wraps the function and exposes the
   inferential outputs as suffixed attributes.
 - Validation: 0 events, negative time, non-binary event, p < 2.
-- R-anchor: skipped if `tests/fixtures/hdi_cox_lasso.json` absent.
+- R-anchor: active-set agreement vs `glmnet(family='cox')` — no
+  R package implements Cox *debiased* lasso, so this gate compares
+  active sets, not coefficients. Skipped if the fixture is absent.
 """
 from __future__ import annotations
 
@@ -227,33 +229,48 @@ def test_rejects_bad_ties():
 
 
 # ---- R-anchor (skipped without fixture) --------------------------
+#
+# No mainstream R package implements Cox debiased lasso — `hdi` 0.1-9
+# (current CRAN) supports `lasso.proj` for gaussian + binomial only;
+# the Cai-Wang (2017) Cox extension exists in the paper but not in any
+# packaged R implementation. So we can't anchor against a "true"
+# debiased reference. The next-best gate: skein's debiased estimator
+# should pick out the same active set as `glmnet(family='cox')`'s
+# penalized fit on the same problem — different point-estimate
+# semantics, but a regression that broke skein's variable selection
+# would diverge here.
 
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "hdi_cox_lasso.json"
+_FIXTURE = Path(__file__).parent / "fixtures" / "glmnet_cox_active_set.json"
 
 
-def test_against_hdi_lasso_proj():
-    """Agreement with R `hdi::lasso.proj(..., family='cox')` on a
-    fixed seed. Skipped if the fixture is absent — generate via
-    `Rscript tests/fixtures/generate.R` (requires R + hdi package)."""
+def test_against_glmnet_cox_active_set():
+    """Active-set agreement vs R `glmnet(family='cox')` on a fixed seed.
+
+    The reference is *not* a debiased estimator (none exists in
+    mainstream R for Cox); it's glmnet's penalized fit at the same
+    λ. Tests that skein's debiased active set tracks glmnet's
+    penalized active set within Jaccard ≥ 0.6. Skipped if the
+    fixture is absent — generate via
+    `Rscript tests/fixtures/generate.R` (requires R + glmnet +
+    survival packages)."""
     if not _FIXTURE.is_file():
         pytest.skip(
             f"fixture {_FIXTURE.name} missing; run `Rscript tests/fixtures/"
-            "generate.R` to generate (requires R + hdi package)"
+            "generate.R` to generate (requires R + glmnet + survival)"
         )
     with open(_FIXTURE) as f:
         fix = json.load(f)
     X = np.asarray(fix["X"], dtype=np.float64)
     time = np.asarray(fix["time"], dtype=np.float64)
     event = np.asarray(fix["event"], dtype=np.float64)
-    coef_r = np.asarray(fix["coef_debiased"], dtype=np.float64)
+    coef_glmnet = np.asarray(fix["coef_glmnet"], dtype=np.float64)
     res = debiased_cox_lasso(X, time, event, alpha=0.05)
-    # Loose tolerance — different penalty paths land at slightly
-    # different point estimates; the active-set + sign agreement is
-    # the load-bearing comparison.
     active_skein = np.abs(res.coef_debiased) > 0.05
-    active_r = np.abs(coef_r) > 0.05
-    jaccard = (active_skein & active_r).sum() / max(
-        (active_skein | active_r).sum(), 1
+    active_glmnet = np.abs(coef_glmnet) > 0.05
+    jaccard = (active_skein & active_glmnet).sum() / max(
+        (active_skein | active_glmnet).sum(), 1
     )
-    assert jaccard >= 0.7, f"active-set Jaccard vs R::hdi {jaccard:.3f} < 0.7"
+    assert jaccard >= 0.6, (
+        f"active-set Jaccard vs glmnet(family='cox') {jaccard:.3f} < 0.6"
+    )
