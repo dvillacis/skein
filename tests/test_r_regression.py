@@ -334,6 +334,78 @@ def test_glmnet_lasso_cox_matches_skein_mcp_high_gamma():
     )
 
 
+# ---- M14c.3 at-scale (n=500, p=100) fixtures -----------------------------
+#
+# These exercise the same penalty / family combinations as the small tier
+# above but at a size that produces multiple outer iters per λ and a
+# meaningfully sparse active set (top-8 features active in p=100). The
+# tolerances are looser because LLA local-min divergence on nonconvex
+# problems widens with p, and the active-set boundary fuzz grows with the
+# number of features. A regression that *only* fires at scale (e.g.
+# screening rule applied to the wrong λ index, fixed-cost outer overhead
+# that scales super-linearly) gets caught here when the small tier would
+# miss it.
+#
+# Skipped cleanly when fixtures absent — same `SKEIN_REQUIRE_FIXTURES=1`
+# gate as the small tier.
+
+
+def test_glmnet_lasso_gaussian_mid_matches_skein_mcp_high_gamma():
+    fix = _skipped_if_missing("glmnet_lasso_gaussian_mid")
+    model = skein.MCPPathRegressor(
+        gamma=1e6,
+        lambdas=fix["lambdas"],
+        standardize=True,
+        fit_intercept=True,
+        tol=1e-10,
+        max_iter=20000,
+        screening="off",
+    ).fit(fix["X"], fix["y"])
+    _assert_path_matches(
+        model.coefs_, fix["coefs"],
+        smallest_lambda_atol=1e-2,
+        active_set_fuzz_frac=0.15,
+        label="glmnet lasso gaussian (mid) vs skein MCP γ=1e6",
+    )
+
+
+def test_ncvreg_mcp_gaussian_mid_matches_skein():
+    fix = _skipped_if_missing("ncvreg_mcp_gaussian_mid")
+    model = skein.MCPPathRegressor(
+        gamma=fix["gamma"],
+        lambdas=fix["lambdas"],
+        standardize=True,
+        fit_intercept=True,
+        tol=1e-10,
+        max_iter=50000,
+        screening="off",
+    ).fit(fix["X"], fix["y"])
+    _assert_path_matches(
+        model.coefs_, fix["coefs"],
+        smallest_lambda_atol=5e-3,
+        active_set_fuzz_frac=0.15,
+        label="ncvreg MCP gaussian (mid) vs skein",
+    )
+
+
+def test_glmnet_lasso_binomial_mid_matches_skein_mcp_high_gamma():
+    fix = _skipped_if_missing("glmnet_lasso_binomial_mid")
+    model = skein.LogisticMCPPathRegressor(
+        gamma=1e6,
+        lambdas=fix["lambdas"],
+        standardize=True,
+        fit_intercept=True,
+        tol=1e-8,
+        max_iter=20000,
+    ).fit(fix["X"], fix["y"])
+    _assert_path_matches(
+        model.coefs_, fix["coefs"],
+        smallest_lambda_atol=5e-2,
+        active_set_fuzz_frac=0.15,
+        label="glmnet binomial lasso (mid) vs skein logistic MCP γ=1e6",
+    )
+
+
 # ---- meta tests ----------------------------------------------------------
 
 

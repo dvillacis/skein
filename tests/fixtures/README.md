@@ -52,7 +52,8 @@ From the repo root:
 Rscript tests/fixtures/generate.R
 ```
 
-This produces 8 JSON fixtures under `tests/fixtures/`. Verify with:
+This produces 8 small-tier JSON fixtures (n=200–300, p=15–24) plus 3
+mid-tier fixtures at n=500, p=100 (`*_mid.json`). Verify with:
 
 ```bash
 pytest tests/test_r_regression.py -v
@@ -74,6 +75,19 @@ something changed in the reference packages or the generator.
 | `glmnet_lasso_binomial.json`       | glmnet 5.0  | lasso   | binomial  | `LogisticMCPPathRegressor(gamma=1e6)`     |
 | `ncvreg_mcp_binomial.json`         | ncvreg 3.16 | MCP     | binomial  | `LogisticMCPPathRegressor(gamma=3.0)`     |
 | `glmnet_lasso_cox.json`            | glmnet 5.0  | lasso   | cox       | `CoxMCPPathRegressor(gamma=1e6)`          |
+| `glmnet_lasso_gaussian_mid.json`   | glmnet 5.0  | lasso   | gaussian  | `MCPPathRegressor(gamma=1e6)`  (n=500, p=100) |
+| `ncvreg_mcp_gaussian_mid.json`     | ncvreg 3.16 | MCP     | gaussian  | `MCPPathRegressor(gamma=3.0)`  (n=500, p=100) |
+| `glmnet_lasso_binomial_mid.json`   | glmnet 5.0  | lasso   | binomial  | `LogisticMCPPathRegressor(gamma=1e6)` (n=500, p=100) |
+
+The mid-tier (`*_mid.json`) is an M14c.3 addition that exercises the
+path solvers at a size where LLA local-min divergence on nonconvex
+problems matters and the active-set fuzz grows with p. Tolerances on
+the Python side (`tests/test_r_regression.py`) are looser for the
+mid-tier: `smallest_lambda_atol` 5e-3–5e-2 vs 1e-5 on the small
+tier, and `active_set_fuzz_frac` 0.15 vs the default 0.10. A
+regression that only fires at scale (e.g. a screening rule applied
+to the wrong λ index, fixed-cost outer overhead that scales
+super-linearly) gets caught here when the small tier would miss it.
 
 Each JSON file contains:
 
