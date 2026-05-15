@@ -60,6 +60,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: pin PATH (setup-python first; cargo present)
+        # On macos-latest GitHub runners as of 2026-05, the preinstalled
+        # framework Python at `/Library/Frameworks/Python.framework/...`
+        # appears on PATH ahead of `actions/setup-python`'s install,
+        # so a bare `python -m pip install` lands in the framework
+        # interpreter and pip's maturin subprocess doesn't see
+        # `~/.cargo/bin` (different process tree). Both pushes are
+        # idempotent and harmless on Linux runners.
+        run: |
+          echo "$pythonLocation/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: install package + dev deps
         # `pip install -e ".[dev]"` triggers maturin via the
         # pyproject build-system, which works without an active
@@ -121,6 +132,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: pin PATH (setup-python first; cargo present)
+        # See the python-job step of the same name for the rationale.
+        run: |
+          echo "$pythonLocation/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: install package + docs deps
         # autodoc imports the package to introspect docstrings, so
         # the Rust extension has to be built (maturin via pyproject

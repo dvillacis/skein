@@ -40,6 +40,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: pin PATH (setup-python first; cargo present)
+        # See `.github/workflows/ci.yml` for the rationale — on
+        # macos-latest the framework Python at
+        # `/Library/Frameworks/Python.framework/...` shadows
+        # setup-python, and the framework pip's maturin subprocess
+        # doesn't see ~/.cargo/bin. Both pushes are idempotent and
+        # harmless on Linux runners.
+        run: |
+          echo "$pythonLocation/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
       - name: Install skein + bench extras (dev profile)
         env:
           # Force dev-profile maturin — release would dominate the wall-clock.
