@@ -98,6 +98,7 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(glm::solve_cox_sparse_group_lasso_path, m)?)?;
     m.add_function(wrap_pyfunction!(glm::solve_cox_sparse_group_mcp_path, m)?)?;
     m.add_function(wrap_pyfunction!(glm::solve_cox_sparse_group_scad_path, m)?)?;
+    m.add_function(wrap_pyfunction!(glm::cox_surrogate_weights_at, m)?)?;
     m.add_function(wrap_pyfunction!(ls::solve_mcp_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(ls::solve_scad_ls_path_sparse, m)?)?;
     m.add_function(wrap_pyfunction!(ls::solve_elastic_net_ls_path_sparse, m)?)?;

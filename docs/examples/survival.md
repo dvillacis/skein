@@ -185,8 +185,50 @@ be selected or none. The sparse-group MCP enforces the right
 structure: every selected feature lives in an actively-selected
 pathway.
 
+## Confidence intervals on prognostic features
+
+Once we've selected an active set, the standard next question is:
+*which of these features have a statistically significant effect on
+survival, and how large is the effect?* Penalized Cox coefficients
+are biased toward zero by construction, so the raw `coef_` from a
+penalized fit doesn't admit a Wald interpretation.
+
+{class}`~skein_glm.DebiasedCoxLassoRegressor` adds a single-step
+debiasing correction and produces a Wald CI + p-value per feature.
+The implementation extends the Van de Geer et al. (2014) debiased
+construction to Cox by running the nodewise lassos on the
+**weighted design** `X̃ = W^{1/2} X`, where `W` is the per-sample
+diagonal of the Cox partial-likelihood Fisher information (extracted
+from the prox-Newton surrogate). See the
+[inference concept page](../concepts/inference.md) for the full
+derivation.
+
+```python
+from skein_glm import DebiasedCoxLassoRegressor
+
+deb = DebiasedCoxLassoRegressor(alpha=0.05, ties="breslow").fit(X, time, event)
+
+# Per-feature inferential output, all on the original feature scale.
+for j in np.flatnonzero(np.abs(deb.coef_) > 0.05):
+    print(
+        f"feature {j:3d}: β̂_d = {deb.coef_[j]:+.3f}  "
+        f"95% CI = [{deb.ci_lower_[j]:+.3f}, {deb.ci_upper_[j]:+.3f}]  "
+        f"p = {deb.pvalues_[j]:.3g}"
+    )
+
+# Prognostic index on training data.
+print(f"η̂ range: [{deb.risk_score_.min():.2f}, {deb.risk_score_.max():.2f}]")
+```
+
+The Cox debiased estimator is per-coordinate; for group-level tests
+(*does this pathway matter?*) use stability selection on the
+sparse-group fit above, or combine the debiased coefficients via a
+Wald test for the group sum-of-squares (not in `skein` today).
+
 ## See also
 
+- [Concepts: Inference on penalized fits](../concepts/inference.md)
+  — Wald CIs and stability selection across LS / GLM / Cox.
 - [Concepts: Datafits](../concepts/datafits.md) — Cox PH partial
   likelihood and Breslow ties.
 - [Concepts: Penalties](../concepts/penalties.md) — sparse-group MCP

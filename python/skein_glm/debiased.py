@@ -49,6 +49,7 @@ from scipy import stats
 from sklearn.base import BaseEstimator, RegressorMixin
 
 from skein_glm.estimators import (
+    CoxMCPRegressor,
     ElasticNetRegressor,
     LogisticLassoRegressor,
     PoissonLassoRegressor,
@@ -1024,6 +1025,355 @@ class DebiasedPoissonLassoRegressor(_DebiasedGLMRegressorBase):
         return np.exp(eta)
 
 
+# --- Cox PH ---------------------------------------------------------
+
+
+@dataclass
+class DebiasedCoxResult:
+    """Output of :func:`debiased_cox_lasso`.
+
+    Same inferential fields as :class:`DebiasedGLMResult` minus
+    ``mu_fitted`` (Cox PH has no ``μ`` in the canonical GLM sense)
+    plus ``risk_score`` ``= X β̂`` — the prognostic index on the
+    original feature scale.
+
+    Cox has no intercept (the baseline hazard absorbs constants);
+    the ``intercept_`` field is the destandardization correction
+    ``-⟨β̂_d, x̄⟩`` so that ``X @ coef_ + intercept_`` reproduces the
+    linear predictor of the original-feature-scale model.
+
+    Attributes
+    ----------
+    coef_debiased : ndarray (p,)
+    coef_glm : ndarray (p,)
+        Underlying penalized Cox lasso fit on the original feature
+        scale.
+    intercept_ : float
+        Destandardization correction. Cox `decision_function` returns
+        ``X @ coef_ + intercept_`` — the prognostic index.
+    se : ndarray (p,)
+    ci_lower, ci_upper, pvalues, z_scores : ndarray (p,)
+    risk_score : ndarray (n,)
+        ``η̂_i = ⟨x_i, β̂⟩`` at the penalized fit. The Cox prognostic
+        index for the training rows.
+    Theta : ndarray (p, p)
+        Approximate inverse Fisher on the standardized scale, built
+        nodewise on the weighted design ``X̃ = W^{1/2} X``.
+    lambda_main : float
+    lambda_nodewise : ndarray (p,)
+    alpha : float
+    family : str
+        Always ``"cox"``.
+    ties : str
+        Tie-handling rule used in the partial likelihood.
+    """
+
+    coef_debiased: NDArray[np.float64]
+    coef_glm: NDArray[np.float64]
+    intercept_: float
+    se: NDArray[np.float64]
+    ci_lower: NDArray[np.float64]
+    ci_upper: NDArray[np.float64]
+    pvalues: NDArray[np.float64]
+    z_scores: NDArray[np.float64]
+    risk_score: NDArray[np.float64]
+    Theta: NDArray[np.float64]
+    lambda_main: float
+    lambda_nodewise: NDArray[np.float64]
+    alpha: float
+    family: str
+    ties: str
+
+
+def debiased_cox_lasso(
+    X: Any,
+    time: Any,
+    event: Any,
+    *,
+    lambda_: float | None = None,
+    lambda_nodewise: float | NDArray[np.float64] | None = None,
+    alpha: float = 0.05,
+    ties: str = "breslow",
+    standardize: bool = True,
+    max_iter: int = 1000,
+    tol: float = 1e-7,
+    n_jobs: int | None = None,
+) -> DebiasedCoxResult:
+    """Debiased Cox lasso with Wald confidence intervals.
+
+    Construction (van de Geer–Cai–Wang extension of VBR to Cox):
+
+    1. Fit a penalized Cox lasso to obtain ``β̂``.
+    2. At ``β̂``, extract the per-sample partial-likelihood Fisher
+       information ``w_i`` and working response ``z_i`` from the Cox
+       IRLS surrogate (via the Rust ``CoxPH::surrogate_at`` exposed as
+       ``_core.cox_surrogate_weights_at``).
+    3. Build the **weighted design** ``X̃ = W^{1/2} X`` where
+       ``W = diag(w)``. The partial-likelihood Fisher information is
+       ``Xᵀ W X``, so ``X̃`` plays exactly the role of ``X`` in the
+       LS / GLM debiased construction.
+    4. Build ``Θ̂`` by node-wise lasso on ``X̃`` (Van de Geer 2014 §3
+       construction; ``_fit_nodewise_column`` is penalty-axis agnostic
+       and reused unchanged).
+    5. Debias: ``β̂_d = β̂ + (1/n) Θ̂ · Xᵀ (event − μ̂_cox)`` where
+       ``μ̂_cox_i = exp(η̂_i) · Λ̂_0(t_i)`` is the partial-likelihood
+       contribution. Computed via ``μ̂_cox = event + w·(η − z)`` from
+       the surrogate identity ``z = η − g / w``, ``g = event −
+       exp(η)·Λ̂_0``.
+    6. Variance: ``diag(Θ̂ X̃ᵀX̃ Θ̂ᵀ) / n²``. Same formula as the
+       logistic / Poisson case; the partial likelihood supplies its
+       own Fisher information, so there is no σ² nuisance term.
+
+    Parameters
+    ----------
+    X : array-like of shape (n, p)
+    time : array-like of shape (n,)
+        Event / censoring time; must be ≥ 0.
+    event : array-like of shape (n,)
+        0/1 censoring indicator (1 = event observed).
+    lambda_ : float, optional
+        Lasso λ for the penalized Cox fit. Defaults to the
+        theoretical ``c · √(log p / n)`` rate.
+    lambda_nodewise : float or array, optional
+        Per-node λ for the nodewise lassos. Defaults to a tuned grid.
+    alpha : float, default 0.05
+        Wald CI level — outputs ``[α/2, 1 − α/2]`` percentile bands.
+    ties : {"breslow", "efron"}, default "breslow"
+        Tie-handling rule for the partial likelihood. Forwarded to
+        both the penalized fit and the Fisher-information extraction.
+    standardize : bool, default True
+    max_iter, tol : solver controls (forwarded to nodewise lassos
+        and the penalized Cox fit).
+    n_jobs : parallel jobs for the nodewise sweep.
+
+    Returns
+    -------
+    :class:`DebiasedCoxResult`
+
+    References
+    ----------
+    van de Geer, S., Bühlmann, P., Ritov, Y., & Dezeure, R. (2014).
+    "On asymptotically optimal confidence regions and tests for
+    high-dimensional models." *Annals of Statistics* 42(3): 1166–1202.
+    — The original LS / GLM debiased construction.
+
+    Cai, T., & Wang, J. (2017). "High-dimensional inference for
+    covariance and precision matrices and applications to survival
+    analysis." *J. Am. Stat. Assoc.* — Cox-PH extension.
+    """
+    from joblib import Parallel, delayed
+    from skein_glm._core import cox_surrogate_weights_at
+
+    X = np.ascontiguousarray(X, dtype=np.float64)
+    time = np.ascontiguousarray(time, dtype=np.float64)
+    event = np.ascontiguousarray(event, dtype=np.float64)
+    if X.ndim != 2:
+        raise ValueError(f"X must be 2D, got shape {X.shape}")
+    n, p = X.shape
+    if time.shape != (n,) or event.shape != (n,):
+        raise ValueError(
+            f"time / event must be 1D with length {n}; got "
+            f"{time.shape} / {event.shape}"
+        )
+    if not np.all(np.isfinite(time)) or np.any(time < 0):
+        raise ValueError("Cox PH requires time ≥ 0 (finite)")
+    valid_events = np.isin(event, [0.0, 1.0])
+    if not np.all(valid_events):
+        raise ValueError("Cox PH requires event ∈ {0, 1}")
+    if int(event.sum()) == 0:
+        raise ValueError("Cox PH requires at least one event (event = 1)")
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha must be in (0, 1); got {alpha}")
+    if ties not in ("breslow", "efron"):
+        raise ValueError(f"ties must be 'breslow' or 'efron'; got {ties!r}")
+    if p < 2:
+        raise ValueError(f"debiased lasso requires p ≥ 2 features; got p = {p}")
+
+    Xs, x_mean, x_scale = _standardize_X(X, standardize)
+    lambda_main = (
+        _theoretical_lambda(n, p) if lambda_ is None else float(lambda_)
+    )
+    if lambda_main <= 0:
+        raise ValueError(f"lambda_ must be > 0; got {lambda_main}")
+
+    # Cox-lasso via MCP at large γ (the standard skein idiom — group-MCP
+    # with γ→∞ recovers L1 exactly, and the Rust path supports it
+    # natively). Cox has no intercept; the baseline hazard absorbs
+    # additive constants.
+    fit = CoxMCPRegressor(
+        lambda_=lambda_main,
+        gamma=1e10,
+        ties=ties,
+        standardize=False,
+        max_iter=max_iter,
+        tol=tol,
+        max_outer=20,
+        outer_tol=tol,
+    ).fit(Xs, time, event)
+    beta_hat_s = np.asarray(fit.coef_, dtype=np.float64)
+    eta_hat = Xs @ beta_hat_s
+
+    # Extract per-sample Cox Fisher information w_i and working
+    # response z_i at the fitted β̂. The Rust surrogate returns
+    # (w, z) such that z = η − g/w, g = event − exp(η)·Λ̂_0(t).
+    w, z = cox_surrogate_weights_at(Xs, time, event, beta_hat_s, ties=ties)
+    w = np.asarray(w, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    # μ̂_cox = exp(η)·Λ̂_0(t) = event − g = event + w·(η − z).
+    # The GLM core consumes (y, mu_hat) and forms (y − mu_hat) =
+    # event − μ̂_cox = -g, the Cox score residual.
+    mu_hat_cox = event + w * (eta_hat - z)
+
+    lam_nw = _build_lambda_nodewise(lambda_nodewise, n, p)
+    if np.any(lam_nw <= 0):
+        raise ValueError("lambda_nodewise entries must be > 0")
+
+    # Inline the GLM-core debiasing math; intercept_s=0 because Cox
+    # has none. Mirrors _debiased_glm_core but produces DebiasedCoxResult.
+    w_safe = np.maximum(w, _GLM_WEIGHT_FLOOR)
+    w_sqrt = np.sqrt(w_safe)
+    X_tilde = Xs * w_sqrt[:, None]
+
+    results = Parallel(n_jobs=n_jobs)(
+        delayed(_fit_nodewise_column)(X_tilde, j, float(lam_nw[j]), max_iter, tol)
+        for j in range(p)
+    )
+    gammas = [g for g, _ in results]
+    tau2s = np.array([t for _, t in results], dtype=np.float64)
+    Theta = _assemble_theta_rows(gammas, tau2s)
+
+    score = Xs.T @ (event - mu_hat_cox)
+    beta_d_s = beta_hat_s + (Theta @ score) / n
+
+    U = X_tilde @ Theta.T
+    var_d_s = np.einsum("ij,ij->j", U, U) / (n * n)
+    se_s = np.sqrt(np.maximum(var_d_s, 0.0))
+
+    beta_d = beta_d_s / x_scale
+    beta_glm = beta_hat_s / x_scale
+    se = se_s / x_scale
+    intercept = -float(np.dot(beta_d, x_mean))
+    # Risk score is the η̂ on the *original* feature scale —
+    # X @ beta_d + intercept reconstructs the centered linear
+    # predictor; the Cox partial likelihood is invariant to the
+    # additive intercept so this matches the conventional usage.
+    risk_score = X @ beta_d + intercept
+
+    z_alpha = float(stats.norm.ppf(1.0 - alpha / 2.0))
+    safe_se = np.where(se > 0, se, 1.0)
+    z_scores = np.where(se > 0, beta_d / safe_se, 0.0)
+    pvalues = 2.0 * stats.norm.sf(np.abs(z_scores))
+    ci_lower = beta_d - z_alpha * se
+    ci_upper = beta_d + z_alpha * se
+
+    return DebiasedCoxResult(
+        coef_debiased=beta_d,
+        coef_glm=beta_glm,
+        intercept_=intercept,
+        se=se,
+        ci_lower=ci_lower,
+        ci_upper=ci_upper,
+        pvalues=pvalues,
+        z_scores=z_scores,
+        risk_score=risk_score,
+        Theta=Theta,
+        lambda_main=lambda_main,
+        lambda_nodewise=lam_nw,
+        alpha=alpha,
+        family="cox",
+        ties=ties,
+    )
+
+
+class DebiasedCoxLassoRegressor(BaseEstimator):
+    """Sklearn-style facade over :func:`debiased_cox_lasso`.
+
+    Cox PH has a different signature from the scalar-``y`` GLMs
+    (requires ``time`` and ``event`` instead of ``y``), so this
+    estimator doesn't inherit from :class:`_DebiasedGLMRegressorBase`.
+
+    Attributes mirror the other debiased estimators with the GLM
+    suffix convention (``coef_``, ``se_``, ``pvalues_``, etc.). The
+    Cox-specific :attr:`risk_score_` is set to the prognostic index
+    on the training data after :meth:`fit`.
+    """
+
+    coef_: NDArray[np.float64]
+    coef_glm_: NDArray[np.float64]
+    intercept_: float
+    se_: NDArray[np.float64]
+    ci_lower_: NDArray[np.float64]
+    ci_upper_: NDArray[np.float64]
+    pvalues_: NDArray[np.float64]
+    z_scores_: NDArray[np.float64]
+    risk_score_: NDArray[np.float64]
+    Theta_: NDArray[np.float64]
+    lambda_main_: float
+    lambda_nodewise_: NDArray[np.float64]
+    n_features_in_: int
+
+    def __init__(
+        self,
+        *,
+        lambda_: float | None = None,
+        lambda_nodewise: float | NDArray[np.float64] | None = None,
+        alpha: float = 0.05,
+        ties: str = "breslow",
+        standardize: bool = True,
+        max_iter: int = 1000,
+        tol: float = 1e-7,
+        n_jobs: int | None = None,
+    ) -> None:
+        self.lambda_ = lambda_
+        self.lambda_nodewise = lambda_nodewise
+        self.alpha = alpha
+        self.ties = ties
+        self.standardize = standardize
+        self.max_iter = max_iter
+        self.tol = tol
+        self.n_jobs = n_jobs
+
+    def fit(
+        self, X: Any, time: Any, event: Any
+    ) -> "DebiasedCoxLassoRegressor":
+        res = debiased_cox_lasso(
+            X, time, event,
+            lambda_=self.lambda_,
+            lambda_nodewise=self.lambda_nodewise,
+            alpha=self.alpha,
+            ties=self.ties,
+            standardize=self.standardize,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            n_jobs=self.n_jobs,
+        )
+        self.coef_ = res.coef_debiased
+        self.coef_glm_ = res.coef_glm
+        self.intercept_ = res.intercept_
+        self.se_ = res.se
+        self.ci_lower_ = res.ci_lower
+        self.ci_upper_ = res.ci_upper
+        self.pvalues_ = res.pvalues
+        self.z_scores_ = res.z_scores
+        self.risk_score_ = res.risk_score
+        self.Theta_ = res.Theta
+        self.lambda_main_ = res.lambda_main
+        self.lambda_nodewise_ = res.lambda_nodewise
+        self.family_ = res.family
+        self.ties_ = res.ties
+        self.n_features_in_ = int(res.coef_debiased.shape[0])
+        return self
+
+    def decision_function(self, X: Any) -> NDArray[np.float64]:
+        """Prognostic index ``η = X · β + intercept``."""
+        X = np.ascontiguousarray(X, dtype=np.float64)
+        return X @ self.coef_ + self.intercept_
+
+    def predict(self, X: Any) -> NDArray[np.float64]:
+        """Alias for :meth:`decision_function` (Cox has no μ)."""
+        return self.decision_function(X)
+
+
 __all__ = [
     "DebiasedLassoResult",
     "debiased_lasso",
@@ -1033,4 +1383,7 @@ __all__ = [
     "debiased_poisson_lasso",
     "DebiasedLogisticLassoRegressor",
     "DebiasedPoissonLassoRegressor",
+    "DebiasedCoxResult",
+    "debiased_cox_lasso",
+    "DebiasedCoxLassoRegressor",
 ]

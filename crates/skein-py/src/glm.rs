@@ -24,7 +24,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 use skein_core::{
-    datafit::{BinomialLogit, CoxPH, GlmDatafit, Huber, PoissonLog, TieHandling},
+    datafit::{BinomialLogit, CoxPH, Datafit as _, GlmDatafit, Huber, PoissonLog, TieHandling},
     design::{DenseMatrix, DesignMatrix as _, Standardized},
     groups::Groups,
     penalty::{ElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad, SparseGroupLasso},
@@ -1733,6 +1733,68 @@ fn validate_cox_outcomes(
         ));
     }
     Ok(())
+}
+
+/// Cox partial-likelihood IRLS surrogate at a fitted ``β``.
+///
+/// Returns the per-sample weights ``w`` and working responses ``z``
+/// such that minimizing ``(1/2n) Σ w_i (X β − z_i)²`` is the local
+/// quadratic expansion of the Cox negative partial log-likelihood at
+/// the supplied ``β``. The diagonal of ``w`` is the per-sample Fisher
+/// information of the partial likelihood (Cox PH analog of the
+/// logistic ``p(1−p)`` Hessian diagonal) — exactly what the
+/// nodewise-Fisher debiased estimator needs to weight the design
+/// before constructing ``Θ̂``.
+///
+/// Used by :func:`skein_glm.debiased_cox_lasso`.
+#[pyfunction]
+#[pyo3(signature = (x, time, event, beta, *, ties="breslow"))]
+pub(crate) fn cox_surrogate_weights_at<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    time: PyReadonlyArray1<f64>,
+    event: PyReadonlyArray1<f64>,
+    beta: PyReadonlyArray1<f64>,
+    ties: &str,
+) -> PyResult<(
+    pyo3::Bound<'py, numpy::PyArray1<f64>>,
+    pyo3::Bound<'py, numpy::PyArray1<f64>>,
+)> {
+    let x_arr = x.as_array();
+    let time_arr = time.as_array().to_owned();
+    let event_arr = event.as_array().to_owned();
+    let beta_arr = beta.as_array();
+    let n = x_arr.nrows();
+    let p = x_arr.ncols();
+    if time_arr.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "time length {} does not match n_samples {n}",
+            time_arr.len()
+        )));
+    }
+    if event_arr.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "event length {} does not match n_samples {n}",
+            event_arr.len()
+        )));
+    }
+    if beta_arr.len() != p {
+        return Err(PyValueError::new_err(format!(
+            "beta length {} does not match n_features {p}",
+            beta_arr.len()
+        )));
+    }
+    validate_cox_outcomes(time_arr.view(), event_arr.view())?;
+    let ties_enum = parse_cox_ties(ties)?;
+    let glm = CoxPH::with_ties(time_arr, event_arr, ties_enum);
+    let design = DenseMatrix::new(x_arr.to_owned());
+    let surrogate = glm.surrogate_at(&design, beta_arr);
+    let w = surrogate
+        .sample_weights()
+        .expect("Cox surrogate always has sample_weights")
+        .to_owned();
+    let z = surrogate.y().to_owned();
+    Ok((w.into_pyarray_bound(py), z.into_pyarray_bound(py)))
 }
 
 /// Common Cox path scaffold for scalar penalties. Cox has no intercept

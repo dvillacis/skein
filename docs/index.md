@@ -203,6 +203,7 @@ concepts/multinomial
 concepts/graphical_models
 concepts/graph_inference
 concepts/polychoric
+concepts/inference
 ```
 
 ```{toctree}
