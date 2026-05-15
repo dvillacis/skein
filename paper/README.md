@@ -1,17 +1,32 @@
 # Paper artifacts
 
-This directory is the **build output** of the publication benchmark
-suite at `../benches/v2/`. Every file here is regenerated from JSONL
-snapshots by a Snakemake rule — do not edit anything in `figures/`
-or `tables/` by hand.
+This directory holds (a) the **build output** of the publication
+benchmark suite at `../benches/v2/` and (b) the human-authored
+software-paper manuscript that wraps it. Auto-regenerated artifacts
+(`figures/`, `tables/`) must not be edited by hand; the manuscript
+(`manuscript.tex`, `references.bib`) is the hand-authored narrative.
 
 ## Layout
 
 ```
 paper/
-  figures/      # *.pdf, vector, locked style (see report/figures.py)
-  tables/       # *.tex (booktabs) + *.md mirror
+  manuscript.tex   # software paper draft (JMLR-MLOSS target)
+  references.bib   # bibliography
+  figures/         # *.pdf, vector, locked style (see report/figures.py)
+  tables/          # *.tex (booktabs) + *.md mirror
 ```
+
+## Build the manuscript
+
+```bash
+cd paper && pdflatex manuscript.tex && bibtex manuscript && \
+    pdflatex manuscript.tex && pdflatex manuscript.tex
+```
+
+The skeleton is portable — compiles against any LaTeX `article`
+class. For JMLR-MLOSS submission, swap the documentclass to the
+JMLR-MLOSS template (see comment block at the top of
+`manuscript.tex`) before final compilation.
 
 ## How to regenerate from a clean checkout
 

@@ -36,3 +36,13 @@ htmlcov/
 
 .claude/
 /docs/_build/
+
+# LaTeX build artifacts for paper/manuscript.tex (M14b)
+paper/manuscript.aux
+paper/manuscript.bbl
+paper/manuscript.blg
+paper/manuscript.fdb_latexmk
+paper/manuscript.fls
+paper/manuscript.log
+paper/manuscript.out
+paper/manuscript.pdf

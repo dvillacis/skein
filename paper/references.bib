@@ -1,0 +1,246 @@
+% =========================================================================
+% Bibliography for the skein software paper (M14b).
+%
+% Starter entries covering the citations used in paper/manuscript.tex.
+% Add to this file as the manuscript narrative is filled in. Verify
+% DOIs / page numbers before submission.
+% =========================================================================
+
+% --- Sparsity-inducing penalties: foundational ---------------------------
+
+@article{tibshirani1996lasso,
+  author  = {Tibshirani, Robert},
+  title   = {Regression Shrinkage and Selection via the Lasso},
+  journal = {Journal of the Royal Statistical Society, Series B},
+  volume  = {58},
+  number  = {1},
+  pages   = {267--288},
+  year    = {1996},
+}
+
+@article{zhang2010mcp,
+  author  = {Zhang, Cun-Hui},
+  title   = {Nearly Unbiased Variable Selection under Minimax Concave Penalty},
+  journal = {The Annals of Statistics},
+  volume  = {38},
+  number  = {2},
+  pages   = {894--942},
+  year    = {2010},
+  doi     = {10.1214/09-AOS729},
+}
+
+@article{fan2001scad,
+  author  = {Fan, Jianqing and Li, Runze},
+  title   = {Variable Selection via Nonconcave Penalized Likelihood and Its Oracle Properties},
+  journal = {Journal of the American Statistical Association},
+  volume  = {96},
+  number  = {456},
+  pages   = {1348--1360},
+  year    = {2001},
+}
+
+@article{yuan2006grouplasso,
+  author  = {Yuan, Ming and Lin, Yi},
+  title   = {Model Selection and Estimation in Regression with Grouped Variables},
+  journal = {Journal of the Royal Statistical Society, Series B},
+  volume  = {68},
+  number  = {1},
+  pages   = {49--67},
+  year    = {2006},
+}
+
+@article{breheny2015groupmcp,
+  author  = {Breheny, Patrick and Huang, Jian},
+  title   = {Group Descent Algorithms for Nonconvex Penalized Linear and Logistic Regression Models with Grouped Predictors},
+  journal = {Statistics and Computing},
+  volume  = {25},
+  number  = {2},
+  pages   = {173--187},
+  year    = {2015},
+  doi     = {10.1007/s11222-013-9424-2},
+}
+
+% --- Graphical models -----------------------------------------------------
+
+@article{friedman2008glasso,
+  author  = {Friedman, Jerome and Hastie, Trevor and Tibshirani, Robert},
+  title   = {Sparse Inverse Covariance Estimation with the Graphical Lasso},
+  journal = {Biostatistics},
+  volume  = {9},
+  number  = {3},
+  pages   = {432--441},
+  year    = {2008},
+  doi     = {10.1093/biostatistics/kxm045},
+}
+
+@article{lam2009glasso,
+  author  = {Lam, Clifford and Fan, Jianqing},
+  title   = {Sparsistency and Rates of Convergence in Large Covariance Matrix Estimation},
+  journal = {The Annals of Statistics},
+  volume  = {37},
+  number  = {6B},
+  pages   = {4254--4278},
+  year    = {2009},
+}
+
+@article{danaher2014jgl,
+  author  = {Danaher, Patrick and Wang, Pei and Witten, Daniela M.},
+  title   = {The Joint Graphical Lasso for Inverse Covariance Estimation across Multiple Classes},
+  journal = {Journal of the Royal Statistical Society, Series B},
+  volume  = {76},
+  number  = {2},
+  pages   = {373--397},
+  year    = {2014},
+  doi     = {10.1111/rssb.12033},
+}
+
+% --- Inference for penalized fits -----------------------------------------
+
+@article{vandegeer2014debiased,
+  author  = {van de Geer, Sara and B{\"u}hlmann, Peter and Ritov, Ya'acov and Dezeure, Ruben},
+  title   = {On Asymptotically Optimal Confidence Regions and Tests for High-Dimensional Models},
+  journal = {The Annals of Statistics},
+  volume  = {42},
+  number  = {3},
+  pages   = {1166--1202},
+  year    = {2014},
+  doi     = {10.1214/14-AOS1221},
+}
+
+@article{cai2017cox,
+  author  = {Cai, Tony and Wang, Jun},
+  title   = {High-Dimensional Inference for Covariance and Precision Matrices and Applications to Survival Analysis},
+  journal = {Journal of the American Statistical Association},
+  year    = {2017},
+  note    = {Extends VBR debiased lasso to the Cox partial likelihood},
+}
+
+@article{meinshausen2010stability,
+  author  = {Meinshausen, Nicolai and B{\"u}hlmann, Peter},
+  title   = {Stability Selection},
+  journal = {Journal of the Royal Statistical Society, Series B},
+  volume  = {72},
+  number  = {4},
+  pages   = {417--473},
+  year    = {2010},
+  doi     = {10.1111/j.1467-9868.2010.00740.x},
+}
+
+@article{benjamini1995fdr,
+  author  = {Benjamini, Yoav and Hochberg, Yosef},
+  title   = {Controlling the False Discovery Rate: A Practical and Powerful Approach to Multiple Testing},
+  journal = {Journal of the Royal Statistical Society, Series B},
+  volume  = {57},
+  number  = {1},
+  pages   = {289--300},
+  year    = {1995},
+}
+
+% --- Preprocessing: polychoric / polyserial ------------------------------
+
+@article{olsson1979polychoric,
+  author  = {Olsson, Ulf},
+  title   = {Maximum Likelihood Estimation of the Polychoric Correlation Coefficient},
+  journal = {Psychometrika},
+  volume  = {44},
+  number  = {4},
+  pages   = {443--460},
+  year    = {1979},
+}
+
+@article{olsson1982polyserial,
+  author  = {Olsson, Ulf and Drasgow, Fritz and Dorans, Neil J.},
+  title   = {The Polyserial Correlation Coefficient},
+  journal = {Psychometrika},
+  volume  = {47},
+  number  = {3},
+  pages   = {337--347},
+  year    = {1982},
+}
+
+% --- Reference software packages: R --------------------------------------
+
+@article{friedman2010glmnet,
+  author  = {Friedman, Jerome and Hastie, Trevor and Tibshirani, Robert},
+  title   = {Regularization Paths for Generalized Linear Models via Coordinate Descent},
+  journal = {Journal of Statistical Software},
+  volume  = {33},
+  number  = {1},
+  pages   = {1--22},
+  year    = {2010},
+}
+
+@article{breheny2011ncvreg,
+  author  = {Breheny, Patrick and Huang, Jian},
+  title   = {Coordinate Descent Algorithms for Nonconvex Penalized Regression, with Applications to Biological Feature Selection},
+  journal = {The Annals of Applied Statistics},
+  volume  = {5},
+  number  = {1},
+  pages   = {232--253},
+  year    = {2011},
+}
+
+@misc{breheny2015grpreg,
+  author       = {Breheny, Patrick},
+  title        = {grpreg: Regularization Paths for Regression Models with Grouped Covariates},
+  year         = {2015--present},
+  howpublished = {R package, CRAN},
+  note         = {Version 3.4.0 at time of writing},
+}
+
+% --- Reference software packages: Python ---------------------------------
+
+@article{pedregosa2011sklearn,
+  author  = {Pedregosa, Fabian and Varoquaux, Ga{\"e}l and Gramfort, Alexandre and Michel, Vincent and Thirion, Bertrand and Grisel, Olivier and Blondel, Mathieu and Prettenhofer, Peter and Weiss, Ron and Dubourg, Vincent and others},
+  title   = {Scikit-Learn: Machine Learning in {Python}},
+  journal = {Journal of Machine Learning Research},
+  volume  = {12},
+  pages   = {2825--2830},
+  year    = {2011},
+}
+
+@inproceedings{massias2018celer,
+  author    = {Massias, Mathurin and Gramfort, Alexandre and Salmon, Joseph},
+  title     = {{Celer}: a Fast Solver for the Lasso with Dual Extrapolation},
+  booktitle = {Proceedings of the 35th International Conference on Machine Learning (ICML)},
+  year      = {2018},
+}
+
+@inproceedings{bertrand2022skglm,
+  author    = {Bertrand, Quentin and Klopfenstein, Quentin and Bannier, Pierre-Antoine and Gidel, Gauthier and Massias, Mathurin},
+  title     = {Beyond {L1}: Faster and Better Sparse Models with \texttt{skglm}},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2022},
+}
+
+% --- Real datasets --------------------------------------------------------
+
+@article{buhlmann2014riboflavin,
+  author  = {B{\"u}hlmann, Peter and Kalisch, Markus and Meier, Lukas},
+  title   = {High-Dimensional Statistics with a View Toward Applications in Biology},
+  journal = {Annual Review of Statistics and Its Application},
+  volume  = {1},
+  pages   = {255--278},
+  year    = {2014},
+  note    = {Source of the riboflavin dataset via the \texttt{hdi} R package},
+}
+
+@article{golub1999leukemia,
+  author  = {Golub, Todd R. and Slonim, Donna K. and Tamayo, Pablo and Huard, Christine and Gaasenbeek, Michelle and Mesirov, Jill P. and Coller, Hilary and Loh, Mignon L. and Downing, James R. and Caligiuri, Mark A. and Bloomfield, Clara D. and Lander, Eric S.},
+  title   = {Molecular Classification of Cancer: Class Discovery and Class Prediction by Gene Expression Monitoring},
+  journal = {Science},
+  volume  = {286},
+  number  = {5439},
+  pages   = {531--537},
+  year    = {1999},
+}
+
+@article{tcga2012brca,
+  author  = {{The Cancer Genome Atlas Network}},
+  title   = {Comprehensive Molecular Portraits of Human Breast Tumours},
+  journal = {Nature},
+  volume  = {490},
+  pages   = {61--70},
+  year    = {2012},
+  doi     = {10.1038/nature11412},
+}
