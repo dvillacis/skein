@@ -575,7 +575,11 @@ class GroupElasticNetPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
 
 
 class GroupMCPPathCV(_PathCVMixin, BaseEstimator, RegressorMixin):
-    """K-fold CV over a group MCP λ-path (LLA outer loop)."""
+    """K-fold CV over a group MCP λ-path. The inner path solver is
+    the native group-MCP block-CD shipped in v0.8 (no LLA outer
+    loop) — see :class:`skein_glm.GroupMCPPathRegressor` for the
+    algorithmic details and the ``max_outer`` / ``outer_tol``
+    backward-compat notes."""
 
     def __init__(
         self,

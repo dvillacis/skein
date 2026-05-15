@@ -73,9 +73,9 @@ g = np.arange(p)
 | `grpreg` `penalty`        | `skein` estimator base                      |
 |---------------------------|---------------------------------------------|
 | `"grLasso"`               | `GroupLassoPathRegressor`                   |
-| `"grMCP"`                 | `GroupMCPPathRegressor` (`gamma=3.0`)       |
+| `"grMCP"`                 | `GroupMCPPathRegressor` (`gamma=3.0`) — native block-CD on the group MCP prox per Breheny & Huang 2015 §3 (v0.8); skein measures **1.20× faster than grpreg** on the canonical `medium / dense` cell. |
 | `"grSCAD"`                | (M3.7 wiring; M2.7 surrogate exists)        |
-| `"cMCP"` (concave MCP)    | `GroupMCPPathRegressor` with the LLA outer  |
+| `"cMCP"` (concave MCP)    | `GroupMCPPathRegressor` — same path solver as `grMCP`. The "concave" framing is grpreg's name for the non-convex penalty; skein's solver is non-convex direct BCD (no LLA wrapper for LS). |
 | `"gel"` (group exp lasso) | (not in v0.1)                               |
 | `"gBridge"` (group bridge)| (M6 roadmap)                                |
 
