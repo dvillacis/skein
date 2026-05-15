@@ -18,12 +18,17 @@ per-group.
 
 ## Status
 
-v0.8. Full nonconvex / group / GLM stack is in place; M5 model
-selection + inference + threaded CV folds shipped; M11 graphical lasso
-family (single + joint) shipped; M12 hardening pass closed the
-penalty / datafit unit-test gaps and added a CI smoke job for the
-PyO3 layer. See [ROADMAP.md](ROADMAP.md) for the full plan and the M13
-performance findings opened by the `benches/v2` release-profile run.
+v0.9 — the research-grade release. Closes the inference axis across
+all four mainstream GLM families (debiased Cox lasso joins LS /
+logistic / Poisson), adds edge-level FDR / FWER / MB stability
+control on graphical models, ships polychoric / polyserial
+preprocessing for ordinal Likert data, and finishes the M13 / M14c
+perf work — every GLM × group penalty (plain + sparse-group) now
+runs native, no LLA wrappers underneath any prox-Newton outer.
+M5 model selection + inference + threaded CV folds + M11 graphical
+lasso (single + joint) + M12 hardening all carried over from v0.8.
+See [ROADMAP.md](ROADMAP.md) for the full plan and the open M14b
+software-paper milestone.
 
 **Done so far:**
 

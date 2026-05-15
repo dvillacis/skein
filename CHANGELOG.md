@@ -4,6 +4,169 @@ All notable changes to `skein-glm` are recorded here. The project follows
 semantic versioning, with the pre-1.0 minor-bump-on-feature policy
 documented in `docs/extending/rust-api.md`.
 
+## [0.9.0] — 2026-05-15
+
+Research-grade release. Closes the **inference axis** across all four
+mainstream GLM families, adds **edge-level multiple-testing control** on
+graphical models, ships **polychoric preprocessing** for ordinal Likert
+data, and finishes the M13 / M14c perf work — every GLM × group penalty
+(plain + sparse-group) now runs native, no LLA wrappers underneath any
+prox-Newton outer.
+
+Test count: **358 cargo lib + 8 cargo integration + 455 pytest, all
+green** (up from 355 + 412 at 0.8.0). Three R-anchor placeholders skip
+cleanly when fixtures absent.
+
+### M13.4c — Native group-MCP block-CD for logistic / Poisson / Cox
+
+Extends M13.4b (LS group-MCP) across GLM families. The
+`prox_newton_block_solve_path` outer loop now hands a β-independent
+`GroupMcp::with_weights(λ, γ, w)` factory directly, dropping the LLA
+layer underneath prox-Newton. The "two-layer" concern from the M13.4b
+write-up was overstated — prox-Newton stays as the GLM linearization
+layer, only the LLA penalty layer drops.
+
+Empirical comparison
+(`crates/skein-core/examples/logistic_group_mcp_lla_vs_native.rs`,
+n=4 000, p=400, group_size=5, n_groups=80, k_active=5, tol=1e-8,
+γ=3.0, M1 Accelerate):
+
+| solver | wall | outer iters | inner CD iters |
+|--------|-----:|------------:|---------------:|
+| LLA-wrapped GroupLasso (pre-fix) | 226.7 s |  190 | 69 392 |
+| Native GroupMcp BCD (this fix)   | 106.8 s |  116 | 32 812 |
+
+**-2.12× wall-clock** with min support Jaccard 0.97 vs LLA and
+identical final-λ objective. New cross-family agreement test
+(`crates/skein-core/tests/glm_group_mcp_native_matches_lla.rs`) covers
+logistic / Poisson / Cox.
+
+### M14a.1 — Polychoric / polyserial preprocessing
+
+New `skein_glm.preprocessing` module:
+
+- `polychoric_correlation(X)` — Olsson (1979) two-step ML for an
+  ordinal correlation matrix.
+- `polyserial_correlation(X_ord, Y_cont)` — Olsson-Drasgow-Dorans
+  (1982) profile-likelihood ML.
+- `polychoric_covariance_matrix(X)` — mixed-type auto-dispatch to
+  polychoric / polyserial / Pearson.
+
+Output feeds directly into `GraphicalLasso(cov=…)`. Recovery on
+synthetic ordinal data (n=2000, 4-level Likert): max absolute error
+0.04 between estimated and true latent correlation. Closes the M11.1
+psychometrics-replication exit criterion deferred since v0.7 —
+`docs/examples/psychometrics.md` is now an end-to-end
+`polychoric → GraphicalMCP → bootstrap-FDR` pipeline that retains all
+7 planted edges with zero false discoveries at n=400, 300 bootstraps.
+
+### M14a.2 — Edge-level FDR / FWER / MB stability bound
+
+New `skein_glm.graph_inference` module + convenience methods on
+`GraphicalBootstrap` and `GraphicalStabilitySelection`. No other
+graphical-models package controls error rates at the edge level.
+
+- `edge_fdr_threshold(boot, fdr=0.1)` — Benjamini–Hochberg on per-edge
+  two-sided bootstrap p-values.
+- `edge_fwer_threshold(boot, fwer=0.05, method="holm")` — Bonferroni
+  or Holm step-down family-wise error control.
+- `mb_stability_threshold(p_total, q_λ, EV)` — Meinshausen–Bühlmann
+  (2010) closed-form bound inverting a stability threshold to an
+  expected-false-positive guarantee.
+- Joint estimators `(B, K, p, p)` pool all `K · p(p−1)/2` edge
+  hypotheses into one BH family.
+
+Bootstrap p-values use the **non-strict** two-sided formula
+`p = 2 · min(P̂(Θ̂* ≥ 0), P̂(Θ̂* ≤ 0))`, essential for sparse
+estimators where null edges are exactly zero on every bootstrap
+replicate (a strict-inequality formulation would spuriously assign
+the smallest representable p-value to every null edge).
+
+### M14a.3 — Debiased Cox lasso
+
+`DebiasedCoxLassoRegressor` + `debiased_cox_lasso()` +
+`DebiasedCoxResult`. Closes the inference axis across all four
+mainstream GLM families — no mainstream Python package has Cox
+debiasing.
+
+Construction extends the Van de Geer–Bühlmann–Ritov (2014) /
+Cai-Wang (2017) debiased lasso to Cox via the
+**partial-likelihood Fisher diagonal** `w_i` from the existing
+`CoxPH::surrogate_at` (no new core algorithm — exposed to Python
+via a new 16-line PyO3 binding `cox_surrogate_weights_at`). Build
+weighted design `X̃ = W^{1/2} X`, run nodewise lassos on `X̃`,
+debias against the Cox score residual
+`event_i − exp(η̂_i)·Λ̂_0(t_i)`. Variance
+`diag(Θ̂ X̃ᵀX̃ Θ̂ᵀ) / n²` (no σ² nuisance — partial likelihood is
+self-normalizing).
+
+Empirical 95 % CI coverage ≥ 80 % on inactive coordinates over 40
+replications. New `docs/concepts/inference.md` walks through
+LS / GLM / Cox debiased lasso uniformly.
+
+### M14c.1 — Scalar LLA weight short-circuit
+
+Ports the M13.4 Phase 2.3 fix from `block_path_lla.rs` to scalar
+`path_lla.rs`. Caches `prev_weights` and breaks the outer loop when
+`‖w_t − w_{t-1}‖_∞ < weight_short_circuit_tol` (sized identically:
+`1000 · outer_tol`, floored at `1e-8`). Affects callers of
+`solve_path_lla`: bridge `|β|^q`, adaptive lasso, multi-task LLA
+paths. On bridge q=0.5 (n=2000, p=100, 40 λs): average outer iters
+per λ drops to 1.2 at convergence.
+
+### M14c.2 — Native sparse-group MCP for logistic / Poisson / Cox
+
+Sibling of M13.4c for the sparse-group penalty. New Rust
+`SparseGroupMcp` penalty
+(`crates/skein-core/src/penalty/sparse_group_mcp.rs`) implements the
+Breheny & Huang (2015) Proposition 1 closed-form prox: per-coord
+scalar MCP soft-threshold + per-group block MCP shrink, both
+sharing the same `γ`. Six PyO3 closures swapped
+(`solve_{logistic,poisson,cox}_sparse_group_mcp_path[_sparse]`).
+Drops the last LLA wrapper in the non-convex GLM × group family.
+
+Includes load-bearing reduction tests: `α=0` matches `GroupMcp` at
+the same (λ, γ); `γ→∞` matches `SparseGroupLasso` at the same
+(λ, α).
+
+### M14c.3 — At-scale R-fixture tier
+
+`tests/fixtures/generate.R` gains an n=500, p=100 mid tier for
+three representative penalty / family combinations
+(`glmnet_lasso_gaussian_mid`, `ncvreg_mcp_gaussian_mid`,
+`glmnet_lasso_binomial_mid`). Tolerances on the Python side looser
+than the small tier (`smallest_lambda_atol` 5e-3–5e-2,
+`active_set_fuzz_frac` 0.15) — LLA local-min divergence on
+nonconvex problems widens with `p`. The original ROADMAP target of
+n=5000, p=2000 is parked as a follow-up because JSON-encoded `X`
+exceeds practical git sizes at that scale; mid tier keeps each
+fixture under ~1 MB raw.
+
+### Documentation
+
+Four new concept pages:
+
+- `docs/concepts/polychoric.md` — Olsson's two-step ML derivation,
+  end-to-end pipeline, when not to use polychoric.
+- `docs/concepts/graph_inference.md` — BH FDR / Holm FWER /
+  MB bound on edges; bootstrap p-value definition and trade-offs.
+- `docs/concepts/inference.md` — unified page covering LS / GLM /
+  Cox debiased lasso + stability selection.
+
+`docs/examples/psychometrics.md` rewritten end-to-end with the new
+M14a primitives; `docs/examples/survival.md` gains a "Confidence
+intervals on prognostic features" section.
+
+### Out of scope for 0.9
+
+- **M14b (software paper)** — run the full `benches/v2` GLM +
+  graphical headline matrix and draft the JMLR-MLOSS / JOSS
+  manuscript from the figures + tables that already auto-generate.
+  This is the next major milestone.
+- Multi-response GLMs for Poisson / Cox (M7.3).
+- n=5000, p=2000 R-fixture tier (needs an artifact-server pipeline).
+- An R facade.
+
 ## [0.8.0] — 2026-05-15
 
 Hardening + performance release: **M12 finish (every recommended-ordering

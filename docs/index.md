@@ -29,7 +29,7 @@ When someone asks "why not just `skglm`, `glmnet`, or `ncvreg`?":
    against the same ABCs the Rust traits mirror, then port hot ones
    to Rust without re-architecting.
 
-## What's in v0.8
+## What's in v0.9
 
 | Family       | Datafits                          | Penalties                                          | Estimators           |
 |--------------|-----------------------------------|----------------------------------------------------|----------------------|
@@ -40,56 +40,79 @@ When someone asks "why not just `skglm`, `glmnet`, or `ncvreg`?":
 | Poisson      | Log-link, offset support          | Same as binomial                                   | 18 sklearn classes   |
 | Cox PH       | Breslow + Efron ties              | MCP, SCAD, group lasso, group MCP, sparse-group lasso, sparse-group MCP, sparse-group SCAD | 14 sklearn classes   |
 | Graphical models | Sparse precision `Θ = Σ⁻¹`    | L1, MCP, SCAD on edges; per-edge weights; joint estimation across `K` populations (Danaher–Wang–Witten group form via ADMM); EBIC tuner | 5 sklearn-style classes |
-| Inference    | VBR debiased lasso (LS + logistic + Poisson) | Wald CIs / p-values for high-dimensional penalized fits; nodewise inverse-Gram / Fisher approximation | 3 free functions + 3 sklearn-style wrappers |
-| Edge stability | Bootstrap edge stability for graphical models | MB-style stability selection on edges + bootnet-style non-parametric bootstrap | 2 sklearn-style classes |
+| Inference (debiased)    | VBR debiased lasso (LS + logistic + Poisson + **Cox** PH) | Wald CIs / p-values for high-dimensional penalized fits; nodewise inverse-Gram / Fisher approximation. Cox uses the partial-likelihood Fisher diagonal (new in v0.9). | 4 free functions + 4 sklearn-style wrappers |
+| Edge inference | Bootstrap edge stability + **multiple-testing correction** on edges | MB-style stability selection on edges, bootnet-style non-parametric bootstrap, **Benjamini–Hochberg FDR**, **Bonferroni / Holm FWER**, **Meinshausen–Bühlmann closed-form bound** (new in v0.9). | 2 sklearn-style classes + 4 helper functions |
+| Preprocessing  | **Polychoric / polyserial correlations** (Olsson 1979 / Olsson-Drasgow-Dorans 1982 two-step ML, new in v0.9) | Latent-Gaussian correlation for ordinal Likert / mixed-type data. Output feeds directly into `GraphicalLasso(cov=…)` and friends. | 3 helper functions |
 
-122 regression / classification estimators + 5 graphical-model
-estimators + 5 inference / edge-stability classes. Plus 36 `*PathCV`
-wrappers, `select_by_ic` for AIC/BIC/EBIC across all four GLM
-families, `ebic_path` / `joint_ebic_path` for graphical models, and
-**every** CV class supports `n_jobs` for threaded fold parallelism
-(real parallelism — every Rust path solver releases the GIL during
-compute). 28 adaptive variants span LS, group, logistic, Poisson, and
-Cox families.
+123 regression / classification estimators + 5 graphical-model
+estimators + 6 inference / edge-stability classes + 11 helper /
+preprocessing functions. Plus 36 `*PathCV` wrappers,
+`select_by_ic` for AIC/BIC/EBIC across all four GLM families,
+`ebic_path` / `joint_ebic_path` for graphical models, and **every**
+CV class supports `n_jobs` for threaded fold parallelism (real
+parallelism — every Rust path solver releases the GIL during
+compute). 28 adaptive variants span LS, group, logistic, Poisson,
+and Cox families.
 
-**v0.8 is a hardening + performance release.** No new estimators or
-penalties; instead the focus is on closing the M12 audit punch list
-and shipping two M13 perf wins. The headlines:
+**v0.9 is the *research-grade* release.** Closes the inference axis
+across all four GLM families, fills the methodological gaps that
+separated `skein` from a citation-grade methods package in its
+target application domains (network psychometrics, genomics,
+survival), and ships the remaining M13 / M14 perf items so the
+algorithm surface is now uniformly native — no LLA wrappers
+underneath any GLM × group penalty. The headlines:
 
-1. **Native group-MCP block-CD for LS** (M13.4b) — `solve_group_mcp_ls_path`
-   no longer routes through an LLA outer loop wrapping
-   `GroupLasso(weighted)`; it now calls block-CD directly on
-   `GroupMcp::prox_group` (Breheny & Huang 2015 §3 closed-form prox).
-   On the canonical `medium / dense` `ls_group_mcp` cell (n=10k, p=1k,
-   group_size=5, 100 λs, γ=3.0): **wall drops 36.2 s → 10.5 s
-   (-3.46×)**. Compared against grpreg's 12.56 s on the same cell,
-   skein flips from "3.34× slower" to **"1.20× faster than grpreg"**.
-   `max_outer` / `outer_tol` parameters are kept on the Python
-   estimators for backward compat (kwargs still accept them) but are
-   now ignored. Logistic / Poisson / Cox group-MCP variants are
-   unchanged (still on LLA).
-2. **Cross-λ gradient cache in `solve_path`** (M13.2) — the warm-start
-   residual at λ_{k+1} is the post-CD residual at λ_k, so the
-   gradient `compute_outer_state` computed at the end of λ_k is the
-   gradient `priority_rule_screen` needs at the start of λ_{k+1}.
-   Caching it skips one O(np) matvec per λ. **Medium Lasso wall
-   2.847 s → 2.552 s (-10.4 %)**, iter count + KKT passes unchanged.
-   Plus an env-var-gated `PhaseTimings` instrumentation
-   (`SKEIN_PROFILE_PATH=1`) attributing per-λ time to setup /
-   screening / lipschitz / inner_cd / outer_state / dual_extrap /
-   bookkeeping — kept as permanent observability for future perf work.
+### Inference & applications (M14a)
 
-The M12 hardening close-out: penalty + datafit numerical guards
-centralized (`W_FLOOR`, `ETA_CLAMP`); pre-flight tight-tol screening
-test promoted to a fail-fast CI step with a 2-min timeout;
-`Groups::has_overlap()` + parallel block-CD overlap detection with
-serial Gauss-Seidel fallback (overlap-misuse no longer ships
-silently); criterion bench tree expanded with new microbenches for
-LLA outer-loop, prox-Newton GLM, and glasso ADMM scaling; and
-`crates/skein-py/src/lib.rs` split from a 10 628-line monolith into
-seven focused modules (one per datafit family — `glasso.rs`,
-`glm.rs`, `ls.rs`, `mmap_chunked.rs`, `multinomial.rs`,
-`multitask.rs` — plus a 275-line `lib.rs` entry point).
+1. **Cox debiased lasso** — `DebiasedCoxLassoRegressor` extends the
+   Van de Geer / Cai-Wang construction to Cox PH, reusing the
+   partial-likelihood Fisher diagonal from
+   `CoxPH::surrogate_at` via a 16-line PyO3 binding. No mainstream
+   Python package has this. Empirical 95 % CI coverage ≥ 80 % on
+   inactive coordinates over 40 replications.
+2. **Edge-level error control on graphical models** —
+   `GraphicalBootstrap.fdr_threshold(0.1)` / `.fwer_threshold(0.05)`
+   apply BH / Bonferroni / Holm to the per-edge bootstrap
+   distribution; `GraphicalStabilitySelection.mb_threshold(EV)`
+   inverts the Meinshausen–Bühlmann closed-form bound to a
+   stability threshold. No other graphical-models package controls
+   error rates at the edge level.
+3. **Polychoric / polyserial preprocessing** —
+   `polychoric_correlation(X)`,
+   `polyserial_correlation(X_ord, Y)`, and
+   `polychoric_covariance_matrix(X)` (auto-detecting mixed-type)
+   recover the latent-Gaussian correlation underlying ordinal
+   Likert data via Olsson's two-step ML. Closes the M11.1
+   psychometrics-replication exit criterion that was deferred since
+   v0.7 — `docs/examples/psychometrics.md` is now an end-to-end
+   `polychoric → GraphicalMCP → bootstrap-FDR` pipeline.
+
+### Performance & correctness closeout (M13.4c + M14c)
+
+4. **Native group-MCP block-CD for logistic / Poisson / Cox**
+   (M13.4c) — extends M13.4b across GLM families. The
+   `prox_newton_block_solve_path` outer loop now hands a
+   β-independent `GroupMcp::with_weights(λ, γ, w)` factory directly,
+   dropping the LLA layer underneath prox-Newton. On the
+   `logistic group-MCP medium` cell (n=4 000, p=400, γ=3.0): **wall
+   drops 226.7 s → 106.8 s (-2.12×)** with min support Jaccard 0.97
+   vs LLA and identical final-λ objective.
+5. **Native sparse-group MCP for logistic / Poisson / Cox** (M14c.2)
+   — sibling of M13.4c for the sparse-group penalty. New Rust
+   `SparseGroupMcp` penalty implements the Breheny & Huang (2015)
+   Proposition 1 closed-form (per-coord scalar MCP + per-group
+   block MCP); 6 PyO3 closures swapped. Drops the last LLA wrapper
+   in the non-convex GLM × group family.
+6. **Scalar LLA weight short-circuit** (M14c.1) — ports the
+   M13.4 Phase 2.3 fix from `block_path_lla.rs` to scalar
+   `path_lla.rs`. Affects bridge `|β|^q`, adaptive lasso, and
+   multi-task LLA paths. Average outer iters per λ at convergence
+   drops to ~1.2 on a representative bridge q=0.5 problem.
+7. **At-scale R-fixture tier** (M14c.3) — `tests/fixtures/generate.R`
+   gains an n=500, p=100 mid tier for three representative penalty
+   / family combinations, with looser tolerances. Catches
+   scale-dependent regressions that the n=200 small tier would
+   miss.
 
 Full per-feature changelog: [`CHANGELOG.md`](https://github.com/dvillacis/skein/blob/main/CHANGELOG.md).
 
@@ -140,28 +163,31 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Status
 
-v0.8 is a complete, tested implementation. Sparse + dense + mmap +
+v0.9 is a complete, tested implementation. Sparse + dense + mmap +
 chunked + multi-task backends all interoperate; every datafit ×
 penalty combination is wired end-to-end with sklearn-style `fit` /
 `predict` / `predict_proba` / `score`. The graphical-model family
-ships with a gram-form CD inner solver (for single-population glasso)
-and an ADMM kernel (for joint glasso). Every Rust path solver
-releases the GIL during compute, so Python-side `joblib` parallelism
-is real rather than a no-op. Wheels are built via `cibuildwheel` for
-Linux (x86_64 + aarch64), macOS (x86_64 + arm64), and Windows
-(AMD64). **M12 hardening is fully done** (penalty + datafit unit
-tests, integration test directory, R-fixture CI gate, PyO3 smoke job,
-fail-fast pre-flight CI step, parallel block-CD overlap detection,
-centralized numerical guards, criterion bench expansion, and the
-PyO3 facade split into per-datafit modules). **M13 perf is in
-progress** — M13.1 / M13.2 / M13.4 (Phase 2.3 + 4b) shipped; M13.5
-MCP one-outer-iter short-circuit and a follow-up to extend native
-group-MCP BCD to the GLM variants remain open. Test count: **355
-cargo + 412 pytest, all green**.
+ships with a gram-form CD inner solver (for single-population
+glasso) and an ADMM kernel (for joint glasso). Every Rust path
+solver releases the GIL during compute, so Python-side `joblib`
+parallelism is real rather than a no-op. Wheels are built via
+`cibuildwheel` for Linux (x86_64 + aarch64), macOS (x86_64 +
+arm64), and Windows (AMD64). **M12 hardening done**, **M13 perf
+work done** through M13.4c (native group-MCP for all GLM
+families), and **M14 inference + applications + perf closeout
+done** through M14a / M14c — Cox debiasing, edge-level FDR/FWER/MB,
+polychoric preprocessing, scalar LLA short-circuit, native
+sparse-group MCP for GLMs, and an at-scale R-fixture tier.
+Test count: **358 cargo lib + 8 integration + 455 pytest, all
+green**.
 
-What's not yet in: multi-response GLMs for Poisson / Cox (M7.3),
-polychoric / polyserial correlation helpers for ordinal Likert data,
-an R facade. See the [roadmap](roadmap.md) for the full picture.
+**Coming next**: M14b — run the full `benches/v2` GLM + graphical
+headline matrix and draft the JMLR-MLOSS / JOSS software-paper
+manuscript from the 10 figures + 5 tables that already
+auto-generate. Smaller open items: multi-response GLMs for Poisson
+/ Cox (M7.3), an R facade, n=5000 / p=2000 at-scale fixtures
+(needs an artifact-server pipeline). See the [roadmap](roadmap.md)
+for the full picture.
 
 ```{toctree}
 :hidden:
