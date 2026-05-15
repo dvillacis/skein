@@ -2467,9 +2467,9 @@ M13.1, M13.2, M13.4 (Phase 2.3), M13.4b, and M13.4c have all shipped.
 M13.6 was re-characterized as a structural memory-bandwidth wall.
 Remaining ordering for the next perf milestone:
 
-1. ~~**M13.2 — Per-λ flamegraph + fixed-cost cut**~~ — shipped
+1. ✅ **M13.2 — Per-λ flamegraph + fixed-cost cut** — shipped
    (−10.4 % wall on medium Lasso).
-2. ~~**M13.4 — group_mcp LLA outer-iter audit**~~ — shipped as M13.4
+2. ✅ **M13.4 — group_mcp LLA outer-iter audit** — shipped as M13.4
    Phase 2.3 + M13.4b (native LS group-MCP, 3.46× wall) + M13.4c
    (native GLM group-MCP, 2.12× wall on logistic).
 3. **M13.5 — MCP one-outer-iter short-circuit** — the next remaining

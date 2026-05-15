@@ -209,6 +209,11 @@ from skein_glm.debiased import (
     debiased_logistic_lasso,
     debiased_poisson_lasso,
 )
+from skein_glm.preprocessing import (
+    polychoric_correlation,
+    polychoric_covariance_matrix,
+    polyserial_correlation,
+)
 from skein_glm.adaptive import (
     AdaptiveCoxLassoPathCV,
     AdaptiveCoxLassoPathRegressor,
@@ -536,6 +541,9 @@ __all__ = [
     "DebiasedPoissonLassoRegressor",
     "debiased_logistic_lasso",
     "debiased_poisson_lasso",
+    "polychoric_correlation",
+    "polychoric_covariance_matrix",
+    "polyserial_correlation",
 ]
 
 __version__ = "0.8.0"

@@ -201,6 +201,7 @@ concepts/backends
 concepts/multitask
 concepts/multinomial
 concepts/graphical_models
+concepts/polychoric
 ```
 
 ```{toctree}
