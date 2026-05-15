@@ -28,12 +28,10 @@ use skein_core::{
     design::{DenseMatrix, DesignMatrix as _, Standardized},
     groups::Groups,
     penalty::{
-        ElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad, SparseGroupLasso,
-        SparseGroupMcp,
+        ElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad, SparseGroupLasso, SparseGroupMcp,
     },
     solver::{
-        prox_newton_block_solve_path, prox_newton_solve_path,
-        surrogate_sparse_group_scad, CdConfig,
+        prox_newton_block_solve_path, prox_newton_solve_path, surrogate_sparse_group_scad, CdConfig,
     },
     Penalty,
 };
@@ -1129,10 +1127,7 @@ pub(crate) fn solve_logistic_sparse_group_mcp_path<'py>(
             // weighted SparseGroupLasso surrogate. Sibling of M13.4c
             // for the plain group-MCP family.
             let _ = beta;
-            let cw = crate::glm::split_coord_weights_per_group(
-                coord_w_eff.view(),
-                g,
-            );
+            let cw = crate::glm::split_coord_weights_per_group(coord_w_eff.view(), g);
             Box::new(SparseGroupMcp::with_coord_weights(
                 lam,
                 alpha,
@@ -1625,10 +1620,7 @@ pub(crate) fn solve_poisson_sparse_group_mcp_path<'py>(
             // weighted SparseGroupLasso surrogate. Sibling of M13.4c
             // for the plain group-MCP family.
             let _ = beta;
-            let cw = crate::glm::split_coord_weights_per_group(
-                coord_w_eff.view(),
-                g,
-            );
+            let cw = crate::glm::split_coord_weights_per_group(coord_w_eff.view(), g);
             Box::new(SparseGroupMcp::with_coord_weights(
                 lam,
                 alpha,
@@ -1784,6 +1776,7 @@ fn validate_cox_outcomes(
 /// Used by :func:`skein_glm.debiased_cox_lasso`.
 #[pyfunction]
 #[pyo3(signature = (x, time, event, beta, *, ties="breslow"))]
+#[allow(clippy::type_complexity)]
 pub(crate) fn cox_surrogate_weights_at<'py>(
     py: Python<'py>,
     x: PyReadonlyArray2<f64>,
@@ -2442,10 +2435,7 @@ pub(crate) fn solve_cox_sparse_group_mcp_path<'py>(
             // M14c.2 — native sparse-group MCP block-CD; see
             // solve_logistic_sparse_group_mcp_path for the full rationale.
             let _ = beta;
-            let cw_per_group = crate::glm::split_coord_weights_per_group(
-                coord_w.view(),
-                g,
-            );
+            let cw_per_group = crate::glm::split_coord_weights_per_group(coord_w.view(), g);
             Box::new(SparseGroupMcp::with_coord_weights(
                 lam,
                 alpha,
@@ -3551,10 +3541,7 @@ pub(crate) fn solve_logistic_sparse_group_mcp_path_sparse<'py>(
             // weighted SparseGroupLasso surrogate. Sibling of M13.4c
             // for the plain group-MCP family.
             let _ = beta;
-            let cw = crate::glm::split_coord_weights_per_group(
-                coord_w_eff.view(),
-                g,
-            );
+            let cw = crate::glm::split_coord_weights_per_group(coord_w_eff.view(), g);
             Box::new(SparseGroupMcp::with_coord_weights(
                 lam,
                 alpha,
@@ -4094,10 +4081,7 @@ pub(crate) fn solve_poisson_sparse_group_mcp_path_sparse<'py>(
             // weighted SparseGroupLasso surrogate. Sibling of M13.4c
             // for the plain group-MCP family.
             let _ = beta;
-            let cw = crate::glm::split_coord_weights_per_group(
-                coord_w_eff.view(),
-                g,
-            );
+            let cw = crate::glm::split_coord_weights_per_group(coord_w_eff.view(), g);
             Box::new(SparseGroupMcp::with_coord_weights(
                 lam,
                 alpha,
@@ -4573,10 +4557,7 @@ pub(crate) fn solve_cox_sparse_group_mcp_path_sparse<'py>(
             // M14c.2 — native sparse-group MCP block-CD; see
             // solve_logistic_sparse_group_mcp_path for the full rationale.
             let _ = beta;
-            let cw_per_group = crate::glm::split_coord_weights_per_group(
-                coord_w.view(),
-                g,
-            );
+            let cw_per_group = crate::glm::split_coord_weights_per_group(coord_w.view(), g);
             Box::new(SparseGroupMcp::with_coord_weights(
                 lam,
                 alpha,

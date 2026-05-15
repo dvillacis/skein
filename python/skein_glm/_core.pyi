@@ -2298,3 +2298,11 @@ def solve_joint_glasso_mcp(
     primal_tol: float = ...,
     dual_tol: float = ...,
 ) -> tuple[list[NDArray[np.float64]], dict]: ...
+def cox_surrogate_weights_at(
+    x: NDArray[np.float64],
+    time: NDArray[np.float64],
+    event: NDArray[np.float64],
+    beta: NDArray[np.float64],
+    *,
+    ties: str = ...,
+) -> tuple[NDArray[np.float64], NDArray[np.float64]]: ...

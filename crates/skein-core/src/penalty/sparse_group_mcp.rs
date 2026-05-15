@@ -50,12 +50,7 @@ impl SparseGroupMcp {
         }
     }
 
-    pub fn with_weights(
-        lambda: f64,
-        alpha: f64,
-        gamma: f64,
-        weights: Array1<f64>,
-    ) -> Self {
+    pub fn with_weights(lambda: f64, alpha: f64, gamma: f64, weights: Array1<f64>) -> Self {
         assert!(
             (0.0..=1.0).contains(&alpha),
             "alpha must be in [0, 1] (got {})",
@@ -374,9 +369,7 @@ mod tests {
         // α = 1 so step 2 (group MCP) is identity (λ_g = 0).
         let group_w = array![1.0];
         let coord_w = vec![array![100.0, 1.0]];
-        let pen = SparseGroupMcp::with_coord_weights(
-            0.2, 1.0, 3.0, group_w, coord_w,
-        );
+        let pen = SparseGroupMcp::with_coord_weights(0.2, 1.0, 3.0, group_w, coord_w);
         let mut block = array![0.5, 0.5];
         pen.prox_group(0, block.view_mut(), 1.0);
         // β_0, weight 100: γ·λ·v_0 = 60; |0.5| < 60 ⇒ shrinkage zone.

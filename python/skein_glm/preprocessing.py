@@ -199,7 +199,7 @@ def polychoric_correlation(
     X = np.asarray(X)
     if X.ndim != 2:
         raise ValueError(f"X must be 2D, got shape {X.shape}")
-    n, p = X.shape
+    _, p = X.shape
     if p < 2:
         raise ValueError(f"X must have at least 2 columns, got {p}")
 
@@ -207,7 +207,6 @@ def polychoric_correlation(
         if np.issubdtype(X.dtype, np.floating):
             keep = ~np.any(np.isnan(X), axis=1)
             X = X[keep]
-        n = X.shape[0]
     elif missing != "pairwise":
         raise ValueError(f"missing must be 'pairwise' or 'listwise', got {missing!r}")
 
@@ -279,7 +278,7 @@ def _polyserial_pair(
 def polyserial_correlation(
     X_ord: NDArray,
     Y_cont: NDArray,
-) -> NDArray[np.float64]:
+) -> float | NDArray[np.float64]:
     """Polyserial correlation(s) for ordinal × continuous variable(s).
 
     Parameters
@@ -391,12 +390,11 @@ def polychoric_covariance_matrix(
     X = np.asarray(X, dtype=np.float64)
     if X.ndim != 2:
         raise ValueError(f"X must be 2D, got shape {X.shape}")
-    n, p = X.shape
+    _, p = X.shape
 
     if missing == "listwise":
         keep = ~np.any(np.isnan(X), axis=1)
         X = X[keep]
-        n = X.shape[0]
     elif missing != "pairwise":
         raise ValueError(f"missing must be 'pairwise' or 'listwise', got {missing!r}")
 

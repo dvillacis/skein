@@ -23,10 +23,7 @@ use skein_core::datafit::{BinomialLogit, CoxPH, GlmDatafit, PoissonLog, TieHandl
 use skein_core::design::DenseMatrix;
 use skein_core::groups::Groups;
 use skein_core::penalty::{GroupLasso, GroupMcp, GroupPenalty};
-use skein_core::solver::{
-    prox_newton_block_solve_path, surrogate_weights_group_mcp, CdConfig,
-};
-use skein_core::DesignMatrix;
+use skein_core::solver::{prox_newton_block_solve_path, surrogate_weights_group_mcp, CdConfig};
 
 const N: usize = 200;
 const P: usize = 20;
@@ -255,13 +252,17 @@ fn assert_native_compatible(name: &str, s: AgreementStats) {
 }
 
 /// Generate (time, event) for Cox: positive times, ~70% events.
-fn cox_times_and_events(seed: u64, x: &Array2<f64>, beta: &Array1<f64>) -> (Array1<f64>, Array1<f64>) {
+fn cox_times_and_events(
+    seed: u64,
+    x: &Array2<f64>,
+    beta: &Array1<f64>,
+) -> (Array1<f64>, Array1<f64>) {
     let eta = x.dot(beta);
     let u = lcg_seq(seed.wrapping_add(99), N);
     let mut time = Array1::<f64>::zeros(N);
     let mut event = Array1::<f64>::zeros(N);
     for i in 0..N {
-        let u_i = ((u[i] + 1.0) * 0.5).max(1e-9).min(1.0 - 1e-9);
+        let u_i = ((u[i] + 1.0) * 0.5).clamp(1e-9, 1.0 - 1e-9);
         // Exponential baseline hazard; T = -ln(U) / exp(η).
         time[i] = -u_i.ln() / eta[i].exp();
         // Censor lightly (~30% censoring).
