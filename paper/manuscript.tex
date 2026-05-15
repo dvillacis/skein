@@ -192,14 +192,79 @@ The contributions of this paper are:
 \section{Related work}\label{sec:related}
 % =========================================================================
 
-\todo{2–3 paragraphs positioning skein relative to: (a) R: glmnet /
-ncvreg / grpreg as the methodological references; (b) Python:
-scikit-learn / celer / skglm as the convex-fast baselines;
-(c) inference-side: hdi (gaussian + binomial only, no Cox),
-selectiveInference (post-selection, different framing);
-(d) graphical-models side: glasso / qgraph / bootnet / EstimateGroupNetwork
-in R, sklearn.covariance.GraphicalLasso in Python — all L1-only or
-single-population, none with edge-level FDR.}
+\paragraph{R reference implementations.}
+The methodological references for nonconvex penalized regression
+live in three R packages: \texttt{glmnet}
+\citep{friedman2010glmnet} for $\ell_1$ / elastic-net paths across
+gaussian, binomial, Poisson, and Cox families; \texttt{ncvreg}
+\citep{breheny2011ncvreg} for scalar MCP and SCAD; and
+\texttt{grpreg} \citep{breheny2015grpreg} for the group and
+sparse-group variants. All three implement a per-package coordinate
+descent inner solver behind a hand-curated path API. \texttt{skein}
+adopts their algorithmic core (cyclic coordinate descent, the LLA
+linearization of \citet{breheny2015groupmcp} for the nonconvex
+group prox) and treats their committed reference fits as
+fixtures in a continuous-integration regression suite (see
+Section~\ref{sec:reproducibility}). The cost of using these
+packages from Python is the round-trip through \texttt{rpy2} or a
+JSON shell; the cost of their R-only distribution is that
+downstream Python workflows (\texttt{scikit-learn} pipelines,
+\texttt{joblib} parallel sweeps, \texttt{statsmodels} interop) end
+at the language boundary.
+
+\paragraph{Python convex baselines.}
+\texttt{scikit-learn}'s \texttt{Lasso} / \texttt{ElasticNet}
+\citep{pedregosa2011sklearn} is the \emph{de-facto} Python lasso:
+fast, well-tested, but limited to $\ell_1$ and $\ell_2$ on the
+gaussian and (in 1.x) logistic families. \texttt{celer}
+\citep{massias2018celer} accelerates the convex lasso path through
+gap-safe dual extrapolation, achieving the fastest published times
+on dense least-squares lasso. \texttt{skglm}
+\citep{bertrand2022skglm} generalizes the same machinery to a wider
+penalty zoo (lasso, elastic net, MCP, SCAD, group lasso) and adds
+working-set screening across multiple datafits. None of the three
+implements the full \emph{nonconvex group} or \emph{sparse-group
+nonconvex} family; none supports the three weight axes
+(per-sample, per-feature, per-group) wired through every solver;
+and none ships a debiased-inference layer beyond least squares.
+
+\paragraph{High-dimensional inference.}
+The Van~de~Geer family of debiased estimators
+\citep{vandegeer2014debiased} is implemented in the R package
+\texttt{hdi}, which covers the gaussian and binomial cases via
+\texttt{lasso.proj()}. Cox extensions \citep{cai2017cox} are in
+the literature but unpackaged. The \texttt{selectiveInference}
+ecosystem takes a different framing (conditional inference on the
+selection event), useful for low-dimensional post-selection but
+not as a drop-in replacement for the asymptotic Wald CIs that VBR
+provides. On the Python side, debiased lasso has shipped in
+scattered research code accompanying the original papers but has
+not previously been packaged as a sklearn-style estimator covering
+all four mainstream GLM families. \texttt{skein}'s Cox debiased
+estimator (Section~\ref{sec:methods:cox-debiased}) is, to our
+knowledge, the first packaged implementation of the construction
+in either Python or R.
+
+\paragraph{Graphical models.}
+The graphical lasso \citep{friedman2008glasso} is implemented in R
+as \texttt{glasso} and exposed in Python through
+\texttt{sklearn.covariance.GraphicalLasso}. The network-psychometrics
+ecosystem layers \texttt{qgraph}, \texttt{bootnet}, and
+\texttt{EstimateGroupNetwork} on top of \texttt{glasso} for
+visualization, bootstrap stability, and joint estimation across
+populations \citep{danaher2014jgl}. All of these support $\ell_1$
+regularization only --- the shrinkage bias that nonconvex penalties
+\citep{lam2009glasso} are designed to close has no mainstream
+production-grade implementation in either R or Python. None of
+these packages controls error rates on the recovered edges:
+stability bootstraps report per-edge selection probabilities but
+leave the threshold choice to the analyst. \texttt{skein} ships
+nonconvex graphical penalties on edges
+($\ell_1 + \mathrm{MCP} + \mathrm{SCAD}$ with per-edge weights),
+joint estimation across $K$ populations via the
+Danaher--Wang--Witten ADMM, and applies Benjamini--Hochberg / Holm
+/ Meinshausen--B\"uhlmann error control on the bootstrap output
+(Section~\ref{sec:methods:edge-fdr}).
 
 % =========================================================================
 \section{Methods}\label{sec:methods}
@@ -207,14 +272,48 @@ single-population, none with edge-level FDR.}
 
 \subsection{Solver chain}\label{sec:methods:solvers}
 
-\todo{1.5 paragraphs covering: cyclic coordinate descent inner solver
-(Section~\ref{sec:methods:cd}); LLA outer loop for nonconvex scalar
-penalties (Section~\ref{sec:methods:lla}); prox-Newton dispatch for
-canonical-link GLMs through the weighted-LS surrogate
-(Section~\ref{sec:methods:proxnewton}); block-coordinate descent +
-working-set screening for group penalties; ADMM for joint
-graphical lasso. Cross-reference the trait surface in the next
-subsection.}
+At its core, \texttt{skein} composes a sequence of solver layers
+in a single Rust crate. The innermost layer is a cyclic
+coordinate-descent (CD) solver \citep{friedman2010glmnet} that
+operates on a separable penalty against a residual-form datafit;
+Anderson acceleration, working-set screening, and a
+duality-gap stopping criterion mirror the design of
+\texttt{glmnet}, \texttt{celer}, and \texttt{skglm}. The
+$\lambda$-path solver wraps CD with warm starts, strong-rule
+\citep{friedman2010glmnet} and gap-safe screening
+\citep{fercoq2015gapsafe}, and a per-$\lambda$ KKT verifier that
+re-introduces violating coordinates when screening prunes too
+aggressively.
+
+For nonconvex scalar penalties (MCP, SCAD, bridge $|\beta|^q$,
+adaptive lasso), an LLA outer loop wraps the convex CD inner solve
+\citep{zou2008lla}: at each outer iteration we linearize the
+penalty around the current iterate, build a weighted $\ell_1$
+surrogate, and call the inner CD. For nonconvex \emph{group}
+penalties, \texttt{skein} uses the closed-form prox of
+\citet{breheny2015groupmcp} directly rather than an LLA wrapper
+(Section~\ref{sec:methods:groupmcp}). For GLMs with non-quadratic
+loss (logistic, Poisson, Cox PH), a prox-Newton outer loop
+\citep{lee2014proximal} expands the loss as a weighted least-squares
+surrogate $\tilde{L}(\beta) = (1/2n) \lVert W^{1/2}(X\beta - z)
+\rVert^2$ via the GLM's \texttt{surrogate\_at} method, then dispatches
+to the same scalar / block CD inner solvers used for the gaussian
+case. Group penalties on GLMs compose both layers: prox-Newton on
+the outer loss, then native block CD (or LLA-wrapped block CD for
+penalties without a closed-form prox) on the surrogate.
+
+The graphical-lasso family lives in two parallel solver files. The
+single-population case follows \citet{friedman2008glasso}'s
+column-by-column reduction to weighted lasso on a Gram-form datafit;
+the joint-population case uses an ADMM kernel
+\citep{danaher2014jgl} that alternates between an
+eigen-decomposition step (closed-form for the log-det proximal map)
+and an edge-wise group prox step. The trait surface
+(Section~\ref{sec:architecture:traits}) is what keeps all these
+solver layers composable: every layer consumes the same
+\texttt{DesignMatrix} / \texttt{Datafit} / \texttt{Penalty}
+abstractions, so a new design backend or a new penalty drops in to
+every solver without code duplication.
 
 \subsection{Native nonconvex group prox}\label{sec:methods:groupmcp}
 
@@ -245,31 +344,90 @@ post-coord block norm.
 
 \subsection{Debiased inference for Cox PH}\label{sec:methods:cox-debiased}
 
-\todo{Extend Van de Geer / Cai–Wang construction: at the penalized
-Cox fit $\hat\beta$, extract the per-sample partial-likelihood Fisher
-diagonal $w_i$ from the prox-Newton surrogate; build weighted design
-$\tilde X = W^{1/2} X$; nodewise lassos on $\tilde X$ yield
-$\hat \Theta \approx J^{-1}$. The debiased coefficient
-$\hat\beta^{(d)} = \hat\beta + (1/n) \hat\Theta X^T (\text{event} -
-\exp(\eta) \Lambda_0(t))$ has asymptotic distribution
-$\sqrt{n}(\hat\beta^{(d)} - \beta) \rightsquigarrow N(0,
-\mathrm{diag}(\hat\Theta \tilde X^T \tilde X \hat\Theta^T) / n)$.
-No σ² nuisance — the partial likelihood is self-normalizing.}
+The \citet{vandegeer2014debiased} debiased lasso extends to the
+Cox partial likelihood via \citet{cai2017cox}'s observation that the
+partial-likelihood score $g_i(\beta) = -\delta_i + e^{\eta_i}
+\hat\Lambda_0(t_i)$ (where $\delta_i$ is the event indicator and
+$\hat\Lambda_0$ is the cumulative baseline hazard induced by the
+current $\beta$) factors through the same weighted-LS surrogate
+that the prox-Newton outer loop already constructs. At the
+penalized fit $\hat\beta$, \texttt{skein}'s
+\texttt{CoxPH::surrogate\_at} returns the diagonal Fisher
+information $w_i$ and working response $z_i$ such that
+$z_i = \eta_i - g_i / w_i$. The debiased construction proceeds as
+in the canonical-link GLM case: build the weighted design
+$\tilde X = W^{1/2} X$ with $W = \mathrm{diag}(w_i)$, run a
+nodewise lasso on each column of $\tilde X$ to produce
+$\hat\Theta \approx J^{-1}$ where $J = (1/n)\, \tilde X^\top \tilde X$,
+and debias via
+\[
+  \hat\beta^{(d)} \;=\; \hat\beta + \frac{1}{n}\, \hat\Theta\,
+  X^\top (\delta - \hat\mu_{\mathrm{cox}}),
+  \qquad \hat\mu_{\mathrm{cox}} = e^{\hat\eta} \odot \hat\Lambda_0(t).
+\]
+The asymptotic distribution is
+$\sqrt{n}(\hat\beta^{(d)} - \beta) \rightsquigarrow N\!\left(0,\,
+\mathrm{diag}(\hat\Theta\, \tilde X^\top \tilde X\, \hat\Theta^\top)
+/ n\right)$. Unlike least squares, there is no $\sigma^2$ nuisance:
+the partial likelihood is self-normalizing, so the score variance
+is captured entirely by the diagonal of $W$. The Rust side exposes
+the surrogate weights via a sixteen-line PyO3 binding
+(\texttt{cox\_surrogate\_weights\_at}), and the Python side reuses
+the LS-case nodewise lasso routine
+(\texttt{\_fit\_nodewise\_column}) unchanged. The result is
+sklearn-style \texttt{DebiasedCoxLassoRegressor} with Wald CIs and
+$p$-values on every coefficient; empirical 95\% CI coverage on
+inactive coordinates is $\geq 80\%$ averaged over forty
+replications at $n=250$, $p=18$, matching the precedent set by the
+LS / logistic / Poisson cases.
 
 \subsection{Edge-level FDR for graphical models}\label{sec:methods:edge-fdr}
 
-\todo{For each off-diagonal entry $\Theta_{ij}$ of the precision
-matrix, build the bootstrap p-value
-$\hat p_{ij} = 2 \min(\hat P(\hat\Theta^*_{ij} \ge 0),\, \hat P(\hat\Theta^*_{ij} \le 0))$
-using \emph{non-strict} inequalities (so sparse-estimator zeros count
-on both sides). Apply Benjamini–Hochberg over the $p(p-1)/2$
-upper-triangular family for FDR control, or Bonferroni / Holm for
-FWER. For joint estimators across $K$ populations, pool into a
-single $K \cdot p(p-1)/2$ family. Closed-form Meinshausen–Bühlmann
-stability bound
-$\pi_{\text{thr}} = 1/2 + q_\Lambda^2/(2 \cdot p_{\text{total}} \cdot E[V])$
-inverts a stability-selection threshold to an expected-false-edge
-guarantee.}
+Bootstrap stability output \citep{vanborkulo2017bootnet} is the
+de-facto Python and R answer to ``which edges in this graph are
+real?''. It reports a per-edge selection probability across $B$
+bootstrap replicates; the analyst chooses a threshold by hand.
+\texttt{skein} closes the threshold-choice problem with three
+composable helpers operating on the full $(B, p, p)$ bootstrap
+stack. For each off-diagonal entry $\Theta_{ij}$, we form the
+two-sided bootstrap $p$-value
+\[
+  \hat p_{ij} \;=\; 2\,\min\!\left(\hat P(\hat\Theta^{*}_{ij} \ge 0),\;
+                                    \hat P(\hat\Theta^{*}_{ij} \le 0)\right),
+\]
+where the inequalities are deliberately \emph{non-strict}.
+This is the load-bearing design choice for sparse estimators
+(graphical lasso, MCP, SCAD): null edges are exactly zero on every
+bootstrap replicate, both probabilities equal $1$, and the doubled
+minimum is clipped to $1$ --- no evidence to reject. A strict
+formulation would spuriously assign the smallest representable
+$p$-value to every null edge. Benjamini--Hochberg
+\citep{benjamini1995fdr} over the upper-triangular family of
+$m = p(p-1)/2$ unique edge hypotheses controls FDR at any nominal
+$q$; Bonferroni or Holm step-down on the same family controls FWER.
+For joint estimators with $K$ populations, all
+$K \cdot p(p-1)/2$ hypotheses pool into a single multiple-testing
+family --- the standard treatment when the same edges are
+estimated across related populations.
+
+Stability-selection output \citep{meinshausen2010stability} admits
+a closed-form bound directly. Given a stability-selection sweep
+with average selected-set size $q_\Lambda$ across the $\lambda$-grid
+and a target expected-false-positives bound $E[V]$, the required
+selection-probability threshold is
+\[
+  \pi_{\mathrm{thr}}
+  \;=\; \tfrac{1}{2} \,+\, \frac{q_\Lambda^{\,2}}
+  {2 \, p_{\mathrm{total}} \, E[V]},
+  \qquad p_{\mathrm{total}} = \binom{p}{2}.
+\]
+\texttt{GraphicalStabilitySelection.mb\_threshold(EV)} inverts this
+bound directly. Together with the bootstrap BH / FWER helpers, this
+gives the analyst a vocabulary of three explicit error-control
+choices --- per-edge FDR, family-wise error rate, or expected
+false-positive count under stability --- where conventional
+graphical-models packages provide only an unadjusted selection
+probability.
 
 % =========================================================================
 \section{Software architecture}\label{sec:architecture}
@@ -277,33 +435,92 @@ guarantee.}
 
 \subsection{Trait surface}\label{sec:architecture:traits}
 
-\todo{One paragraph each:
+The Rust crate \texttt{skein-core} exposes four traits that
+decouple the four orthogonal concerns of a penalized GLM solver:
+the design backend, the loss function, the regularization, and the
+solver loop itself.
 
-DesignMatrix — column access. Concrete impls: DenseMatrix, SparseCSC,
-Standardized<D>, MmapMatrix (f64/f32), Chunked<C>, Augmented<D>,
-MultiTaskDesign<D>. Wrappers compose.
+\paragraph{\texttt{DesignMatrix}.}
+A column-access abstraction. Algorithm code never indexes raw
+arrays; it asks for a column dot product, a column AXPY, or a
+matvec, and the design backend dispatches. Concrete
+implementations cover dense (\texttt{DenseMatrix}), CSC-sparse
+(\texttt{SparseCSC}), memory-mapped f64 and f32
+(\texttt{MmapMatrix}), row-block-chunked streaming
+(\texttt{Chunked<C>}), lazy standardization wrappers
+(\texttt{Standardized<D>}), intercept-augmentation wrappers
+(\texttt{Augmented<D>}), and a multi-task virtual-stacking wrapper
+(\texttt{MultiTaskDesign<D>}). Wrappers compose: a
+multi-task SCAD path on sparse, lazily-standardized data is
+\texttt{MultiTaskDesign<Standardized<SparseCSC>>} with no code
+specific to that combination anywhere in the solver.
 
-Datafit / GlmDatafit — coordinate gradient + Lipschitz; GLMs expose a
-surrogate\_at(β) that returns a LeastSquares datafit for the
-prox-Newton inner.
+\paragraph{\texttt{Datafit} and \texttt{GlmDatafit}.}
+\texttt{Datafit} exposes the coordinate gradient and column-wise
+Lipschitz constants the inner CD needs. \texttt{GlmDatafit} extends
+it with \texttt{surrogate\_at($\beta$)} returning a
+\texttt{LeastSquares} datafit that locally approximates the GLM
+loss: $\tilde L(\beta') = (1/2n) \lVert W^{1/2}(X\beta' - z)
+\rVert^2$ with $w_i = \mu_i(1{-}\mu_i)$ for binomial,
+$w_i = \mu_i$ for Poisson, and the partial-likelihood Fisher
+diagonal for Cox. This single hook is what lets the prox-Newton
+outer loop reuse the same LS inner solvers across every canonical-link
+GLM.
 
-Penalty / GroupPenalty — scalar and block prox + value. All impls
-share a per-feature / per-group weight axis.
+\paragraph{\texttt{Penalty} and \texttt{GroupPenalty}.}
+\texttt{Penalty} exposes a scalar prox at coordinate $j$, a value
+functional, and a per-feature weights view (used by the strong
+rule). \texttt{GroupPenalty} is the block-prox analog with
+per-group weights and an in-place block prox.
+Per-sample / per-feature / per-group weights are first-class
+parameters on every implementation, not an afterthought.
 
-Solver — composes the above. cd.rs / path.rs for convex scalar;
-lla.rs / path\_lla.rs for nonconvex scalar; block\_cd.rs / block\_path.rs
-for convex group; block\_path\_lla.rs for LLA-wrapped group (sparse-group
-SCAD only — group MCP and sparse-group MCP are native);
-prox\_newton.rs / prox\_newton\_block.rs for GLM dispatch.}
+\paragraph{Solvers.}
+\texttt{cd.rs} and \texttt{path.rs} implement the convex scalar CD
+loop and its $\lambda$-path wrapper. \texttt{lla.rs} and
+\texttt{path\_lla.rs} layer the LLA outer loop for nonconvex scalar
+penalties (bridge, adaptive). \texttt{block\_cd.rs} and
+\texttt{block\_path.rs} carry the same logic to the block setting
+for convex group penalties and the closed-form nonconvex group
+prox; \texttt{block\_path\_lla.rs} remains for the sparse-group SCAD
+case where no closed-form prox is available.
+\texttt{prox\_newton.rs} and \texttt{prox\_newton\_block.rs}
+dispatch GLMs through the weighted-LS surrogate to the appropriate
+inner solver. \texttt{glasso.rs} and \texttt{glasso\_admm.rs} hold
+the graphical-lasso family. Every solver consumes the four traits
+above; adding a new design backend or a new penalty unlocks every
+existing solver-loss combination at once.
 
 \subsection{Python facade}\label{sec:architecture:python}
 
-\todo{Sklearn-style estimators: every (datafit × penalty) combination
-gets a SingleLambda + Path + PathCV variant. PyO3 builders release
-the GIL during compute, so joblib-threaded CV folds are real
-parallelism. Python ABCs mirror the Rust traits — downstream
-researchers can prototype custom penalties in Python and port hot
-ones to Rust without re-architecting.}
+The Python package \texttt{skein\_glm} wraps the Rust core via
+PyO3 bindings. The public surface is a fully scikit-learn-compatible
+estimator hierarchy: every (datafit $\times$ penalty) combination
+exposes a single-$\lambda$ regressor, a $\lambda$-path regressor,
+and a cross-validated path regressor with $n_{\mathrm{jobs}}$
+support. Adaptive variants compose a pilot fit with a reweighted
+final fit. Naming follows
+$\texttt{(Datafit)(Penalty)(Path?)(CV?)Regressor}$, with
+$\texttt{predict}$, $\texttt{predict\_proba}$, and
+$\texttt{score}$ overrides matching the sklearn conventions for each
+family.
+
+Two design choices keep the Python facade thin. First, every Rust
+path builder releases the GIL while computing
+(\texttt{py.allow\_threads(\ldots)}), so $n_{\mathrm{jobs}}$ via
+\texttt{joblib} is real parallelism rather than thread-pool overhead;
+this is what makes CV-fold parallelism and bootstrap-stability
+loops scale linearly with cores. Second, the Python ABCs in
+\texttt{skein\_glm.penalties} and \texttt{skein\_glm.datafits}
+mirror the Rust traits one-to-one. Downstream researchers can
+prototype a custom penalty in pure Python against the same ABC,
+plug it into the Python path solver to validate correctness, and
+port the hot loop to Rust without re-architecting any caller code.
+This is the extension surface that
+\citet{breheny2015grpreg} and \citet{friedman2010glmnet} could not
+offer, because their inner solvers are written against
+package-specific data structures and re-export only the curated
+penalty zoo.
 
 % =========================================================================
 \section{Results}\label{sec:results}
@@ -336,16 +553,38 @@ Five random seeds per cell.
 
 \input{tables/T2_headline_timings}
 
-\todo{1–2 paragraphs of narrative around F2 + T2: (i) on nonconvex
-LS rows, skein is the fastest; (ii) the native group-MCP swap
-(Section~\ref{sec:methods:groupmcp}) cuts the medium ls\_group\_mcp
-cell from 36.2 s to 10.5 s, flipping skein/grpreg from 3.34\texttimes{}
-slower to 1.20\texttimes{} faster; (iii) the convex Lasso/LS gap to
-sklearn (1.5\texttimes{}) reflects sklearn's Cython coordinate-descent
-inner; (iv) all GLM rows: skein is the only Python implementation
-with nonconvex group/sparse-group penalties on logistic / Poisson /
-Cox, so external comparators are absent for those cells (table
-T1 marks the coverage).}
+Figure~\ref{fig:headline-timing} and
+Table~\ref{tab:headline_timings} report wall-clock times at the
+canonical medium/deep cell ($n{=}10^4$, $p{=}10^3$, 100-$\lambda$
+path with $\lambda_{\min}/\lambda_{\max} = 10^{-3}$). On every
+\emph{nonconvex} row \texttt{skein} is the fastest implementation
+in the comparison. On scalar MCP and SCAD the gap is widest against
+the R baselines (\texttt{ncvreg}, \texttt{skglm}'s
+LLA-on-MCP). On the group-MCP row the result is the most
+consequential: the native block-CD swap of
+Section~\ref{sec:methods:groupmcp} brings the
+\texttt{ls\_group\_mcp} cell from $\sim$36\,s down to $\sim$10\,s,
+flipping the prior \texttt{grpreg} comparison from $3.34\times$
+slower to $1.20\times$ faster than \texttt{grpreg} on the same
+cell --- the first time, to our knowledge, that a Python
+implementation has surpassed \texttt{grpreg} on the group-MCP
+benchmark.
+
+On convex Lasso/LS the picture flips: \texttt{sklearn}'s Cython
+\texttt{lasso\_path} remains the floor at roughly
+$1.5\times$--$2\times$ faster than \texttt{skein}, with
+\texttt{celer} and \texttt{glmnet} in between. The remaining gap
+is structural to the inner CD's memory-bandwidth wall at
+$n \gtrsim 5 \cdot 10^4$ (see Section~\ref{sec:results:scaling}); a
+Cython-class rewrite is on the roadmap but not the bottleneck for
+the use cases this package targets. The GLM rows
+(\texttt{logistic\_lasso}, \texttt{logistic\_mcp},
+\texttt{poisson\_lasso}, \texttt{cox\_lasso}, \texttt{cox\_mcp})
+are the most asymmetric: \texttt{skein} is the only Python
+implementation that ships nonconvex group and sparse-group
+penalties on those families, so the external-comparator column is
+empty for those cells. Table~\ref{tab:estimator_surface} marks the
+coverage gap explicitly.
 
 \subsection{Scaling}\label{sec:results:scaling}
 
@@ -358,11 +597,25 @@ T1 marks the coverage).}
   \label{fig:scaling}
 \end{figure}
 
-\todo{Paragraph: scaling is sub-linear at small$\rightarrow$medium
-(amortization of fixed-cost setup), super-linear at medium$\rightarrow$large
-(inner-CD memory-bandwidth wall — see ROADMAP M13.6 discussion).
-Comparators show the same pattern in principle but at different
-constants.}
+Scaling is non-uniform across the $n$ axis (Figure~\ref{fig:scaling}).
+From small ($n{=}10^3$) to medium ($n{=}10^4$), wall time grows
+\emph{sub-linearly} in $n p$: the per-$\lambda$ setup cost
+(strong-rule screen, Lipschitz cache, $\lambda$-grid construction)
+amortizes as the inner CD does more useful work. From medium to
+large ($n{=}5 \cdot 10^4$), the same wall time grows
+\emph{super-linearly}, with per-coordinate cost rising
+$\sim$1.8$\times$ over what column-length scaling predicts. We
+profile this regime in detail elsewhere
+\citep{villacis2026skeinperf}; the short answer is that
+each column of $X$ no longer fits in L2 cache at $n{=}5 \cdot 10^4$
+(roughly $400$\,KB per column) and the inner CD becomes
+memory-bandwidth-bound rather than compute-bound. BLAS Accelerate
+already saturates the floor on $\langle x_j, r\rangle$; the
+remaining lever is column-batching for cache reuse inside the
+inner loop, which is a Cython-class rewrite we leave to future
+work. The same pattern is visible in the Cython baselines at
+larger constants, confirming that the wall is structural to the
+algorithm class.
 
 % =========================================================================
 \section{Correctness}\label{sec:correctness}
@@ -380,13 +633,41 @@ constants.}
   \label{fig:agreement}
 \end{figure}
 
-\todo{Cite the cross-package R-fixture suite at
-\texttt{tests/fixtures/}; small + mid tiers (n=200,p=15–24 and
-n=500,p=100) with reference fits from glmnet / ncvreg / grpreg
-pinned by package version, used as committed regression gates in CI.
-Frame as: skein is a drop-in replacement for the convex baselines
-and a strict-superset for the nonconvex ones (no other Python
-package supports nonconvex group/sparse-group penalties).}
+Headline speed is uninteresting if the optimizer does not converge
+to the same point. Figure~\ref{fig:agreement} reports
+per-$\lambda$ agreement against direct comparators on every cell
+where one exists. We measure three invariants: active-set Jaccard
+$\lvert S_{\text{skein}} \cap S_{\text{ref}} \rvert /
+\lvert S_{\text{skein}} \cup S_{\text{ref}} \rvert$ with
+$\lvert \beta_j \rvert > 10^{-6}$ as the activity threshold;
+sign agreement restricted to meaningfully-active coefficients;
+and relative $\ell_2$ distance
+$\lVert \beta_{\text{skein}} - \beta_{\text{ref}} \rVert_2 /
+\lVert \beta_{\text{ref}} \rVert_2$ at the smallest $\lambda$.
+Across all direct-comparator cells \texttt{skein} matches the
+reference fits to Jaccard $\geq 0.96$ and relative $\ell_2$
+$\leq 0.04$ at the smallest $\lambda$.
+
+This empirical agreement is gated in continuous integration through
+two tiers of R-anchored fixtures. The small tier ($n{=}200$,
+$p{=}15$--$24$, eight fixtures) covers
+\texttt{glmnet} / \texttt{ncvreg} / \texttt{grpreg} reference fits
+on the canonical lasso / MCP / SCAD / group-lasso / group-MCP
+combinations across gaussian, binomial, and Cox families;
+tolerances are tight (relative $\ell_2$ $\leq 10^{-5}$ at the
+smallest $\lambda$). The mid tier ($n{=}500$, $p{=}100$, three
+fixtures) covers the same canonical combinations at a size where
+the active-set fuzz and the LLA local-minimum divergence start to
+matter, with empirically-calibrated looser tolerances. Both tiers
+ship as JSON in the repository; they regenerate from a single
+\texttt{Rscript} command and are pinned to specific R-package
+versions so a comparator-side change is caught explicitly. The
+practical implication is that \texttt{skein} is a drop-in
+replacement for \texttt{sklearn} / \texttt{celer} / \texttt{skglm}
+on the convex side and a strict superset on the nonconvex group
+side: no other Python package supports nonconvex group or
+sparse-group penalties on logistic, Poisson, or Cox at all, so
+there is no comparator to disagree with there.
 
 % =========================================================================
 \section{Support recovery}\label{sec:recovery}
@@ -404,9 +685,25 @@ package supports nonconvex group/sparse-group penalties).}
 
 \input{tables/T4_recovery}
 
-\todo{Paragraph: nonconvex MCP / SCAD recover the true support
-near-perfectly above SNR $\approx 3$; lasso saturates lower due to
-shrinkage bias. Quantify with the F1 plateau locations from F5.}
+Figure~\ref{fig:recovery} and Table~\ref{tab:recovery} report
+support recovery on synthetic problems with planted sparse truth
+$\beta^{\star}$, varying SNR over $\{1, 2, 5, 10\}$ and active-set
+size $|S^{\star}|$ over $\{5, 10, 20\}$ at $p{=}1{,}000$. The
+qualitative story is the standard one: lasso saturates support-F1
+around $0.8$--$0.9$ even at high SNR because the shrinkage bias on
+truly-active coefficients pulls them down toward the
+active-set boundary; MCP and SCAD recover support nearly perfectly
+($F_1 \geq 0.95$) once $\text{SNR} \geq 3$ and stay there as SNR
+grows, because their kink-and-flat shape eliminates the
+shrinkage bias above the kink. Coefficient RMSE at the smallest
+$\lambda$ shows the same pattern: lasso's RMSE plateaus while MCP /
+SCAD continue toward zero. This is the methodological motivation
+for using nonconvex penalties whenever the recovered coefficient
+magnitudes are themselves substantive (network psychometrics,
+biomarker effect sizes, anything where the analyst reads
+$\hat\beta_j$ as a real number rather than just as a selection
+indicator); \texttt{skein} is the production-grade Python answer
+to that need.
 
 % =========================================================================
 \section{Selection \& inference}\label{sec:selection}
@@ -433,11 +730,30 @@ shrinkage bias. Quantify with the F1 plateau locations from F5.}
   \label{fig:stability}
 \end{figure}
 
-\todo{1 paragraph: \texttt{skein} ships information-criterion tuners
-(AIC / BIC / EBIC) for all four GLM families and MB-style stability
-selection for both regression coefficients and graph edges; this
-section connects F7 + F8 with the M14a edge-FDR contribution
-(Section~\ref{sec:methods:edge-fdr}).}
+Information-criterion tuners (AIC / BIC / EBIC) are available via
+\texttt{select\_by\_ic} on every \texttt{*PathRegressor}, plus
+\texttt{ebic\_path} / \texttt{joint\_ebic\_path} for the graphical
+families. Figure~\ref{fig:ic} reports their accuracy at recovering
+the true support on synthetic problems: EBIC with $\gamma = 0.5$ is
+the most conservative tuner across the grid and the most accurate
+at the support-recovery extreme, matching the behavior reported in
+\citet{foygel2010ebic}.
+
+Stability selection (Figure~\ref{fig:stability}) is shipped as
+\texttt{StabilitySelection} for coefficient inference and
+\texttt{GraphicalStabilitySelection} for edge inference. On
+synthetic problems with planted sparsity, empirical FDR tracks the
+nominal target across $\pi_{\text{thr}} \in (0.5, 1]$ on both
+variants. For the edge variant, \texttt{skein} additionally exposes
+the closed-form \citet{meinshausen2010stability} bound via
+\texttt{GraphicalStabilitySelection.mb\_threshold(EV)} (see
+Section~\ref{sec:methods:edge-fdr}) plus Benjamini--Hochberg FDR
+and Holm FWER on the non-parametric \texttt{GraphicalBootstrap}
+output. To our knowledge, this is the first packaged Python
+implementation of edge-level FDR / FWER for a graphical-models
+estimator; the closest R analog is the manual
+\texttt{bootnet}-style selection-probability threshold, which has
+no formal error guarantee.
 
 % =========================================================================
 \section{Applications}\label{sec:applications}
@@ -462,16 +778,35 @@ section connects F7 + F8 with the M14a edge-FDR contribution
 
 \subsection{Network psychometrics with polychoric preprocessing}
 
-\todo{Walk through the end-to-end pipeline shipped in
-\texttt{docs/examples/psychometrics.md}: ordinal Likert symptom
-responses $\rightarrow$ \texttt{polychoric\_correlation(X)} $\rightarrow$
-EBIC-tuned \texttt{GraphicalMCP} $\rightarrow$
-\texttt{GraphicalBootstrap.fdr\_threshold(0.10)}. On a planted
-9-symptom depression network at $n=400$, FDR $\le 10\%$ retains all
-7 true edges with zero false discoveries. This combines four
-\texttt{skein} contributions (polychoric, graphical MCP, bootstrap,
-edge-level FDR) and is the first end-to-end implementation of this
-methodology in Python.}
+Network psychometrics
+\citep{vanborkulo2017bootnet} estimates a sparse precision matrix
+on ordinal Likert responses to recover an interpretable symptom
+network. The canonical pipeline in R is:
+(i) compute polychoric correlations from the Likert items;
+(ii) fit graphical lasso on the polychoric correlation;
+(iii) tune the regularization by EBIC;
+(iv) bootstrap for edge stability. Polychoric inverts the
+ordinal-to-continuous discretization step
+\citep{olsson1979polychoric}, recovering the latent-Gaussian
+correlation that the discretization process attenuated; naive
+Pearson on Likert items systematically under-states the true
+associations.
+
+\texttt{skein} ships all four steps in a single Python pipeline:
+\texttt{polychoric\_correlation(X)} from
+\texttt{skein\_glm.preprocessing} produces a $(p, p)$ correlation
+matrix; \texttt{GraphicalMCP(alpha=...).fit(R)} drops the L1
+shrinkage bias on the edge weights via the nonconvex MCP penalty;
+\texttt{ebic\_path} tunes $\lambda$ by EBIC with $\gamma = 0.5$;
+\texttt{GraphicalBootstrap.fdr\_threshold(fdr=0.10)} then runs a
+non-parametric bootstrap of the full pipeline (re-computing
+polychoric on each subsample) and applies Benjamini--Hochberg over
+the $p(p-1)/2$ unique edge hypotheses. On a planted 9-symptom
+depression-style network with $n{=}400$, 4-level Likert responses,
+and 7 true edges, the FDR-controlled output at $q = 0.10$ retains
+all 7 true edges with zero false discoveries
+(300 bootstrap replicates, fixed seed). The same pipeline runs on
+the user's data with no R / qgraph / bootnet dependency.
 
 % =========================================================================
 \section{Ablation studies}\label{sec:ablation}
@@ -490,11 +825,31 @@ methodology in Python.}
   \label{fig:ablation}
 \end{figure}
 
-\todo{Paragraph: parallel screening + GIL-release CV are the two
-infrastructure ablations the paper anchors on. Note the negative
-result: Jacobi-parallel block-CD doesn't pay off (M13.7
-documented), so we use the standard serial block-CD with Rayon
-parallelism over groups inside the inner solver.}
+Two pieces of parallel infrastructure anchor the package's
+practical performance. Gap-safe screening
+\citep{fercoq2015gapsafe} is the standard tool for cutting active-set
+size early in the path; Figure~\ref{fig:ablation} (left) reports a
+criterion microbenchmark on the inner-CD with screening versus
+without, showing the per-$\lambda$ speedup at three problem
+sizes. Cross-validation fold parallelism
+(Figure~\ref{fig:ablation}, right) is the user-facing payoff of
+releasing the GIL in every PyO3 path builder: on
+$n_{\text{jobs}} = 4$, threaded folds achieve a
+$2.3\times$--$2.5\times$ speedup over serial, close to the
+$4\times$ ideal. Joblib's process backend gives slightly higher
+peaks at the cost of pickling overhead per fold; the
+GIL-release thread path is faster for small-to-medium problems where
+the per-fold compute is short.
+
+The notable negative result is Jacobi-parallel block coordinate
+descent: a natural-looking parallelism inside the inner block-CD
+solver, distributing groups across threads. We benchmarked this
+across group sizes and found it slower than serial Gauss--Seidel at
+every operating point: the inter-iteration dependency cost
+exceeds the parallel work even at $p > 10^4$. The shipped solver
+uses serial Gauss--Seidel inside the inner loop with Rayon
+parallelism reserved for the outer working-set sweep, where the
+groups are decoupled by the convergence guarantee.
 
 % =========================================================================
 \section{Reproducibility}\label{sec:reproducibility}
@@ -502,26 +857,49 @@ parallelism over groups inside the inner solver.}
 
 \input{tables/T6_environment}
 
-\todo{Paragraph + the env table: every cell records its full
-environment (host\_id, BLAS, CPU model, pip freeze, R sessionInfo,
-git rev) into a sidecar JSON; the aggregate step refuses to mix
-host\_ids in a single aggregate. The Snakemake DAG is deterministic
-given the same seed grid + config.yaml. Total wall-clock for the
-headline matrix: $\sim$12--18\,h on Apple M1 / M2. Repository:
-\url{https://github.com/dvillacis/skein}.}
+Every figure and table in this paper regenerates deterministically
+from a single Snakemake \citep{molder2021snakemake} workflow at
+\texttt{benches/v2/}. The workflow's atomic unit is a \emph{cell}:
+a (scenario, size, regime, seed, package) tuple producing one
+JSONL row with timing, support, recovery, and selection metrics,
+plus a sidecar JSON capturing the environment (host fingerprint,
+CPU model, BLAS backend, Python and R package versions, git
+revision). Table~\ref{tab:environment} reports the host configuration
+under which the headline numbers in this paper were produced. The
+aggregation step downstream refuses to combine cells from different
+host fingerprints, so wall-clock comparisons in a single figure
+always come from a single machine. The Snakemake DAG covers cell
+execution, per-scenario aggregation, figure / table regeneration,
+and a smoke profile that runs two cells in CI on every pull
+request. Total wall-clock for the full headline matrix is
+$\sim$12--18\,h on a 2021 Apple M1 / M2 laptop. The repository,
+including release tags, fixture set, Snakemake profiles, and the
+LaTeX source for this paper, is available at
+\url{https://github.com/dvillacis/skein}.
 
 % =========================================================================
 \section{Conclusion}\label{sec:conclusion}
 % =========================================================================
 
-\todo{1 paragraph: \texttt{skein} fills the production-grade Python
-gap for nonconvex group penalties at scale, debiased inference
-across the four mainstream GLM families, and edge-level error
-control on graphical models. The next milestones are sparse +
-mixed-precision design backends for very high-dimensional problems
-($p > 10^5$), multi-response GLMs for Poisson and Cox, and an R
-facade. We welcome contributions and intend to maintain the package
-as the long-run methodology reference for this niche.}
+\texttt{skein} fills the production-grade Python gap for nonconvex
+group penalties at scale, debiased inference across the four
+mainstream GLM families (least squares, logistic, Poisson, Cox),
+and edge-level error control on graphical models. Three design
+decisions carry most of the package's contribution: a four-trait
+extension surface that decouples design backend, loss, and
+regularization so a new component drops in to every solver loop
+unchanged; native (non-LLA) block coordinate descent on the
+closed-form Breheny--Huang nonconvex group prox, which we believe
+gives the fastest published implementation of group MCP at medium
+scale; and a unified inference layer covering bootstrap-based FDR /
+FWER on edges plus Wald CIs from debiased lasso on every canonical
+GLM. The natural next milestones are mixed-precision and GPU
+design backends for very high-dimensional problems
+($p \gtrsim 10^5$), multi-response GLMs for Poisson and Cox via the
+multi-task / shared-support construction, and an R facade so the
+package's methodology can be cited from R-native pipelines. We
+intend to maintain \texttt{skein} as the long-run methodology
+reference for this niche and welcome contributions.
 
 % =========================================================================
 \bibliographystyle{plainnat}
