@@ -398,6 +398,7 @@ def polychoric_covariance_matrix(
     elif missing != "pairwise":
         raise ValueError(f"missing must be 'pairwise' or 'listwise', got {missing!r}")
 
+    continuous: NDArray[np.bool_]
     if continuous_mask is None:
         continuous = np.zeros(p, dtype=bool)
         for j in range(p):
