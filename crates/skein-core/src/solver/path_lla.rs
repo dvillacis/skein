@@ -90,14 +90,47 @@ where
     let mut inner_iters_out = Vec::with_capacity(n_lams);
     let mut final_objs_out = Vec::with_capacity(n_lams);
 
+    // M13.5 — weight-space LLA fixed-point short-circuit. Once the
+    // surrogate weights have stopped moving between outer iters by
+    // more than this threshold, the next inner solve would reproduce
+    // the current warm — declare LLA converged without paying for
+    // it. Same sizing as the block analog (`block_path_lla.rs`,
+    // Phase 2.3, M13.4): `1000 · outer_tol` sits above the inner-CD
+    // coefficient-jitter floor; `1e-8` is the floor for `outer_tol=0`
+    // configs (tight-tol gate tests).
+    let weight_short_circuit_tol = (outer_tol * 1000.0).max(1e-8);
+
     for (k, &lam) in lambdas.iter().enumerate() {
         let mut total_inner = 0usize;
-        let mut outer_iters = 0usize;
+        let mut outer_iters_done = 0usize;
         let mut outer_converged = false;
+        let mut prev_weights: Option<Array1<f64>> = None;
 
         for outer in 0..max_outer {
-            outer_iters = outer + 1;
             let pen = make_inner(warm.view(), lam, base_weights.view());
+            // Owned copy since `pen.weights()` borrows from `pen` and
+            // we want the previous-iter snapshot to outlive its
+            // surrogate.
+            let weights: Array1<f64> = pen.weights().to_owned();
+
+            // M13.5 short-circuit: if ψ(β_{t-1}) ≈ ψ(β_{t-2}), the
+            // surrogate hasn't moved since the last outer iter, so
+            // the next inner solve would just return warm. β has
+            // settled into the LLA fixed point in weight space —
+            // skip the inner CD pass.
+            if let Some(pw) = prev_weights.as_ref() {
+                let max_dw = weights
+                    .iter()
+                    .zip(pw.iter())
+                    .map(|(a, b)| (a - b).abs())
+                    .fold(0.0_f64, f64::max);
+                if max_dw < weight_short_circuit_tol {
+                    outer_converged = true;
+                    break;
+                }
+            }
+            outer_iters_done = outer + 1;
+
             let beta_old = warm.clone();
             let (new_beta, inner_report) = cd_solve_warm(warm, design, datafit, &*pen, cd_config);
             warm = new_beta;
@@ -110,6 +143,9 @@ where
                 outer_converged = true;
                 break;
             }
+
+            // Stash this iter's weights for the next iter's M13.5 check.
+            prev_weights = Some(weights);
         }
 
         let final_pen = make_inner(warm.view(), lam, base_weights.view());
@@ -117,7 +153,7 @@ where
         let final_obj = datafit.value(r.view()) + final_pen.value(warm.view());
 
         betas.row_mut(k).assign(&warm);
-        outer_iters_out.push(outer_iters);
+        outer_iters_out.push(outer_iters_done);
         outer_converged_out.push(outer_converged);
         inner_iters_out.push(total_inner);
         final_objs_out.push(final_obj);
