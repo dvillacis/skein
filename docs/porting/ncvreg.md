@@ -217,9 +217,10 @@ This alone can be a major speedup if your X is mostly zero.
 
 ## What skein adds vs ncvreg
 
-- **Group penalties** (group MCP / SCAD via LLA) with Rayon-parallel
-  block CD. `ncvreg` is scalar-only; for groups you'd switch to
-  `grpreg` (single-threaded R).
+- **Group penalties** with Rayon-parallel block CD: group MCP via
+  native closed-form prox (Breheny & Huang 2015 §3) on LS and all
+  GLM families (M13.4b + M13.4c); group SCAD via LLA. `ncvreg` is
+  scalar-only; for groups you'd switch to `grpreg` (single-threaded R).
 - **Sparse-group penalties** (convex and nonconvex).
 - **Three weight axes** including per-group, all composable.
 - **Memory-mapped / chunked design matrices** for n in the

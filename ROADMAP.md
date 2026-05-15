@@ -26,9 +26,9 @@ load-bearing piece; everything after stacks on top of it.
 | M10 — Performance improvements | ⏳ partial | M10.1 profile (`col_dot` is the floor without BLAS) + M10.3 five waves: (1) col_axpy + F-order DenseMatrix + path-solver fixes; (2) adaptive inner tol via PGD + KKT-priority WS; (3) `blas-accelerate` feature; (4) (skipped — inner active-set CD didn't pay off); (5) F-series — duality gap + Anderson on residuals + gap-safe sphere screening, all gated and tested. **Skein medium lasso/LS: 7.6 s → 0.78 s sparse / 1.17 s deep — 6.5–10× total. Within 1.5× of glmnet on sparse, 1.9× on deep; ~8–9× behind sklearn's Cython `lasso_path`.** F-series wallclock-neutral on M9.3 scenarios — infrastructure correct but post-pass screening fires only on multi-pass λs (most converge in 1). M10.4 verified across deep + sparse regimes. Pending: G. cross-platform BLAS (OpenBLAS/MKL), H. pre-pass gap-safe screening, I. Cython-grade rewrite (off-roadmap). |
 | M11 — Graphical models | ✅ done | Single-population glasso (L1 / MCP / SCAD) + joint glasso across `K` populations (Danaher–Wang–Witten group form via ADMM) + EBIC tuner; M11.3 bootnet-style bootstrap edge stability shipped. |
 | M12 — Hardening (robustness, test coverage, CI) | ✅ done | Penalty + datafit unit-test coverage closed; Rust integration test directory added; R-fixture gate in CI; PyO3-layer smoke job (`.github/workflows/bench-smoke.yml`); pre-flight tight-tol screening test now a separate fail-fast CI step with 2-min timeout (R3, ci.yml); numerical guards (`W_FLOOR=1e-6`, `ETA_CLAMP=30.0`) centralized in `crates/skein-core/src/numerics.rs` (R4); R1 unwrap audit closed (`block_path_lla.rs` documented; `cd.rs::anderson_extrapolate` documented; dead `Groups::from_csr` call removed from `glasso_admm.rs`; remaining hits are test-only setup invariants); `Groups::has_overlap()` + parallel block-CD overlap detection with serial Gauss-Seidel fallback + `Once`-gated stderr warning + fixture (C5); criterion bench tree expanded with `lla_outer.rs`, `prox_newton_glm.rs`, `glasso.rs` alongside existing `block_cd.rs`, README updated (P2); `skein-py/src/lib.rs` 10,628 → 275 lines, every datafit family in its own module: `glasso.rs`, `glm.rs`, `ls.rs`, `mmap_chunked.rs`, `multinomial.rs`, `multitask.rs` (P4). No new algorithmic surface. |
-| M13 — Performance findings from `benches/v2` | ⏳ partial | M13.1 adaptive screening saturation bypass shipped; M13.2 cross-λ gradient cache shipped (-10.4% wall on medium Lasso); M13.4 Phase 2.3 LLA fixed-point short-circuit shipped; **M13.4b native group-MCP BCD shipped (-3.46× wall on medium ls_group_mcp; flips skein/grpreg from 3.34× slower to 1.20× faster)**; M13.6 re-characterized post-M13.2 (memory-bandwidth wall in inner CD past medium scale, not fixed-cost overhead). Remaining: M13.5 MCP one-outer-iter short-circuit; group-MCP variants for logistic/Poisson/Cox still on LLA. |
+| M13 — Performance findings from `benches/v2` | ⏳ partial | M13.1 adaptive screening saturation bypass shipped; M13.2 cross-λ gradient cache shipped (-10.4% wall on medium Lasso); M13.4 Phase 2.3 LLA fixed-point short-circuit shipped; **M13.4b native group-MCP BCD shipped (-3.46× wall on medium ls_group_mcp; flips skein/grpreg from 3.34× slower to 1.20× faster)**; **M13.4c native group-MCP BCD extended to logistic / Poisson / Cox shipped (2.12× wall on logistic medium; new `glm_group_mcp_native_matches_lla` cross-family agreement test)**; M13.6 re-characterized post-M13.2 (memory-bandwidth wall in inner CD past medium scale, not fixed-cost overhead). Remaining: M13.5 MCP one-outer-iter short-circuit; sparse-group MCP variants for logistic / Poisson / Cox still on LLA. |
 
-Test count at this snapshot: **350 cargo + 412 pytest, all green.**
+Test count at this snapshot: **350 cargo lib + 8 cargo integration + 412 pytest, all green.**
 
 ---
 
@@ -477,7 +477,7 @@ Constructor validates indptr invariants and row-index bounds.
 matrix plus 2 solver-equivalence tests proving sparse CD/path produces
 the same β as dense within 1e-7 on the same data.
 
-### M4.2 — Sparse PyO3 surface (in progress)
+### ✅ M4.2 — Sparse PyO3 surface (M4.2a/b/c all shipped)
 
 Each `solve_*_path` PyO3 function gets a `_sparse` sibling taking
 `(data, indices, indptr, n_rows, n_cols, ...)`. Estimators sniff
@@ -1689,7 +1689,7 @@ No `Penalty` / `Datafit` trait changes. New code: one new datafit
 `solver/glasso_admm.rs`), one new prox primitive (log-det eigen
 threshold), Python bindings, sklearn-style estimators, EBIC tuner.
 
-### M11.1 — Single-population glasso (L1 + MCP + SCAD)
+### ✅ M11.1 — Single-population glasso (L1 + MCP + SCAD)
 
 Headline deliverable: `GraphicalLasso`, `GraphicalMcp`, `GraphicalScad`
 sklearn-style estimators returning `.precision_`, `.covariance_`,
@@ -1727,7 +1727,7 @@ Exit criteria:
 - Benchmark within 2× of sklearn at p=200 for L1; MCP/SCAD have no
   mainstream-package equivalent to compete against.
 
-### M11.2 — Joint glasso across populations (group form)
+### ✅ M11.2 — Joint glasso across populations (group form)
 
 Headline deliverable: `JointGraphicalLasso`, `JointGraphicalMcp`,
 `JointGraphicalScad` accepting `[X^(1), …, X^(K)]` or
@@ -2123,7 +2123,16 @@ fixed-cost evidence says the bottleneck is *outside* `cd_solve_subset`
 on this scenario. Rewriting the inner loop would not close the gap
 unless the outer per-λ overhead is first reduced.
 
-### M13.4 — `group_mcp` is 5.49× slower than `group_lasso` at the same scale (NOW CONFIRMED: grpreg beats skein at medium scale)
+### ✅ M13.4 — `group_mcp` is 5.49× slower than `group_lasso` at the same scale — RESOLVED by Phase 2.3 + M13.4b + M13.4c
+
+> **Resolution:** The 5.49× LLA-overhead gap and the grpreg
+> regression are closed. Phase 2.3 trimmed the LLA outer-iter tail;
+> M13.4b replaced LLA with native group-MCP BCD for LS (3.46× wall;
+> skein is now 1.20× *faster* than grpreg at medium / dense);
+> M13.4c extended the native BCD to logistic / Poisson / Cox
+> (2.12× wall on logistic medium). The "Actions" list below is
+> retained as the historical record of the investigation; the
+> "Bottom line" predates Phase 2.3 and no longer applies.
 
 | Cell | group_lasso | group_mcp | ratio |
 |---|---|---|---|
@@ -2281,16 +2290,85 @@ than grpreg** — flipping the prior "skein 3.34× slower" finding.
 `..._via_native_bcd` and its `outer_iters` assertion (LLA-specific
 field) replaced with checks on `iters` / `kkt_passes`.
 
-**Out of scope (kept on LLA for now):** logistic / Poisson / Cox
-group-MCP variants. Their inner block-CD already runs against a
-weighted-LS surrogate from the prox-Newton outer loop, so swapping
-them to native group-MCP would change two layers at once. Worth a
-follow-up but not bundled with M13.4b.
+**Follow-up shipped:** logistic / Poisson / Cox group-MCP variants
+moved to native BCD in **M13.4c** (below); the "two-layer" concern
+was overstated — prox-Newton stays as the GLM linearization layer
+and only the LLA penalty layer drops. Sparse-group MCP variants for
+these GLMs are still on LLA.
 
 **Reproduce:**
 ```bash
 cargo build --release --example group_mcp_lla_vs_native
 ./target/release/examples/group_mcp_lla_vs_native
+```
+
+### ✅ M13.4c — Native group-MCP BCD for logistic / Poisson / Cox (SHIPPED)
+
+Extends M13.4b to all three GLM families. The prox-Newton outer loop
+in `prox_newton_block_solve_path` already builds the GLM weighted-LS
+surrogate once per outer iter via `GlmDatafit::surrogate_at` and then
+calls a penalty-builder closure that produces a `GroupPenalty` for the
+inner block-CD; the closure is the only thing that changes between
+LLA mode and native mode. The six PyO3 builders
+(`solve_{logistic,poisson,cox}_group_mcp_path` + `_sparse` variants in
+`crates/skein-py/src/glm.rs`) now hand the outer loop a β-independent
+`GroupMcp::with_weights(λ, γ, w_base)` factory; the LLA-flavored
+`GroupLasso::with_weights(λ, w_LLA(β))` factory is gone.
+
+Unlike M13.4b for LS — where the outer loop disappeared entirely —
+here `max_outer` / `outer_tol` retain their semantics as the
+prox-Newton outer-iteration cap on the GLM surrogate. They are still
+honored by the same code; only the penalty linearization layer drops.
+
+**Strong-rule screening still applies** for the same reason as M13.4b:
+the β_g=0 KKT subdifferential `λ·[-w_g, w_g]` is identical for
+`GroupLasso` and `GroupMcp`, so the screen is penalty-agnostic at
+zero.
+
+**Empirical comparison** (`crates/skein-core/examples/logistic_group_mcp_lla_vs_native.rs`,
+n=4 000, p=400, group_size=5, n_groups=80, k_active=5, tol=1e-8,
+γ=3.0, max_outer=20, outer_tol=1e-7, M1 Accelerate, single-process
+isolated):
+
+| solver | wall | outer iters | inner CD iters |
+|---|---:|---:|---:|
+| LLA-wrapped GroupLasso (pre-fix) | 226.7 s | 190 | 69 392 |
+| Native GroupMcp BCD (this fix)   | 106.8 s | 116 | 32 812 |
+
+**2.12× wall-clock reduction.** Cross-solver agreement: min support
+Jaccard 0.97 across the 50-λ path, max relative ℓ₂ coefficient
+deviation 0.034, max relative objective gap 1.93e-3 (at one λ where
+the two solvers land at different stationary points of the same
+non-convex objective — both equally valid local minima). The
+smallest-λ (densest) fit has identical 400/400 active features and
+identical objective value 2.6145e-1 to six significant figures.
+
+The smaller speedup vs M13.4b (2.12× here vs 3.46× for LS) reflects
+that the GLM weighted-LS surrogate rebuild is shared overhead on both
+sides — only the LLA-specific inner work is recovered.
+
+**Verified gates:** 350 cargo lib + 3 new integration tests
+(`crates/skein-core/tests/glm_group_mcp_native_matches_lla.rs` —
+logistic / Poisson / Cox each assert either Jaccard ≥ 0.70 or
+rel-obj-gap ≤ 1e-3, plus final-λ Jaccard ≥ 0.85; the disjunction
+allows the two solvers to legitimately reach different stationary
+points of the non-convex objective as long as they are equally good)
++ 5 chain integration + 412 pytest, all green. The three pytest
+tests (`test_{logistic,poisson,cox}_group_mcp_path_recovers_active_groups_via_lla`)
+were renamed to `..._via_native_bcd`, and the corresponding Rust
+unit tests in `prox_newton_block.rs` were renamed and rewritten to
+build the native penalty closure.
+
+**Out of scope (kept on LLA for now):** sparse-group MCP variants for
+logistic / Poisson / Cox. Their closures compose two surrogate
+weights (group-level and within-group) and a native sparse-group MCP
+penalty isn't a one-line drop-in. Worth a follow-up; not bundled
+with M13.4c.
+
+**Reproduce:**
+```bash
+cargo build --release --example logistic_group_mcp_lla_vs_native
+./target/release/examples/logistic_group_mcp_lla_vs_native
 ```
 
 ### M13.5 — MCP path overhead even in convex regime
@@ -2385,29 +2463,31 @@ Jacobi.
 
 ### Recommended workstream ordering
 
-M13.1 shipped (serial: 12 % wall-clock saved at tol=1e-4, ~29 % at
-tol=1e-7 vs the pre-fix regression; parallel-bench: 0–19 % depending
-on scenario, dominated by BLAS-thread contention; never harmful; new
-regression test gates correctness). Remaining ordering for a v0.8.0
-perf milestone:
+M13.1, M13.2, M13.4 (Phase 2.3), M13.4b, and M13.4c have all shipped.
+M13.6 was re-characterized as a structural memory-bandwidth wall.
+Remaining ordering for the next perf milestone:
 
-1. **M13.2 — Per-λ flamegraph + fixed-cost cut** — prerequisite for
-   any further inner-loop work; without the time-in-function breakdown
-   M13.3 / M13.6 stay speculative.
-2. **M13.4 — group_mcp LLA outer-iter audit** — the single most
-   anomalous cell on the v2 board (5.49× group_lasso at medium/deep).
-   Likely returns a 2–3× speedup on group nonconvex paths.
-3. **M13.5 — MCP one-outer-iter short-circuit** — same code path as
-   M13.4, pairs naturally.
-4. **M13.6 / inner-loop scaling** — only worth it once 1–3 land; the
+1. ~~**M13.2 — Per-λ flamegraph + fixed-cost cut**~~ — shipped
+   (−10.4 % wall on medium Lasso).
+2. ~~**M13.4 — group_mcp LLA outer-iter audit**~~ — shipped as M13.4
+   Phase 2.3 + M13.4b (native LS group-MCP, 3.46× wall) + M13.4c
+   (native GLM group-MCP, 2.12× wall on logistic).
+3. **M13.5 — MCP one-outer-iter short-circuit** — the next remaining
+   open item in the LLA-outer-overhead family. Touches scalar MCP /
+   SCAD / adaptive / bridge paths (which still wrap LLA over the
+   scalar CD inner solver). Pairs naturally with the M13.4 / M13.4b
+   work.
+4. **Sparse-group MCP native BCD for GLMs** — the natural sibling
+   of M13.4c. Inner closure currently composes two surrogate weight
+   vectors (group-level + within-group); a native sparse-group MCP
+   penalty would drop both layers.
+5. **M13.6 / inner-loop scaling** — only worth it once 3–4 land; the
    evidence will say whether the residual gap is in BLAS-bound code
    that needs a Cython-class inner rewrite (M10.I) or is still in the
    fixed-cost layer.
-5. **Threshold-tuning follow-up on M13.1** — the 0.5 saturation
+6. **Threshold-tuning follow-up on M13.1** — the 0.5 saturation
    threshold is the conservative choice; lower thresholds (e.g. 0.3)
    may recover more of the gap to `screening=Off` on deep regimes.
-   Worth measuring once M13.2's flamegraph lands so the per-λ cost
-   profile guides the choice rather than wall-clock alone.
 
 ### Notes on artifact provenance
 

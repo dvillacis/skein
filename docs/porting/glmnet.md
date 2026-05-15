@@ -225,8 +225,10 @@ sparse-group penalties also accept sparse inputs.
 
 - **Nonconvex penalties** (MCP / SCAD with γ < ∞): nearly unbiased
   estimates of truly active features. `glmnet` is L1 / L2 only.
-- **Group MCP / group SCAD via LLA** + Rayon-parallel block CD:
-  `grpreg` has the penalties but is single-threaded R.
+- **Group MCP** via native closed-form prox (Breheny & Huang 2015 §3)
+  on LS and all GLM families (M13.4b + M13.4c), plus **group SCAD**
+  via LLA, both with Rayon-parallel block CD. `grpreg` has the
+  penalties but is single-threaded R.
 - **Three weight axes** (per-sample, per-feature, per-group)
   composable on every estimator. `glmnet` does per-sample +
   per-feature; per-group is awkward.

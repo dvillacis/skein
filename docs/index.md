@@ -107,7 +107,7 @@ y = X[:, :3] @ np.array([1.5, -2.0, 0.8]) + 0.1 * rng.standard_normal(n)
 model = MCPPathRegressor(gamma=3.0, n_lambdas=50, standardize=True).fit(X, y)
 print(model.coefs_[-1, :5], model.intercepts_[-1])
 
-# Logistic + group MCP via LLA, with sklearn-style predict/predict_proba.
+# Logistic + group MCP (native non-convex BCD), with sklearn-style predict/predict_proba.
 groups = np.repeat(np.arange(p // 5), 5)  # 5 features per group
 y_bin = (X[:, :3].sum(axis=1) > 0).astype(float)
 clf = LogisticGroupMCPPathRegressor(groups=groups, gamma=3.0, n_lambdas=20).fit(X, y_bin)

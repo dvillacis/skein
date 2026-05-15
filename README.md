@@ -18,7 +18,7 @@ per-group.
 
 ## Status
 
-v0.7. Full nonconvex / group / GLM stack is in place; M5 model
+v0.8. Full nonconvex / group / GLM stack is in place; M5 model
 selection + inference + threaded CV folds shipped; M11 graphical lasso
 family (single + joint) shipped; M12 hardening pass closed the
 penalty / datafit unit-test gaps and added a CI smoke job for the
@@ -29,10 +29,12 @@ performance findings opened by the `benches/v2` release-profile run.
 
 - **Solvers** — production CD core (path solver, strong rule + KKT
   verification, gap-safe screening, Anderson acceleration, M13.1
-  saturation bypass); group block-CD with LLA outer loop for nonconvex
-  group penalties (M13.4 Phase 2.3 weight-space short-circuit);
-  Rayon-parallel group sweeps; operator-norm Lipschitz via power
-  iteration.
+  saturation bypass, M13.2 cross-λ gradient cache); group block-CD
+  with native non-convex prox for group MCP (M13.4b for LS,
+  M13.4c for logistic / Poisson / Cox) and an LLA outer loop for
+  the remaining sparse-group MCP / SCAD families (M13.4 Phase 2.3
+  weight-space short-circuit); Rayon-parallel group sweeps;
+  operator-norm Lipschitz via power iteration.
 - **Datafits** — least squares, binomial logistic, Poisson (log link,
   with offsets), Cox PH (Breslow + Efron ties), multinomial softmax,
   Huber. All glued together by a `GlmDatafit` trait that exposes a
@@ -70,11 +72,11 @@ performance findings opened by the `benches/v2` release-profile run.
   datafit unit-test coverage, an integration test directory, a CI
   smoke job for the PyO3 layer, and an R-fixture gate.
 
-**Coming next:** the M13 performance workstream — `group_mcp` LLA
-overhead at medium scale (Phase 2.3 shipped, native group-MCP BCD
-scoped as M13.4b), per-λ fixed-cost cut for convex Lasso (M13.2), and
-the publication benchmark suite at `benches/v2/` that backs the
-software paper.
+**Coming next:** the remaining M13 perf items — M13.5 MCP one-outer-iter
+short-circuit (closes the residual ~1.32× gap between scalar MCP and
+Lasso at medium scale), native sparse-group MCP BCD for the GLM
+families (sibling of M13.4c), and the publication benchmark suite at
+`benches/v2/` that backs the software paper.
 
 ## Layout
 
@@ -109,7 +111,7 @@ y = X[:, :3] @ np.array([1.5, -2.0, 0.8]) + 0.1 * rng.standard_normal(n)
 model = MCPPathRegressor(gamma=3.0, n_lambdas=50, standardize=True).fit(X, y)
 print(model.coefs_[-1, :5], model.intercepts_[-1])
 
-# Logistic + group MCP via LLA, with sklearn-style predict/predict_proba.
+# Logistic + group MCP (native non-convex BCD), with sklearn-style predict/predict_proba.
 groups = np.repeat(np.arange(p // 5), 5)  # 5 features per group
 y_bin = (X[:, :3].sum(axis=1) > 0).astype(float)
 clf = LogisticGroupMCPPathRegressor(groups=groups, gamma=3.0, n_lambdas=20).fit(X, y_bin)
