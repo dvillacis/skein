@@ -27,10 +27,10 @@ use skein_core::{
     datafit::{BinomialLogit, CoxPH, GlmDatafit, Huber, PoissonLog, TieHandling},
     design::{DenseMatrix, DesignMatrix as _, Standardized},
     groups::Groups,
-    penalty::{ElasticNet, GroupLasso, GroupPenalty, Mcp, Scad, SparseGroupLasso},
+    penalty::{ElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad, SparseGroupLasso},
     solver::{
         prox_newton_block_solve_path, prox_newton_solve_path, surrogate_sparse_group_mcp,
-        surrogate_sparse_group_scad, surrogate_weights_group_mcp, CdConfig,
+        surrogate_sparse_group_scad, CdConfig,
     },
     Penalty,
 };
@@ -974,10 +974,16 @@ pub(crate) fn solve_logistic_group_mcp_path<'py>(
         outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
-        // Group MCP: LLA surrogate weights then weighted GroupLasso.
-        move |beta, g, lam, group_w| {
-            let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
-            Box::new(GroupLasso::with_weights(lam, w))
+        // M13.4c — native group-MCP block-CD inside the prox-Newton outer
+        // loop. `GroupMcp::prox_group` (closed-form per Breheny & Huang
+        // 2015 §3) replaces the LLA-wrapped weighted GroupLasso surrogate.
+        // Prox-Newton still iterates on the GLM weighted-LS surrogate;
+        // `max_outer` / `outer_tol` retain their semantics as
+        // prox-Newton outer caps. Strong-rule screening carries over
+        // unchanged — the β=0 KKT subdifferential `λ·[-w_g, w_g]` is
+        // identical for GroupLasso and GroupMcp.
+        move |_beta, _groups, lam, group_w| {
+            Box::new(GroupMcp::with_weights(lam, gamma, group_w.clone()))
         },
     )
 }
@@ -1457,9 +1463,9 @@ pub(crate) fn solve_poisson_group_mcp_path<'py>(
         outer_tol,
         validate_y_nonneg,
         make_glm,
-        move |beta, g, lam, group_w| {
-            let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
-            Box::new(GroupLasso::with_weights(lam, w))
+        // M13.4c — see solve_logistic_group_mcp_path for rationale.
+        move |_beta, _groups, lam, group_w| {
+            Box::new(GroupMcp::with_weights(lam, gamma, group_w.clone()))
         },
     )
 }
@@ -2210,9 +2216,10 @@ pub(crate) fn solve_cox_group_mcp_path<'py>(
         max_outer,
         outer_tol,
         ties,
-        move |beta, g, lam, group_w| {
-            let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
-            Box::new(GroupLasso::with_weights(lam, w))
+        // M13.4c — native group-MCP block-CD inside the prox-Newton outer
+        // loop. See solve_logistic_group_mcp_path for the full rationale.
+        move |_beta, _groups, lam, group_w| {
+            Box::new(GroupMcp::with_weights(lam, gamma, group_w.clone()))
         },
     )
 }
@@ -3297,9 +3304,10 @@ pub(crate) fn solve_logistic_group_mcp_path_sparse<'py>(
         outer_tol,
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
-        move |beta, g, lam, group_w| {
-            let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
-            Box::new(GroupLasso::with_weights(lam, w))
+        // M13.4c — native group-MCP block-CD inside the prox-Newton outer
+        // loop. See solve_logistic_group_mcp_path for the full rationale.
+        move |_beta, _groups, lam, group_w| {
+            Box::new(GroupMcp::with_weights(lam, gamma, group_w.clone()))
         },
     )
 }
@@ -3827,9 +3835,10 @@ pub(crate) fn solve_poisson_group_mcp_path_sparse<'py>(
         outer_tol,
         validate_y_nonneg,
         make_glm,
-        move |beta, g, lam, group_w| {
-            let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
-            Box::new(GroupLasso::with_weights(lam, w))
+        // M13.4c — native group-MCP block-CD inside the prox-Newton outer
+        // loop. See solve_logistic_group_mcp_path for the full rationale.
+        move |_beta, _groups, lam, group_w| {
+            Box::new(GroupMcp::with_weights(lam, gamma, group_w.clone()))
         },
     )
 }
@@ -4302,9 +4311,10 @@ pub(crate) fn solve_cox_group_mcp_path_sparse<'py>(
         max_outer,
         outer_tol,
         ties,
-        move |beta, g, lam, group_w| {
-            let w = surrogate_weights_group_mcp(beta, g, lam, gamma, group_w.view());
-            Box::new(GroupLasso::with_weights(lam, w))
+        // M13.4c — native group-MCP block-CD inside the prox-Newton outer
+        // loop. See solve_logistic_group_mcp_path for the full rationale.
+        move |_beta, _groups, lam, group_w| {
+            Box::new(GroupMcp::with_weights(lam, gamma, group_w.clone()))
         },
     )
 }

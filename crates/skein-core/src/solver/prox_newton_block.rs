@@ -183,8 +183,7 @@ mod tests {
     use super::*;
     use crate::datafit::{BinomialLogit, CoxPH, PoissonLog};
     use crate::design::{DenseMatrix, Standardized};
-    use crate::penalty::GroupLasso;
-    use crate::solver::lla::surrogate_weights_group_mcp;
+    use crate::penalty::{GroupLasso, GroupMcp};
     use approx::assert_abs_diff_eq;
     use ndarray::{Array1, Array2};
 
@@ -267,18 +266,19 @@ mod tests {
     }
 
     #[test]
-    fn logistic_group_mcp_via_lla_recovers_active_groups() {
+    fn logistic_group_mcp_via_native_bcd_recovers_active_groups() {
         let (design, y, _, groups) = logistic_group_problem(2);
         let glm = BinomialLogit::new(y);
         let base = Array1::<f64>::ones(groups.n_groups());
         let gamma = 3.0;
 
-        // LLA surrogate weights for group MCP.
+        // M13.4c — native group-MCP block-CD inside the prox-Newton outer
+        // loop (no LLA surrogate on the penalty).
         let base_for_closure = base.clone();
         let make_inner =
-            move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-                let w = surrogate_weights_group_mcp(beta, g, lam, gamma, base_for_closure.view());
-                Box::new(GroupLasso::with_weights(lam, w)) as Box<dyn GroupPenalty>
+            move |_beta: ArrayView1<'_, f64>, _g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+                Box::new(GroupMcp::with_weights(lam, gamma, base_for_closure.clone()))
+                    as Box<dyn GroupPenalty>
             };
 
         let (betas, report) = prox_newton_block_solve_path(
@@ -382,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn poisson_group_mcp_via_lla_recovers_active_groups() {
+    fn poisson_group_mcp_via_native_bcd_recovers_active_groups() {
         let (design, y, _, groups) = poisson_group_problem(2);
         let glm = PoissonLog::new(y);
         let base = Array1::<f64>::ones(groups.n_groups());
@@ -390,9 +390,9 @@ mod tests {
 
         let base_for_closure = base.clone();
         let make_inner =
-            move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-                let w = surrogate_weights_group_mcp(beta, g, lam, gamma, base_for_closure.view());
-                Box::new(GroupLasso::with_weights(lam, w)) as Box<dyn GroupPenalty>
+            move |_beta: ArrayView1<'_, f64>, _g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+                Box::new(GroupMcp::with_weights(lam, gamma, base_for_closure.clone()))
+                    as Box<dyn GroupPenalty>
             };
 
         let (betas, report) = prox_newton_block_solve_path(
@@ -539,7 +539,7 @@ mod tests {
     }
 
     #[test]
-    fn cox_group_mcp_via_lla_recovers_active_groups() {
+    fn cox_group_mcp_via_native_bcd_recovers_active_groups() {
         let (design, time, event, _, groups) = cox_group_problem(2);
         let glm = CoxPH::new(time, event);
         let base = Array1::<f64>::ones(groups.n_groups());
@@ -547,9 +547,9 @@ mod tests {
 
         let base_for_closure = base.clone();
         let make_inner =
-            move |beta: ArrayView1<'_, f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-                let w = surrogate_weights_group_mcp(beta, g, lam, gamma, base_for_closure.view());
-                Box::new(GroupLasso::with_weights(lam, w)) as Box<dyn GroupPenalty>
+            move |_beta: ArrayView1<'_, f64>, _g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
+                Box::new(GroupMcp::with_weights(lam, gamma, base_for_closure.clone()))
+                    as Box<dyn GroupPenalty>
             };
 
         let (betas, report) = prox_newton_block_solve_path(

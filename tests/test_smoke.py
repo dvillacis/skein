@@ -441,7 +441,7 @@ def test_logistic_group_lasso_single_lambda_smoke():
     assert isinstance(model.intercept_, float)
 
 
-def test_logistic_group_mcp_path_recovers_active_groups_via_lla():
+def test_logistic_group_mcp_path_recovers_active_groups_via_native_bcd():
     x, y, _, groups = _logistic_group_problem(seed=13)
     model = skein.LogisticGroupMCPPathRegressor(
         groups=groups, gamma=3.0, n_lambdas=20, lambda_min_ratio=5e-3,
@@ -651,7 +651,7 @@ def test_poisson_group_lasso_path_recovers_active_groups():
     assert _group_norm(last, groups, 2) > 0.2
 
 
-def test_poisson_group_mcp_path_recovers_active_groups_via_lla():
+def test_poisson_group_mcp_path_recovers_active_groups_via_native_bcd():
     x, y, _, groups = _poisson_group_problem(seed=12)
     model = skein.PoissonGroupMCPPathRegressor(
         groups=groups, gamma=3.0, n_lambdas=20, lambda_min_ratio=5e-3,
@@ -825,7 +825,7 @@ def test_cox_group_lasso_path_recovers_active_groups():
     assert _group_norm(last, groups, 2) > 0.15
 
 
-def test_cox_group_mcp_path_recovers_active_groups_via_lla():
+def test_cox_group_mcp_path_recovers_active_groups_via_native_bcd():
     x, time, event, _, groups = _cox_group_problem(seed=12)
     model = skein.CoxGroupMCPPathRegressor(
         groups=groups, gamma=3.0, n_lambdas=20, lambda_min_ratio=5e-3,
