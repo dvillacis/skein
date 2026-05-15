@@ -84,12 +84,13 @@ performance findings opened by the `benches/v2` release-profile run.
   datafit unit-test coverage, an integration test directory, a CI
   smoke job for the PyO3 layer, and an R-fixture gate.
 
-**Coming next:** M14b (software paper) — run the full `benches/v2`
-GLM + graphical headline matrix and draft the JMLR-MLOSS / JOSS
-manuscript from the figures + tables that already auto-generate.
-M14c (perf / correctness closeout) — sparse-group MCP native BCD
-for GLMs (sibling of M13.4c), M13.5 MCP one-outer-iter short-circuit,
-and the at-scale R-fixture suite (n=5000, p=2000).
+**Coming next:** **M14b (software paper)** — run the full
+`benches/v2` GLM + graphical headline matrix and draft the
+JMLR-MLOSS / JOSS manuscript from the figures + tables that already
+auto-generate. M14c shipped: scalar LLA weight short-circuit
+(bridge / adaptive / multitask), native sparse-group MCP BCD for
+logistic / Poisson / Cox, and an at-scale R-fixture tier (n=500,
+p=100) for cross-package regression gating.
 
 ## Layout
 

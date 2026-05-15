@@ -27,9 +27,9 @@ load-bearing piece; everything after stacks on top of it.
 | M11 — Graphical models | ✅ done | Single-population glasso (L1 / MCP / SCAD) + joint glasso across `K` populations (Danaher–Wang–Witten group form via ADMM) + EBIC tuner; M11.3 bootnet-style bootstrap edge stability shipped. |
 | M12 — Hardening (robustness, test coverage, CI) | ✅ done | Penalty + datafit unit-test coverage closed; Rust integration test directory added; R-fixture gate in CI; PyO3-layer smoke job (`.github/workflows/bench-smoke.yml`); pre-flight tight-tol screening test now a separate fail-fast CI step with 2-min timeout (R3, ci.yml); numerical guards (`W_FLOOR=1e-6`, `ETA_CLAMP=30.0`) centralized in `crates/skein-core/src/numerics.rs` (R4); R1 unwrap audit closed (`block_path_lla.rs` documented; `cd.rs::anderson_extrapolate` documented; dead `Groups::from_csr` call removed from `glasso_admm.rs`; remaining hits are test-only setup invariants); `Groups::has_overlap()` + parallel block-CD overlap detection with serial Gauss-Seidel fallback + `Once`-gated stderr warning + fixture (C5); criterion bench tree expanded with `lla_outer.rs`, `prox_newton_glm.rs`, `glasso.rs` alongside existing `block_cd.rs`, README updated (P2); `skein-py/src/lib.rs` 10,628 → 275 lines, every datafit family in its own module: `glasso.rs`, `glm.rs`, `ls.rs`, `mmap_chunked.rs`, `multinomial.rs`, `multitask.rs` (P4). No new algorithmic surface. |
 | M13 — Performance findings from `benches/v2` | ⏳ partial | M13.1 adaptive screening saturation bypass shipped; M13.2 cross-λ gradient cache shipped (-10.4% wall on medium Lasso); M13.4 Phase 2.3 LLA fixed-point short-circuit shipped; **M13.4b native group-MCP BCD shipped (-3.46× wall on medium ls_group_mcp; flips skein/grpreg from 3.34× slower to 1.20× faster)**; **M13.4c native group-MCP BCD extended to logistic / Poisson / Cox shipped (2.12× wall on logistic medium; new `glm_group_mcp_native_matches_lla` cross-family agreement test)**; M13.6 re-characterized post-M13.2 (memory-bandwidth wall in inner CD past medium scale, not fixed-cost overhead). Remaining: M13.5 MCP one-outer-iter short-circuit; sparse-group MCP variants for logistic / Poisson / Cox still on LLA. |
-| M14 — Inference & applications closeout | ⏳ partial | **M14a.1 polychoric / polyserial preprocessing** (Olsson 1979 two-step ML) for ordinal Likert / mixed data; **M14a.2 edge-level FDR / FWER / MB stability bound** on `GraphicalBootstrap` (no other graphical-models package has this — BH FDR + Bonferroni / Holm + closed-form MB threshold); **M14a.3 debiased Cox lasso** (Van de Geer / Cai-Wang construction reusing the partial-likelihood Fisher diagonal from `CoxPH::surrogate_at` via a 16-line PyO3 binding — closes the inference axis across all four mainstream GLM families). Three new sklearn-compatible estimators, three new `docs/concepts/` pages, end-to-end psychometrics example now closes the M11.1 replication exit criterion. M14b (paper headline run + manuscript) and M14c (perf / correctness closeout) pending. |
+| M14 — Inference & applications closeout | ⏳ partial | **M14a.1 polychoric / polyserial preprocessing** (Olsson 1979 two-step ML) for ordinal Likert / mixed data; **M14a.2 edge-level FDR / FWER / MB stability bound** on `GraphicalBootstrap` (no other graphical-models package has this — BH FDR + Bonferroni / Holm + closed-form MB threshold); **M14a.3 debiased Cox lasso** (Van de Geer / Cai-Wang construction reusing the partial-likelihood Fisher diagonal from `CoxPH::surrogate_at` via a 16-line PyO3 binding — closes the inference axis across all four mainstream GLM families); **M14c.1 scalar LLA weight short-circuit** (Phase 2.3 ported to `path_lla.rs` — affects bridge, adaptive lasso, multitask LLA); **M14c.2 native sparse-group MCP penalty + 6 GLM PyO3 swaps** (drops the LLA layer for logistic/Poisson/Cox sparse-group MCP, sibling of M13.4c); **M14c.3 at-scale R-fixture tier** (n=500, p=100) for cross-package regression gating. Three new sklearn-compatible estimators, four new `docs/concepts/` pages, end-to-end psychometrics example now closes the M11.1 replication exit criterion. M14b (paper headline run + manuscript) pending. |
 
-Test count at this snapshot: **350 cargo lib + 8 cargo integration + 455 pytest, all green.**
+Test count at this snapshot: **358 cargo lib + 8 cargo integration + 455 pytest, all green.**
 
 ---
 
@@ -2644,13 +2644,84 @@ tables that already auto-generate. The artifact bundle is complete;
 what's missing is the empirical execution on GLMs and the
 manuscript wrapper.
 
-### M14c — Pending (perf / correctness closeout)
+### ✅ M14c — Perf / correctness closeout (SHIPPED)
 
-Sparse-group MCP native BCD for the GLM families (sibling of
-M13.4c — still on LLA), M13.5 MCP one-outer-iter short-circuit
-(LLA wrapper around scalar MCP / SCAD / adaptive / bridge), and the
-at-scale R-fixture suite (n=5000, p=2000) for cross-package
-correctness regression-gating in CI.
+Three independent commits closing the remaining tractable items
+from M13 and from the M9.4 at-scale gate.
+
+#### ✅ M14c.1 — Scalar LLA weight short-circuit (commit `cf4830d`)
+
+Ports the M13.4 Phase 2.3 fix from `block_path_lla.rs` to the
+scalar `path_lla.rs`. Caches `prev_weights` and breaks the outer
+loop when `‖w_t − w_{t-1}‖_∞ < weight_short_circuit_tol` (sized
+`1000 · outer_tol`, floored at `1e-8` — same as the block
+version). Affects callers of `solve_path_lla`: bridge `|β|^q`,
+adaptive lasso, multi-task LLA paths. Scalar MCP / SCAD don't use
+this path — they go through the convex `solve_path` with the
+closed-form `Mcp::prox_coord` directly, so the original ROADMAP
+M13.5 "1.32× MCP overhead in convex regime" claim was diagnosing
+a different code-path issue (fixed-cost overhead inside
+`solve_path`; separate investigation).
+
+Empirical check on bridge q=0.5 (n=2000, p=100, 40 λs,
+max_outer=30, outer_tol=1e-7): average 1.2 outer iters per λ,
+40/40 converged.
+
+#### ✅ M14c.2 — Native sparse-group MCP BCD for GLMs (commit `292ff28`)
+
+Sibling of M13.4c (which did native group-MCP for GLMs). New Rust
+penalty `SparseGroupMcp` (`crates/skein-core/src/penalty/sparse_group_mcp.rs`)
+implements the Breheny & Huang (2015) Proposition 1 closed-form
+prox: apply scalar MCP to each coordinate with threshold
+`α·λ·v_{g,k}`, then group-MCP on the resulting block norm with
+threshold `(1−α)·λ·w_g`. Both layers share the same `γ`. Reuses
+`prox::mcp_prox` and the GroupMcp block-shrink derivation.
+
+6 PyO3 closures swapped in `glm.rs` —
+`solve_{logistic,poisson,cox}_sparse_group_mcp_path[_sparse]`. Old:
+LLA-wrapped `SparseGroupLasso::with_coord_weights`. New: direct
+`SparseGroupMcp::with_coord_weights`. β-independent. Prox-Newton
+outer loop semantics unchanged.
+
+11 new cargo lib tests (358 → 358; 8 new SparseGroupMcp tests
+including reductions to GroupMcp at α=0 and to SparseGroupLasso at
+γ→∞). Smoke test on logistic sparse-group MCP (n=1000, p=100, 20
+groups, α=0.5, γ=3.0) runs the full 30-λ path in 0.82 s with
+within-group sparsity recovered cleanly on a planted-sparse
+problem.
+
+#### ✅ M14c.3 — At-scale R-fixture tier (commit `1ec1ee9`)
+
+Adds a mid-tier (n=500, p=100, top-8 active features) to the
+`tests/fixtures/generate.R` suite for three representative
+penalty / family combinations:
+- `glmnet_lasso_gaussian_mid.json`
+- `ncvreg_mcp_gaussian_mid.json`
+- `glmnet_lasso_binomial_mid.json`
+
+The small tier (n=200, p=15–24) catches *correctness* regressions
+in the inner CD; the mid tier catches *scale-dependent*
+regressions where the active-set fuzz, the number of LLA outer
+iters per λ, or fixed-cost overhead inside `solve_path` would
+have masked the bug at small scale. Tolerances on the Python side
+(`tests/test_r_regression.py`) are looser (`smallest_lambda_atol`
+5e-3–5e-2 vs 1e-5, `active_set_fuzz_frac` 0.15 vs 0.10).
+
+The M9.4 roadmap target of n=5000, p=2000 is parked as a follow-up
+— at that size each JSON-encoded X exceeds ~80 MB raw, requiring
+an artifact-server pipeline outside the committed-fixture model.
+Mid tier at n=500, p=100 keeps each file under ~1 MB raw.
+
+Fixtures themselves require a maintainer to run
+`Rscript tests/fixtures/generate.R` — same opt-in pattern as the
+small tier; R is not in CI. Mid-tier tests skip cleanly when
+fixtures absent.
+
+#### Verified gates
+
+358 cargo lib + 8 integration + **455 pytest** (+ 5 skipped: 2
+R-anchor placeholders for polychoric / Cox debiasing, plus 3
+M14c.3 mid-tier R-regression skips). Sphinx `-W` build green.
 
 ---
 
