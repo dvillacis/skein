@@ -27,8 +27,9 @@ load-bearing piece; everything after stacks on top of it.
 | M11 — Graphical models | ✅ done | Single-population glasso (L1 / MCP / SCAD) + joint glasso across `K` populations (Danaher–Wang–Witten group form via ADMM) + EBIC tuner; M11.3 bootnet-style bootstrap edge stability shipped. |
 | M12 — Hardening (robustness, test coverage, CI) | ✅ done | Penalty + datafit unit-test coverage closed; Rust integration test directory added; R-fixture gate in CI; PyO3-layer smoke job (`.github/workflows/bench-smoke.yml`); pre-flight tight-tol screening test now a separate fail-fast CI step with 2-min timeout (R3, ci.yml); numerical guards (`W_FLOOR=1e-6`, `ETA_CLAMP=30.0`) centralized in `crates/skein-core/src/numerics.rs` (R4); R1 unwrap audit closed (`block_path_lla.rs` documented; `cd.rs::anderson_extrapolate` documented; dead `Groups::from_csr` call removed from `glasso_admm.rs`; remaining hits are test-only setup invariants); `Groups::has_overlap()` + parallel block-CD overlap detection with serial Gauss-Seidel fallback + `Once`-gated stderr warning + fixture (C5); criterion bench tree expanded with `lla_outer.rs`, `prox_newton_glm.rs`, `glasso.rs` alongside existing `block_cd.rs`, README updated (P2); `skein-py/src/lib.rs` 10,628 → 275 lines, every datafit family in its own module: `glasso.rs`, `glm.rs`, `ls.rs`, `mmap_chunked.rs`, `multinomial.rs`, `multitask.rs` (P4). No new algorithmic surface. |
 | M13 — Performance findings from `benches/v2` | ⏳ partial | M13.1 adaptive screening saturation bypass shipped; M13.2 cross-λ gradient cache shipped (-10.4% wall on medium Lasso); M13.4 Phase 2.3 LLA fixed-point short-circuit shipped; **M13.4b native group-MCP BCD shipped (-3.46× wall on medium ls_group_mcp; flips skein/grpreg from 3.34× slower to 1.20× faster)**; **M13.4c native group-MCP BCD extended to logistic / Poisson / Cox shipped (2.12× wall on logistic medium; new `glm_group_mcp_native_matches_lla` cross-family agreement test)**; M13.6 re-characterized post-M13.2 (memory-bandwidth wall in inner CD past medium scale, not fixed-cost overhead). Remaining: M13.5 MCP one-outer-iter short-circuit; sparse-group MCP variants for logistic / Poisson / Cox still on LLA. |
+| M14 — Inference & applications closeout | ⏳ partial | **M14a.1 polychoric / polyserial preprocessing** (Olsson 1979 two-step ML) for ordinal Likert / mixed data; **M14a.2 edge-level FDR / FWER / MB stability bound** on `GraphicalBootstrap` (no other graphical-models package has this — BH FDR + Bonferroni / Holm + closed-form MB threshold); **M14a.3 debiased Cox lasso** (Van de Geer / Cai-Wang construction reusing the partial-likelihood Fisher diagonal from `CoxPH::surrogate_at` via a 16-line PyO3 binding — closes the inference axis across all four mainstream GLM families). Three new sklearn-compatible estimators, three new `docs/concepts/` pages, end-to-end psychometrics example now closes the M11.1 replication exit criterion. M14b (paper headline run + manuscript) and M14c (perf / correctness closeout) pending. |
 
-Test count at this snapshot: **350 cargo lib + 8 cargo integration + 412 pytest, all green.**
+Test count at this snapshot: **350 cargo lib + 8 cargo integration + 455 pytest, all green.**
 
 ---
 
@@ -1721,9 +1722,11 @@ Exit criteria:
   matches.
 - EBIC selects a λ within a small range of the truth-recovery λ on
   a synthetic ground-truth precision matrix.
-- Psychometrics replication: one published network (BFI or
-  depression-symptoms from `bootnet`/`psychonetrics`) reproduced at
-  the field-standard λ.
+- ✅ Psychometrics replication: depression-symptom network end-to-end
+  example shipped in M14a (`docs/examples/psychometrics.md`) — chains
+  `polychoric_correlation` → EBIC-tuned `GraphicalMCP` →
+  `GraphicalBootstrap.fdr_threshold(fdr=0.10)`. Retains all 7 planted
+  edges with zero false discoveries at n=400, 300 bootstraps.
 - Benchmark within 2× of sklearn at p=200 for L1; MCP/SCAD have no
   mainstream-package equivalent to compete against.
 
@@ -2504,6 +2507,150 @@ for agreement); `paper/manifest.json` lists every artifact and its
 source aggregate. The screening ablation in M13.1 is a one-off
 measurement not yet in the suite — add it as a v2 scenario before
 treating the numbers as a regression gate.
+
+---
+
+## M14 — Inference & applications closeout
+
+The algorithm + perf surface is comprehensive after M13.4c, but the
+**inference layer** has two structural gaps and the
+**applications layer** has one. M14 closes them.
+
+### ✅ M14a — Inference axis + psychometrics replication (SHIPPED)
+
+Three new public surfaces — none of them needs a new Rust algorithm;
+all reuse existing solver primitives or extension surfaces.
+
+#### ✅ M14a.1 — Polychoric / polyserial preprocessing (commit `bceb21a`)
+
+`python/skein_glm/preprocessing.py` exposes three pure-Python
+helpers backing the network-psychometrics pipeline:
+
+- `polychoric_correlation(X)` — Olsson (1979) two-step ML for an
+  ordinal correlation matrix. Step 1: thresholds via inverse normal
+  CDF of cumulative marginals with the Olsson 0.5 continuity
+  correction. Step 2: per-pair ρ via `scipy.optimize.minimize_scalar`
+  (Brent's bounded) on the bivariate-normal log-likelihood, with
+  rectangle probabilities via the four-corner formula on
+  `scipy.stats.multivariate_normal.cdf`.
+- `polyserial_correlation(X_ord, Y_cont)` — Olsson-Drasgow-Dorans
+  (1982) profile-likelihood ML, vectorized over `(p_ord, p_cont)`
+  pairs.
+- `polychoric_covariance_matrix(X)` — mixed-type pipeline that
+  auto-detects ordinal vs continuous columns and dispatches to
+  polychoric / polyserial / Pearson per pair.
+
+Recovery on synthetic data: max absolute error 0.04 between
+estimated and true latent correlation at n=2000 with 4-level Likert
+across 4×4 correlation patterns. Polyserial recovers ρ=0.5 to within
+0.008. 15 pytest + 1 R-anchor placeholder (skips cleanly if
+`tests/fixtures/psych_polychoric.json` absent).
+
+#### ✅ M14a.2 — Edge-level FDR / FWER / MB stability bound (commit `5e520d5`)
+
+`python/skein_glm/graph_inference.py` answers the question
+mainstream graphical-models packages dodge — "*which edges are real,
+at a controlled error rate across the whole graph?*" — with three
+composable helpers:
+
+- `edge_fdr_threshold(boot, fdr=0.1)` — Benjamini–Hochberg FDR on
+  per-edge bootstrap p-values.
+- `edge_fwer_threshold(boot, fwer=0.05, method="holm")` —
+  Bonferroni or Holm family-wise error control.
+- `mb_stability_threshold(p_total, q_lambda, EV)` — Meinshausen–
+  Bühlmann (2010) closed-form bound inverting a stability-selection
+  threshold to an expected-false-positive guarantee.
+
+Per-edge p-values use the two-sided bootstrap formula
+`p = 2·min(P̂(Θ̂* ≥ 0), P̂(Θ̂* ≤ 0))` with **non-strict** inequalities
+— a deliberate choice for sparse estimators (graphical lasso / MCP /
+SCAD), where null edges are exactly zero on every bootstrap
+replicate and a strict-inequality formulation would spuriously yield
+the smallest representable p-value for every null edge. The bug was
+caught by a smoke test before any committed test exercised the
+estimator end-to-end.
+
+Convenience methods `.fdr_threshold(...)` / `.fwer_threshold(...)`
+on `GraphicalBootstrap` and `.mb_threshold(...)` on
+`GraphicalStabilitySelection`. Joint estimators
+`(B, K, p, p)` pool all `K · p(p-1)/2` edges into one BH family.
+
+16 pytest covering FDR / FWER control (empirical FDR ≤ 1.5×
+nominal over 5 seeds), MB formula numeric check + infeasible case,
+joint pooling, Holm-vs-Bonferroni power, method-vs-function parity.
+
+#### ✅ M14a.3 — Debiased Cox lasso (commit `c176879`)
+
+`python/skein_glm/debiased.py` gains `debiased_cox_lasso` +
+`DebiasedCoxLassoRegressor` + `DebiasedCoxResult`. Closes the
+inference axis across all four mainstream GLM families (LS,
+logistic, Poisson, Cox) — no other mainstream Python package has
+Cox debiasing.
+
+The construction extends Van de Geer-style debiasing (Cai-Wang
+2017) to Cox by reusing the existing Rust `CoxPH::surrogate_at` (at
+`crates/skein-core/src/datafit/cox_ph.rs:204`) via a single new
+16-line PyO3 binding `cox_surrogate_weights_at` exposing the per-
+sample partial-likelihood Fisher diagonal `w_i` and working
+response `z_i` to Python. The rest of the pipeline composes:
+
+1. Fit penalized Cox via `CoxMCPRegressor(gamma=1e10)` (the standard
+   skein idiom for Cox lasso).
+2. Build weighted design `X̃ = W^{1/2} X` from the surrogate weights.
+3. Nodewise lasso on `X̃` → `Θ̂` (reuses `_fit_nodewise_column`
+   unchanged from the LS path).
+4. Debias against the Cox score residual
+   `event − exp(η̂)·Λ̂_0(t)`, recovered from the surrogate identity
+   `z = η − g/w` as `μ̂_cox = event + w·(η − z)`.
+5. Variance `diag(Θ̂ X̃ᵀX̃ Θ̂ᵀ) / n²` — same as GLM, no σ² nuisance
+   because the partial likelihood is self-normalizing.
+
+12 pytest including the load-bearing 95% CI coverage test on
+inactive coordinates (≥ 80% empirical coverage over 40 reps,
+matching the precedent set by `test_debiased_glm.py` for logistic /
+Poisson). 1 R-anchor placeholder against `hdi::lasso.proj(..., family="cox")`.
+
+#### Cross-cutting deliverables
+
+- **`docs/concepts/polychoric.md`** — Olsson's two-step ML
+  derivation, end-to-end pipeline, when not to use polychoric.
+- **`docs/concepts/graph_inference.md`** — BH FDR / Holm FWER /
+  MB bound on edges, joint-population pooling, when not to use FDR.
+- **`docs/concepts/inference.md`** — unified concept page covering
+  LS / GLM / Cox debiased lasso + stability selection.
+- **`docs/examples/psychometrics.md` rewritten** to chain
+  polychoric → EBIC-tuned `GraphicalMCP` → `GraphicalBootstrap` +
+  `.fdr_threshold(fdr=0.10)` end-to-end. **This closes the M11.1
+  psychometrics-replication exit criterion** that's been deferred
+  since v0.7; on the worked depression-symptom problem, FDR ≤ 10%
+  retains all 7 planted edges with zero false discoveries at n=400,
+  300 bootstraps.
+- **`docs/examples/survival.md`** gains a "Confidence intervals on
+  prognostic features" section showing `DebiasedCoxLassoRegressor`.
+
+#### Verified gates
+
+350 cargo lib + 8 cargo integration + **455 pytest** (412 → 455,
++43 new: 15 polychoric + 16 FDR/FWER + 12 Cox debiased; 2 R-anchor
+skipped) + Sphinx `-W` build green. No new Rust algorithm; one new
+PyO3 binding.
+
+### M14b — Pending (software paper)
+
+Run the full `benches/v2` headline matrix for the GLM / graphical
+cells (LS cells already done), expand the appendix coverage table,
+and draft the JMLR-MLOSS / JOSS manuscript using the 10 figures + 5
+tables that already auto-generate. The artifact bundle is complete;
+what's missing is the empirical execution on GLMs and the
+manuscript wrapper.
+
+### M14c — Pending (perf / correctness closeout)
+
+Sparse-group MCP native BCD for the GLM families (sibling of
+M13.4c — still on LLA), M13.5 MCP one-outer-iter short-circuit
+(LLA wrapper around scalar MCP / SCAD / adaptive / bridge), and the
+at-scale R-fixture suite (n=5000, p=2000) for cross-package
+correctness regression-gating in CI.
 
 ---
 

@@ -52,19 +52,31 @@ performance findings opened by the `benches/v2` release-profile run.
   penalty) combination (~150 classes); type stubs; warm-started
   λ-paths; standardization with original-scale `coef_` / `intercept_`
   recovery on dense and sparse.
-- **Model selection + inference (M5)** — K-fold CV across every
-  `*PathCV` class (threaded folds via PyO3 GIL release, ~2.3–2.5×
-  speedup); AIC/BIC/EBIC tuning; stability selection (MB bootstrap);
-  debiased / desparsified lasso for LS + binomial + Poisson with Wald
-  CIs and p-values.
-- **Graphical models (M11)** — sparse precision matrix estimation
-  (`GraphicalLasso` / `GraphicalMCP` / `GraphicalSCAD`) and joint
-  estimation across `K` related populations (`JointGraphicalLasso` /
-  `JointGraphicalMCP`, Danaher–Wang–Witten 2014 group form via ADMM),
-  with EBIC tuning and bootnet-style bootstrap edge stability.
-  Nonconvex penalties on edges close the shrinkage-bias gap that
-  `sklearn.covariance.GraphicalLasso` and R's `glasso` / `qgraph` /
-  `bootnet` leave open.
+- **Model selection + inference (M5 + M14a)** — K-fold CV across
+  every `*PathCV` class (threaded folds via PyO3 GIL release,
+  ~2.3–2.5× speedup); AIC/BIC/EBIC tuning; stability selection (MB
+  bootstrap); **debiased / desparsified lasso for LS + binomial +
+  Poisson + Cox** with Wald CIs and p-values (Cox added in M14a — no
+  mainstream Python package has it).
+- **Graphical models (M11 + M14a)** — sparse precision matrix
+  estimation (`GraphicalLasso` / `GraphicalMCP` / `GraphicalSCAD`)
+  and joint estimation across `K` related populations
+  (`JointGraphicalLasso` / `JointGraphicalMCP`, Danaher–Wang–Witten
+  2014 group form via ADMM), with EBIC tuning, bootnet-style
+  bootstrap edge stability, and **edge-level Benjamini–Hochberg FDR
+  / Bonferroni / Holm FWER / Meinshausen–Bühlmann stability bound**
+  (M14a — no other graphical-models package controls error rates
+  at the edge level). Nonconvex penalties on edges close the
+  shrinkage-bias gap that `sklearn.covariance.GraphicalLasso` and
+  R's `glasso` / `qgraph` / `bootnet` leave open.
+- **Network psychometrics pipeline (M14a)** — polychoric / polyserial
+  correlations (Olsson 1979 two-step ML) for ordinal Likert data
+  via `polychoric_correlation` / `polyserial_correlation` /
+  `polychoric_covariance_matrix`. The end-to-end
+  `polychoric_correlation` → `GraphicalMCP` (EBIC-tuned) →
+  `GraphicalBootstrap.fdr_threshold(...)` worked example in
+  `docs/examples/psychometrics.md` is the closeout for the M11.1
+  psychometrics-replication exit criterion.
 - **Distribution + docs (M8) + hardening (M12)** — CI + cibuildwheel +
   Read the Docs + Sphinx site (concepts + R-porting + extending +
   examples + API ref) + R numerical regression suite vs glmnet /
@@ -72,11 +84,12 @@ performance findings opened by the `benches/v2` release-profile run.
   datafit unit-test coverage, an integration test directory, a CI
   smoke job for the PyO3 layer, and an R-fixture gate.
 
-**Coming next:** the remaining M13 perf items — M13.5 MCP one-outer-iter
-short-circuit (closes the residual ~1.32× gap between scalar MCP and
-Lasso at medium scale), native sparse-group MCP BCD for the GLM
-families (sibling of M13.4c), and the publication benchmark suite at
-`benches/v2/` that backs the software paper.
+**Coming next:** M14b (software paper) — run the full `benches/v2`
+GLM + graphical headline matrix and draft the JMLR-MLOSS / JOSS
+manuscript from the figures + tables that already auto-generate.
+M14c (perf / correctness closeout) — sparse-group MCP native BCD
+for GLMs (sibling of M13.4c), M13.5 MCP one-outer-iter short-circuit,
+and the at-scale R-fixture suite (n=5000, p=2000).
 
 ## Layout
 
