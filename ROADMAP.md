@@ -27,7 +27,7 @@ load-bearing piece; everything after stacks on top of it.
 | M11 — Graphical models | ✅ done | Single-population glasso (L1 / MCP / SCAD) + joint glasso across `K` populations (Danaher–Wang–Witten group form via ADMM) + EBIC tuner; M11.3 bootnet-style bootstrap edge stability shipped. |
 | M12 — Hardening (robustness, test coverage, CI) | ✅ done | Penalty + datafit unit-test coverage closed; Rust integration test directory added; R-fixture gate in CI; PyO3-layer smoke job (`.github/workflows/bench-smoke.yml`); pre-flight tight-tol screening test now a separate fail-fast CI step with 2-min timeout (R3, ci.yml); numerical guards (`W_FLOOR=1e-6`, `ETA_CLAMP=30.0`) centralized in `crates/skein-core/src/numerics.rs` (R4); R1 unwrap audit closed (`block_path_lla.rs` documented; `cd.rs::anderson_extrapolate` documented; dead `Groups::from_csr` call removed from `glasso_admm.rs`; remaining hits are test-only setup invariants); `Groups::has_overlap()` + parallel block-CD overlap detection with serial Gauss-Seidel fallback + `Once`-gated stderr warning + fixture (C5); criterion bench tree expanded with `lla_outer.rs`, `prox_newton_glm.rs`, `glasso.rs` alongside existing `block_cd.rs`, README updated (P2); `skein-py/src/lib.rs` 10,628 → 275 lines, every datafit family in its own module: `glasso.rs`, `glm.rs`, `ls.rs`, `mmap_chunked.rs`, `multinomial.rs`, `multitask.rs` (P4). No new algorithmic surface. |
 | M13 — Performance findings from `benches/v2` | ⏳ partial | M13.1 adaptive screening saturation bypass shipped; M13.2 cross-λ gradient cache shipped (-10.4% wall on medium Lasso); M13.4 Phase 2.3 LLA fixed-point short-circuit shipped; **M13.4b native group-MCP BCD shipped (-3.46× wall on medium ls_group_mcp; flips skein/grpreg from 3.34× slower to 1.20× faster)**; **M13.4c native group-MCP BCD extended to logistic / Poisson / Cox shipped (2.12× wall on logistic medium; new `glm_group_mcp_native_matches_lla` cross-family agreement test)**; M13.6 re-characterized post-M13.2 (memory-bandwidth wall in inner CD past medium scale, not fixed-cost overhead). Remaining: M13.5 MCP one-outer-iter short-circuit; sparse-group MCP variants for logistic / Poisson / Cox still on LLA. |
-| M14 — Inference & applications closeout | ⏳ partial | **M14a.1 polychoric / polyserial preprocessing** (Olsson 1979 two-step ML) for ordinal Likert / mixed data; **M14a.2 edge-level FDR / FWER / MB stability bound** on `GraphicalBootstrap` (no other graphical-models package has this — BH FDR + Bonferroni / Holm + closed-form MB threshold); **M14a.3 debiased Cox lasso** (Van de Geer / Cai-Wang construction reusing the partial-likelihood Fisher diagonal from `CoxPH::surrogate_at` via a 16-line PyO3 binding — closes the inference axis across all four mainstream GLM families); **M14c.1 scalar LLA weight short-circuit** (Phase 2.3 ported to `path_lla.rs` — affects bridge, adaptive lasso, multitask LLA); **M14c.2 native sparse-group MCP penalty + 6 GLM PyO3 swaps** (drops the LLA layer for logistic/Poisson/Cox sparse-group MCP, sibling of M13.4c); **M14c.3 at-scale R-fixture tier** (n=500, p=100) for cross-package regression gating. Three new sklearn-compatible estimators, four new `docs/concepts/` pages, end-to-end psychometrics example now closes the M11.1 replication exit criterion. M14b (paper headline run + manuscript) pending. |
+| M14 — Inference & applications closeout | ⏳ partial | **Released as v0.9.0** (commit `ab9bd44`). **M14a.1 polychoric / polyserial preprocessing** (Olsson 1979 two-step ML) for ordinal Likert / mixed data; **M14a.2 edge-level FDR / FWER / MB stability bound** on `GraphicalBootstrap` (no other graphical-models package has this — BH FDR + Bonferroni / Holm + closed-form MB threshold); **M14a.3 debiased Cox lasso** (Van de Geer / Cai-Wang construction reusing the partial-likelihood Fisher diagonal from `CoxPH::surrogate_at` via a 16-line PyO3 binding — closes the inference axis across all four mainstream GLM families); **M14c.1 scalar LLA weight short-circuit** (Phase 2.3 ported to `path_lla.rs` — affects bridge, adaptive lasso, multitask LLA); **M14c.2 native sparse-group MCP penalty + 6 GLM PyO3 swaps** (drops the LLA layer for logistic/Poisson/Cox sparse-group MCP, sibling of M13.4c); **M14c.3 at-scale R-fixture tier** (n=500, p=100) for cross-package regression gating; **R-anchor fixture generators** for polychoric (vs `psych::polychoric`, atol 5e-3) and Cox active-set (vs `glmnet(family='cox')`, Jaccard ≥ 0.6 — no R package has Cox debiasing). Three new sklearn-compatible estimators, four new `docs/concepts/` pages, end-to-end psychometrics example now closes the M11.1 replication exit criterion. M14b (paper headline run + manuscript) pending. |
 
 Test count at this snapshot: **358 cargo lib + 8 cargo integration + 455 pytest, all green.**
 
@@ -2543,8 +2543,12 @@ helpers backing the network-psychometrics pipeline:
 Recovery on synthetic data: max absolute error 0.04 between
 estimated and true latent correlation at n=2000 with 4-level Likert
 across 4×4 correlation patterns. Polyserial recovers ρ=0.5 to within
-0.008. 15 pytest + 1 R-anchor placeholder (skips cleanly if
-`tests/fixtures/psych_polychoric.json` absent).
+0.008. 15 pytest + 1 R-anchor test against `psych::polychoric()`
+(soft-skips when `tests/fixtures/psych_polychoric.json` absent;
+the generator block in `generate.R` was added in commit `e35536c`
+— a maintainer with R + psych regenerates and commits the fixture
+to activate the gate, after which it runs in CI as a tight
+elementwise comparison at atol=5e-3).
 
 #### ✅ M14a.2 — Edge-level FDR / FWER / MB stability bound (commit `5e520d5`)
 
@@ -2608,7 +2612,14 @@ response `z_i` to Python. The rest of the pipeline composes:
 12 pytest including the load-bearing 95% CI coverage test on
 inactive coordinates (≥ 80% empirical coverage over 40 reps,
 matching the precedent set by `test_debiased_glm.py` for logistic /
-Poisson). 1 R-anchor placeholder against `hdi::lasso.proj(..., family="cox")`.
+Poisson). 1 R-anchor active-set test against `glmnet(family='cox')`
+(originally scoped against `hdi::lasso.proj`, but `hdi` 0.1-9 / CRAN
+supports gaussian + binomial only — no R package implements Cox
+debiased lasso, so the anchor was refactored to a weaker but honest
+Jaccard ≥ 0.6 active-set gate against `glmnet`'s penalized fit on
+the same problem; soft-skips when
+`tests/fixtures/glmnet_cox_active_set.json` absent, generator added
+in commit `e35536c`).
 
 #### Cross-cutting deliverables
 
