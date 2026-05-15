@@ -27,9 +27,12 @@ use skein_core::{
     datafit::{BinomialLogit, CoxPH, Datafit as _, GlmDatafit, Huber, PoissonLog, TieHandling},
     design::{DenseMatrix, DesignMatrix as _, Standardized},
     groups::Groups,
-    penalty::{ElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad, SparseGroupLasso},
+    penalty::{
+        ElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad, SparseGroupLasso,
+        SparseGroupMcp,
+    },
     solver::{
-        prox_newton_block_solve_path, prox_newton_solve_path, surrogate_sparse_group_mcp,
+        prox_newton_block_solve_path, prox_newton_solve_path,
         surrogate_sparse_group_scad, CdConfig,
     },
     Penalty,
@@ -719,6 +722,22 @@ pub(crate) fn build_logistic_coord_weights(
     w
 }
 
+/// Split a flat per-feature coord-weights array into per-group blocks.
+/// Used by the native sparse-group MCP closures (M14c.2) to build the
+/// `Vec<Array1<f64>>` shape expected by
+/// `SparseGroupMcp::with_coord_weights`.
+pub(crate) fn split_coord_weights_per_group(
+    coord_w_flat: ndarray::ArrayView1<'_, f64>,
+    groups: &Groups,
+) -> Vec<ndarray::Array1<f64>> {
+    (0..groups.n_groups())
+        .map(|g| {
+            let cols = groups.group(g);
+            ndarray::Array1::from_iter(cols.iter().map(|&j| coord_w_flat[j]))
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_glm_block_path_outputs<'py, F, V, G>(
     py: Python<'py>,
@@ -1103,16 +1122,24 @@ pub(crate) fn solve_logistic_sparse_group_mcp_path<'py>(
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_mcp(
-                beta,
-                g,
-                lam,
-                gamma,
-                alpha,
-                group_w.view(),
+            // M14c.2 — native sparse-group MCP block-CD inside the
+            // prox-Newton outer loop. `SparseGroupMcp::prox_group`
+            // (Breheny & Huang 2015 §3 closed-form composition of
+            // per-coord MCP + group-MCP) replaces the LLA-wrapped
+            // weighted SparseGroupLasso surrogate. Sibling of M13.4c
+            // for the plain group-MCP family.
+            let _ = beta;
+            let cw = crate::glm::split_coord_weights_per_group(
                 coord_w_eff.view(),
+                g,
             );
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+            Box::new(SparseGroupMcp::with_coord_weights(
+                lam,
+                alpha,
+                gamma,
+                group_w.clone(),
+                cw,
+            ))
         },
     )
 }
@@ -1591,16 +1618,24 @@ pub(crate) fn solve_poisson_sparse_group_mcp_path<'py>(
         validate_y_nonneg,
         make_glm,
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_mcp(
-                beta,
-                g,
-                lam,
-                gamma,
-                alpha,
-                group_w.view(),
+            // M14c.2 — native sparse-group MCP block-CD inside the
+            // prox-Newton outer loop. `SparseGroupMcp::prox_group`
+            // (Breheny & Huang 2015 §3 closed-form composition of
+            // per-coord MCP + group-MCP) replaces the LLA-wrapped
+            // weighted SparseGroupLasso surrogate. Sibling of M13.4c
+            // for the plain group-MCP family.
+            let _ = beta;
+            let cw = crate::glm::split_coord_weights_per_group(
                 coord_w_eff.view(),
+                g,
             );
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+            Box::new(SparseGroupMcp::with_coord_weights(
+                lam,
+                alpha,
+                gamma,
+                group_w.clone(),
+                cw,
+            ))
         },
     )
 }
@@ -2404,16 +2439,20 @@ pub(crate) fn solve_cox_sparse_group_mcp_path<'py>(
         outer_tol,
         ties,
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_mcp(
-                beta,
-                g,
-                lam,
-                gamma,
-                alpha,
-                group_w.view(),
+            // M14c.2 — native sparse-group MCP block-CD; see
+            // solve_logistic_sparse_group_mcp_path for the full rationale.
+            let _ = beta;
+            let cw_per_group = crate::glm::split_coord_weights_per_group(
                 coord_w.view(),
+                g,
             );
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+            Box::new(SparseGroupMcp::with_coord_weights(
+                lam,
+                alpha,
+                gamma,
+                group_w.clone(),
+                cw_per_group,
+            ))
         },
     )
 }
@@ -3505,16 +3544,24 @@ pub(crate) fn solve_logistic_sparse_group_mcp_path_sparse<'py>(
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_mcp(
-                beta,
-                g,
-                lam,
-                gamma,
-                alpha,
-                group_w.view(),
+            // M14c.2 — native sparse-group MCP block-CD inside the
+            // prox-Newton outer loop. `SparseGroupMcp::prox_group`
+            // (Breheny & Huang 2015 §3 closed-form composition of
+            // per-coord MCP + group-MCP) replaces the LLA-wrapped
+            // weighted SparseGroupLasso surrogate. Sibling of M13.4c
+            // for the plain group-MCP family.
+            let _ = beta;
+            let cw = crate::glm::split_coord_weights_per_group(
                 coord_w_eff.view(),
+                g,
             );
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+            Box::new(SparseGroupMcp::with_coord_weights(
+                lam,
+                alpha,
+                gamma,
+                group_w.clone(),
+                cw,
+            ))
         },
     )
 }
@@ -4040,16 +4087,24 @@ pub(crate) fn solve_poisson_sparse_group_mcp_path_sparse<'py>(
         validate_y_nonneg,
         make_glm,
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_mcp(
-                beta,
-                g,
-                lam,
-                gamma,
-                alpha,
-                group_w.view(),
+            // M14c.2 — native sparse-group MCP block-CD inside the
+            // prox-Newton outer loop. `SparseGroupMcp::prox_group`
+            // (Breheny & Huang 2015 §3 closed-form composition of
+            // per-coord MCP + group-MCP) replaces the LLA-wrapped
+            // weighted SparseGroupLasso surrogate. Sibling of M13.4c
+            // for the plain group-MCP family.
+            let _ = beta;
+            let cw = crate::glm::split_coord_weights_per_group(
                 coord_w_eff.view(),
+                g,
             );
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+            Box::new(SparseGroupMcp::with_coord_weights(
+                lam,
+                alpha,
+                gamma,
+                group_w.clone(),
+                cw,
+            ))
         },
     )
 }
@@ -4515,16 +4570,20 @@ pub(crate) fn solve_cox_sparse_group_mcp_path_sparse<'py>(
         outer_tol,
         ties,
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_mcp(
-                beta,
-                g,
-                lam,
-                gamma,
-                alpha,
-                group_w.view(),
+            // M14c.2 — native sparse-group MCP block-CD; see
+            // solve_logistic_sparse_group_mcp_path for the full rationale.
+            let _ = beta;
+            let cw_per_group = crate::glm::split_coord_weights_per_group(
                 coord_w.view(),
+                g,
             );
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+            Box::new(SparseGroupMcp::with_coord_weights(
+                lam,
+                alpha,
+                gamma,
+                group_w.clone(),
+                cw_per_group,
+            ))
         },
     )
 }

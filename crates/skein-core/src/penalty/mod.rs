@@ -15,6 +15,7 @@ mod group_mcp;
 mod mcp;
 mod scad;
 mod sparse_group_lasso;
+mod sparse_group_mcp;
 
 pub use elastic_net::ElasticNet;
 pub use factories::{
@@ -27,6 +28,7 @@ pub use group_mcp::GroupMcp;
 pub use mcp::Mcp;
 pub use scad::Scad;
 pub use sparse_group_lasso::SparseGroupLasso;
+pub use sparse_group_mcp::SparseGroupMcp;
 
 use crate::groups::Groups;
 use ndarray::{ArrayView1, ArrayViewMut1};
