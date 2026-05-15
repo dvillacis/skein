@@ -78,6 +78,24 @@ def _skipped_if_missing(name: str) -> dict:
     return fix
 
 
+def _skipped_if_missing_optional(name: str) -> dict:
+    """Like ``_skipped_if_missing`` but always skips on missing —
+    *never* fails, even under ``SKEIN_REQUIRE_FIXTURES=1``. Used for
+    fixture tiers that are **not** committed to the repo (M14c.3
+    mid-tier at n=500, p=100 — too large to commit without an
+    artifact-server pipeline; the maintainer regenerates them
+    locally with R when they want to gate scale-dependent
+    regressions, and CI silently skips them otherwise)."""
+    fix = _load_fixture(name)
+    if fix is None:
+        pytest.skip(
+            f"optional fixture {name}.json absent; regenerate locally via "
+            "`Rscript tests/fixtures/generate.R` (mid-tier fixtures are "
+            "not committed to the repo)"
+        )
+    return fix
+
+
 def _assert_path_matches(
     skein_coefs: np.ndarray,
     ref_coefs: np.ndarray,
@@ -346,12 +364,19 @@ def test_glmnet_lasso_cox_matches_skein_mcp_high_gamma():
 # that scales super-linearly) gets caught here when the small tier would
 # miss it.
 #
-# Skipped cleanly when fixtures absent — same `SKEIN_REQUIRE_FIXTURES=1`
-# gate as the small tier.
+# **Unlike the small tier, mid-tier fixtures are not committed to the
+# repo** — each one ≈ 1 MB raw JSON, manageable locally but bloats the
+# git history for a regression gate that only fires on a maintainer's
+# scheduled regen. These tests use `_skipped_if_missing_optional`,
+# which always skips on absent fixtures even under
+# `SKEIN_REQUIRE_FIXTURES=1`. To enable them, run
+# `Rscript tests/fixtures/generate.R` locally with R + glmnet +
+# ncvreg installed; the three `*_mid.json` files will appear and
+# the tests will run.
 
 
 def test_glmnet_lasso_gaussian_mid_matches_skein_mcp_high_gamma():
-    fix = _skipped_if_missing("glmnet_lasso_gaussian_mid")
+    fix = _skipped_if_missing_optional("glmnet_lasso_gaussian_mid")
     model = skein.MCPPathRegressor(
         gamma=1e6,
         lambdas=fix["lambdas"],
@@ -370,7 +395,7 @@ def test_glmnet_lasso_gaussian_mid_matches_skein_mcp_high_gamma():
 
 
 def test_ncvreg_mcp_gaussian_mid_matches_skein():
-    fix = _skipped_if_missing("ncvreg_mcp_gaussian_mid")
+    fix = _skipped_if_missing_optional("ncvreg_mcp_gaussian_mid")
     model = skein.MCPPathRegressor(
         gamma=fix["gamma"],
         lambdas=fix["lambdas"],
@@ -389,7 +414,7 @@ def test_ncvreg_mcp_gaussian_mid_matches_skein():
 
 
 def test_glmnet_lasso_binomial_mid_matches_skein_mcp_high_gamma():
-    fix = _skipped_if_missing("glmnet_lasso_binomial_mid")
+    fix = _skipped_if_missing_optional("glmnet_lasso_binomial_mid")
     model = skein.LogisticMCPPathRegressor(
         gamma=1e6,
         lambdas=fix["lambdas"],
