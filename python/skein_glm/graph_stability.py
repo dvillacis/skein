@@ -358,6 +358,49 @@ class GraphicalStabilitySelection(BaseEstimator):
 
         return self
 
+    def mb_threshold(self, expected_false_positives: float = 1.0) -> float:
+        """Required ``π_thr`` to control ``E[V] ≤ expected_false_positives``.
+
+        Applies the Meinshausen–Bühlmann (2010) closed-form bound to
+        this fitted stability-selection result. Uses ``p · (p − 1)/2``
+        as the family size (number of unique edges) and the average
+        number of selected edges per (λ, bootstrap) cell as
+        ``q_Λ``.
+
+        Returns a stability-probability threshold in ``(0.5, 1]``.
+        If the requested error bound is infeasible at the observed
+        ``q_Λ``, raises :class:`ValueError` with a diagnostic message.
+
+        See :func:`skein_glm.mb_stability_threshold` for the formula
+        and reference.
+        """
+        from skein_glm.graph_inference import mb_stability_threshold
+
+        sel_prob = self.selection_probabilities_
+        p = self.n_features_in_
+        p_total = p * (p - 1) // 2
+        # Average number of edges selected across (λ, [k]) cells.
+        # Each cell is an upper-tri count of edges with prob > 0 — but
+        # since `selection_probabilities_` is *probabilities* (already
+        # averaged across bootstraps), the natural MB `q_Λ` is the sum
+        # of per-edge selection probabilities, averaged across λ (and
+        # populations, for joint).
+        if sel_prob.ndim == 4:
+            # (n_lambdas, K, p, p)
+            iu = np.triu_indices(p, k=1)
+            per_lambda_per_pop = sel_prob[:, :, iu[0], iu[1]].sum(axis=-1)
+            q_lambda = float(per_lambda_per_pop.mean())
+        else:
+            # (n_lambdas, p, p)
+            iu = np.triu_indices(p, k=1)
+            per_lambda = sel_prob[:, iu[0], iu[1]].sum(axis=-1)
+            q_lambda = float(per_lambda.mean())
+        return mb_stability_threshold(
+            p_total=p_total,
+            q_lambda=q_lambda,
+            expected_false_positives=expected_false_positives,
+        )
+
 
 # --- non-parametric bootstrap ----------------------------------------
 
@@ -514,6 +557,41 @@ class GraphicalBootstrap(BaseEstimator):
         self.edge_selection_probabilities_ = sel
 
         return self
+
+    def fdr_threshold(self, fdr: float = 0.1) -> dict:
+        """Benjamini–Hochberg FDR on edges from this bootstrap fit.
+
+        Convenience wrapper around
+        :func:`skein_glm.edge_fdr_threshold`. See that function for
+        the returned dict shape.
+
+        Parameters
+        ----------
+        fdr : float, default 0.1
+            Target false discovery rate in ``(0, 1)``.
+        """
+        from skein_glm.graph_inference import edge_fdr_threshold
+
+        return edge_fdr_threshold(self, fdr=fdr)
+
+    def fwer_threshold(
+        self, fwer: float = 0.05, method: str = "holm"
+    ) -> dict:
+        """Family-wise error control on edges from this bootstrap fit.
+
+        Convenience wrapper around
+        :func:`skein_glm.edge_fwer_threshold`.
+
+        Parameters
+        ----------
+        fwer : float, default 0.05
+            Target family-wise error rate in ``(0, 1)``.
+        method : {"bonferroni", "holm"}, default "holm"
+            Multiple-testing correction method.
+        """
+        from skein_glm.graph_inference import edge_fwer_threshold
+
+        return edge_fwer_threshold(self, fwer=fwer, method=method)  # type: ignore[arg-type]
 
 
 __all__ = ["GraphicalStabilitySelection", "GraphicalBootstrap"]

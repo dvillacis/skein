@@ -199,6 +199,12 @@ from skein_glm.graph_stability import (
     GraphicalBootstrap,
     GraphicalStabilitySelection,
 )
+from skein_glm.graph_inference import (
+    edge_fdr_threshold,
+    edge_fwer_threshold,
+    edge_pvalues,
+    mb_stability_threshold,
+)
 from skein_glm.debiased import (
     DebiasedGLMResult,
     DebiasedLassoRegressor,
@@ -544,6 +550,10 @@ __all__ = [
     "polychoric_correlation",
     "polychoric_covariance_matrix",
     "polyserial_correlation",
+    "edge_fdr_threshold",
+    "edge_fwer_threshold",
+    "edge_pvalues",
+    "mb_stability_threshold",
 ]
 
 __version__ = "0.8.0"
