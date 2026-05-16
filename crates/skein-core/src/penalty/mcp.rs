@@ -48,6 +48,12 @@ impl Penalty for Mcp {
     fn weights(&self) -> ArrayView1<'_, f64> {
         self.weights.view()
     }
+
+    fn min_step_for_unimodal(&self) -> f64 {
+        // MCP prox is unimodal iff step < γ (the firm-threshold formula's
+        // convex regime). Beyond γ the prox is multimodal.
+        self.gamma
+    }
 }
 
 #[cfg(test)]

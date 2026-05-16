@@ -2734,6 +2734,41 @@ fixtures absent.
 R-anchor placeholders for polychoric / Cox debiasing, plus 3
 M14c.3 mid-tier R-regression skips). Sphinx `-W` build green.
 
+#### ✅ M14d — GLM IRLS convergence floor + penalty unimodality trait
+
+`W_FLOOR` (`crates/skein-core/src/numerics.rs:25`) bumped from `1e-6`
+to `1e-4` to match ncvreg's binomial default. Below ~1e-5 the
+prox-Newton outer loop stalls at small λ when training data saturates
+(perfect classification → `p ∈ {0, 1}` → every IRLS weight collapses
+→ surrogate becomes flat → step `1/L_jj` explodes → `outer_converged`
+flips to `False` at the path tail without ever stabilizing the
+active set). The bench cell `logistic_mcp medium-sparse` was previously
+reporting 58 s for a **non-converged** path; with the new floor the
+same problem converges cleanly in ~123 s. No regression in the
+377 cargo lib + 5 integration + 455 pytest suite.
+
+`min_step_for_unimodal()` added to `Penalty` and `GroupPenalty`
+traits as a default-implemented method returning `f64::INFINITY` for
+convex penalties; overridden in `Mcp` / `Scad` / `GroupMcp` /
+`GroupScad` / `SparseGroupMcp` / `SparseGroupScad` to return the
+penalty's prox unimodality threshold (γ for MCP, a−1 for SCAD).
+Currently no in-tree solver consumes this — the M14d investigation
+also evaluated ncvreg-style `convex.min` re-initialization in the
+prox-Newton path solvers and found it strictly worse on the bench
+(re-init from the snapshot loses the warm-start benefit, increasing
+wall-clock without shrinking the active set). The trait method is
+kept as an extension point for downstream solvers that want to
+detect the multimodal regime explicitly.
+
+The deeper GLM + MCP/SCAD active-set bloat vs ncvreg (skein 850 vs
+ncvreg 107 active on `logistic_mcp medium-sparse`) remains open —
+both algorithms are direct CD on the multimodal prox and both
+converge to valid stationary points of the same objective; the gap
+is a different choice of local minimum, not a correctness defect.
+A future investigation should compare the **objective values** at
+each algorithm's converged β to characterize the trade-off
+quantitatively.
+
 ---
 
 ## Differentiators (the elevator pitch)

@@ -185,6 +185,10 @@ impl GroupPenalty for SparseGroupMcp {
     fn weights(&self) -> ArrayView1<'_, f64> {
         self.weights.view()
     }
+
+    fn min_step_for_unimodal(&self) -> f64 {
+        self.gamma
+    }
 }
 
 #[cfg(test)]

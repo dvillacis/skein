@@ -84,6 +84,21 @@ pub trait Penalty: Sync + Send {
     fn has_lasso_form_dual_gap(&self) -> bool {
         false
     }
+
+    /// Smallest prox `step` at which the coordinate-prox map of this
+    /// penalty stops being unimodal. The prox-Newton path solver uses
+    /// this to detect when the IRLS surrogate enters the non-convex
+    /// regime: if `1 / min_j L_jj > min_step_for_unimodal`, the prox
+    /// is multimodal on at least one coordinate and the path solver
+    /// re-initializes β from the last-convex-region snapshot
+    /// (ncvreg's `convex.min` mechanism).
+    ///
+    /// Returns `f64::INFINITY` for convex penalties (lasso, elastic
+    /// net, group lasso, group elastic net) — the prox is unimodal at
+    /// every positive step. Returns `γ` for MCP and `a − 1` for SCAD.
+    fn min_step_for_unimodal(&self) -> f64 {
+        f64::INFINITY
+    }
 }
 
 pub trait GroupPenalty: Sync + Send {
@@ -95,4 +110,11 @@ pub trait GroupPenalty: Sync + Send {
 
     /// Per-group penalty multipliers (length = n_groups).
     fn weights(&self) -> ArrayView1<'_, f64>;
+
+    /// See [`Penalty::min_step_for_unimodal`] — group analogue. Returns
+    /// `f64::INFINITY` for convex group penalties (group lasso, group EN,
+    /// sparse-group lasso) and `γ` / `a − 1` for the MCP / SCAD variants.
+    fn min_step_for_unimodal(&self) -> f64 {
+        f64::INFINITY
+    }
 }

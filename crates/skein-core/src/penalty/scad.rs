@@ -47,6 +47,12 @@ impl Penalty for Scad {
     fn weights(&self) -> ArrayView1<'_, f64> {
         self.weights.view()
     }
+
+    fn min_step_for_unimodal(&self) -> f64 {
+        // SCAD's middle-branch divisor `1 - step/(a-1)` flips sign when
+        // step ≥ a - 1, beyond which the prox is no longer unimodal.
+        self.a - 1.0
+    }
 }
 
 #[cfg(test)]

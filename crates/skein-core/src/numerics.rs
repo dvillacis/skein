@@ -8,7 +8,10 @@
 //!   weight `w_i`. The working response `z_i = η_i + (y_i − μ_i)/w_i`
 //!   (or its Huber / Cox analogue) divides by `w_i`, so an unfloored
 //!   `w_i ↓ 0` would explode `z_i` and destabilize the inner LS solve.
-//!   `glmnet` / `ncvreg` use the same guard.
+//!   `glmnet` / `ncvreg` use the same guard at ~1e-4. Below ~1e-5 the
+//!   prox-Newton outer loop stalls at small λ when training data
+//!   saturates (perfect classification → `p ∈ {0, 1}` → every `w_i`
+//!   collapses), failing to converge inside `max_outer` iterations.
 //!
 //! - [`ETA_CLAMP`] bounds the absolute value of the linear predictor
 //!   `η = Xβ` before exponentiation in canonical-link GLMs (Poisson,
@@ -21,8 +24,10 @@
 //! formulation handles large `|η|`.
 
 /// Lower bound on the IRLS / prox-Newton diagonal weight to keep the
-/// working response finite when the Hessian collapses.
-pub const W_FLOOR: f64 = 1e-6;
+/// working response finite when the Hessian collapses. Set to `1e-4`
+/// to match ncvreg's binomial default and prevent outer prox-Newton
+/// stalls at small λ on saturated logistic/Poisson/Cox surrogates.
+pub const W_FLOOR: f64 = 1e-4;
 
 /// Bound on `|η|` before `exp(η)` to keep the conditional mean / risk
 /// score in a finite range. Applied by [`PoissonLog`](crate::datafit::PoissonLog)
