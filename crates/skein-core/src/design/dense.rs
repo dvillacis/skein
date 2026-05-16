@@ -124,6 +124,15 @@ impl DesignMatrix for DenseMatrix {
         s
     }
 
+    fn weighted_col_sq_norms(&self, w: ArrayView1<f64>) -> Array1<f64> {
+        // (X .² )ᵀ w via BLAS gemv. The element-wise square allocates an
+        // (n × p) buffer (~80 MB on the medium bench, ~10× cheaper to
+        // alloc than the savings from replacing a p-pass manual fold
+        // with one gemv at memory bandwidth).
+        let x_sq = self.x.mapv(|v| v * v);
+        x_sq.t().dot(&w)
+    }
+
     fn col_axpy_weighted(
         &self,
         j: usize,

@@ -340,7 +340,12 @@ pub fn cd_solve_subset_weighted_ls_with_lips(
             }
         }
 
-        let obj = ls.value(r.view()) + penalty.value(beta.view());
+        // `ls.value(r)` for weighted LS is `(1/2n) Σ w_i r_i²`. With
+        // the cached `wr` this collapses to one BLAS ddot — much
+        // faster than the manual fold in `LeastSquares::value`'s
+        // weighted branch.
+        let datafit_obj = 0.5 * wr.view().dot(&r.view()) / n_f;
+        let obj = datafit_obj + penalty.value(beta.view());
         report.iter = it + 1;
         report.final_obj = obj;
         if max_delta < config.tol {

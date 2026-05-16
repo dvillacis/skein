@@ -42,6 +42,7 @@ const PROX_NEWTON_P0: usize = 10;
 /// is plenty even for the densest Poisson cells.
 const KKT_EXPANSION_PASSES: usize = 5;
 
+
 #[derive(Debug, Clone)]
 pub struct ProxNewtonReport {
     pub outer_iters: usize,
@@ -98,18 +99,12 @@ pub fn prox_newton_solve(
             .expect("GlmDatafit surrogates always carry per-sample weights");
         let n_f = design.n_samples() as f64;
 
-        // L_j = (1/n) Σ w_i x_{ij}² is fixed throughout this outer iter
-        // (weights only change when the next prox-Newton step rebuilds
-        // the surrogate). Cache once; the CD inner reads `lips[j]` for
-        // `j ∈ ws` and the KKT verifier reads it for `j ∉ ws`.
-        let lips: Vec<f64> = (0..p)
-            .map(|j| design.col_sq_norm_weighted(j, sw) / n_f)
-            .collect();
+        // Batched BLAS gemv (`X².t().dot(w)`) on dense designs — falls
+        // back to the per-column manual fold for sparse / mmap backends
+        // via the default `DesignMatrix::weighted_col_sq_norms`.
+        let lips_arr = design.weighted_col_sq_norms(sw);
+        let lips: Vec<f64> = lips_arr.iter().map(|&v| v / n_f).collect();
 
-        // Strong-rule WS seeded by `full_grad(r)` — one batched rmatvec
-        // through the design, giving us all `p` gradients at once. The
-        // KKT verifier below reuses the same `full_grad` primitive at
-        // the post-CD residual.
         let r0 = surrogate.init_residual(design, warm.view());
         let grad0 = surrogate.full_grad(design, r0.view());
         let n_support = warm.iter().filter(|&&b| b != 0.0).count();

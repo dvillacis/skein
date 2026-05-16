@@ -96,6 +96,19 @@ pub trait DesignMatrix: Sync + Send {
         s
     }
 
+    /// Batched `weighted_col_sq_norms[j] = Σ w_i X[i, j]²` for every
+    /// feature. The prox-Newton wrapper calls this once per outer iter
+    /// to seed its coord-Lipschitz cache; with p manual per-column
+    /// folds this was a measurable hot spot (~15 ms per outer iter on
+    /// the medium Poisson bench). Override on backends where the
+    /// computation collapses to a single batched matvec — e.g.,
+    /// `DenseMatrix` materialises element-wise `X²` and routes
+    /// `X²ᵀ w` through BLAS gemv.
+    fn weighted_col_sq_norms(&self, w: ArrayView1<f64>) -> Array1<f64> {
+        let p = self.n_features();
+        Array1::from_iter((0..p).map(|j| self.col_sq_norm_weighted(j, w)))
+    }
+
     /// `target += alpha * w * X[:, j]` in place. Used by the prox-Newton
     /// inner CD to maintain `wr = w · r` alongside `r` so coord gradients
     /// can be read as a plain (BLAS) `col_dot(j, wr) / n` instead of the
