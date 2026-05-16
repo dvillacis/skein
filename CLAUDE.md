@@ -24,8 +24,13 @@ cargo test -p skein-core --lib
 cargo test -p skein-core test_name -- --nocapture   # single test
 
 # Full Python package — required after changing any Rust touched by PyO3
-maturin develop --release        # release profile; slow build, fast tests
-maturin develop                  # dev profile; ~10× faster build for iteration
+# Always pass --features=blas-accelerate (macOS) / --features=blas-openblas (Linux)
+# for benchmarking or any wall-clock comparison — without it ndarray's matvec /
+# rmatvec / dot fall back to a naive Rust loop and the prox-Newton GLM hot path
+# is ~3× slower. Shipped wheels enable BLAS in `.github/workflows/wheels.yml`.
+maturin develop --release --features=blas-accelerate   # macOS release build
+maturin develop --release --features=blas-openblas     # Linux release build
+maturin develop                                        # dev profile (no BLAS); ~10× faster build for iteration
 pytest                           # all python tests
 pytest tests/test_smoke.py -k name_substring   # single test
 
@@ -62,9 +67,14 @@ Two coexisting harnesses, plus a Rust microbench tree:
 
   ```bash
   pip install -e '.[bench]'
-  maturin develop --release
+  maturin develop --release --features=blas-accelerate   # or blas-openblas on Linux
   cd benches/v2 && snakemake --profile profiles/m1-headline
   ```
+
+  Committed snapshots assume a BLAS build (matches the shipped wheel
+  configuration). A no-BLAS rebuild of the same cells runs ~3× slower
+  on the Poisson / logistic GLMs — don't refresh snapshots from a
+  default `maturin develop --release` run.
 
   CI smoke (`.github/workflows/bench-smoke.yml`) runs two cells per PR
   to catch pipeline breakage. The full headline matrix is a
@@ -169,7 +179,10 @@ threshold (e.g. `gap < tol²` becoming `1e-24`) makes `solve_path` sweep
 - **BLAS** is feature-gated: `blas-accelerate` (macOS) and
   `blas-openblas` (Linux). `lib.rs` has explicit `use accelerate_src as _;`
   / `use openblas_src as _;` linkage anchors — without them rustc's
-  dead-code prune drops the link line. Don't remove.
+  dead-code prune drops the link line. Don't remove. Always pass the
+  feature flag for release / benchmark builds — the default
+  `maturin develop --release` falls back to ndarray's pure-Rust matvec
+  kernels, which on the Poisson GLM bench cost ~3× wall-clock.
 - **`maturin develop` profile** — release build is slow (LTO + full
   ndarray/pyo3 set). CI uses `MATURIN_PEP517_ARGS="--profile dev"`. Local
   iteration is fine in dev profile; benchmark with release.

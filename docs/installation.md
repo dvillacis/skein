@@ -30,20 +30,24 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 pip install maturin
 git clone https://github.com/dvillacis/skein
 cd skein
-maturin develop --release
+# Pass the BLAS feature flag for your platform — the shipped PyPI
+# wheels are built this way, and skipping it leaves ndarray on a
+# pure-Rust matvec fallback that's ~3× slower on the GLM hot path.
+maturin develop --release --features=blas-accelerate   # macOS
+maturin develop --release --features=blas-openblas     # Linux
 ```
 
 `maturin develop` builds the Rust extension and registers an editable
 install. Subsequent edits to the Rust core require re-running
-`maturin develop --release`; edits to pure-Python code under
-`python/skein_glm/` take effect immediately.
+`maturin develop --release --features=...`; edits to pure-Python code
+under `python/skein_glm/` take effect immediately.
 
 ## Development install
 
 If you want to run the test suite, lint, or build docs locally:
 
 ```bash
-maturin develop --release
+maturin develop --release --features=blas-accelerate   # or blas-openblas on Linux
 pip install -e ".[dev,docs]"
 ```
 

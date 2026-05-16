@@ -4,7 +4,7 @@
 //! validate the trait surface end-to-end. The production solver lives in a
 //! follow-up.
 
-use crate::datafit::Datafit;
+use crate::datafit::{Datafit, LeastSquares};
 use crate::design::DesignMatrix;
 use crate::penalty::Penalty;
 use ndarray::{Array1, Array2};
@@ -180,6 +180,192 @@ pub fn cd_solve_subset(
                     if obj_acc < obj {
                         beta = beta_acc;
                         r = r_acc;
+                        history.clear();
+                        history.push(beta.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    (beta, r, report)
+}
+
+/// Specialised CD inner solve for a weighted [`LeastSquares`] surrogate,
+/// restricted to a working subset of features.
+///
+/// The prox-Newton wrapper calls this for every outer iteration of every
+/// GLM (Poisson, logistic, …); the surrogate has per-sample weights
+/// `w_i = μ_i` that are *constant* for the whole inner call. The generic
+/// `cd_solve_subset` path doesn't know that, so it routes every coord
+/// update through `LeastSquares::coord_grad` (which allocates an n-sized
+/// `w · r` buffer per call) and `LeastSquares::coord_lipschitz` (which
+/// re-scans column `j` per call). This function exploits the constancy:
+///
+/// * Coordinate-Lipschitz constants `L_j = (1/n) Σ w_i x_{ij}²` are
+///   precomputed once via `DesignMatrix::col_sq_norm_weighted` for every
+///   feature in `features` and read from the cache for each update.
+/// * Coordinate gradients `g_j = (1/n) Σ w_i x_{ij} r_i` route through
+///   `DesignMatrix::col_dot_weighted`, a fused weighted dot with no
+///   intermediate allocation.
+///
+/// Returns `(β, r, report)`. Coordinates outside `features` are held at
+/// their values in `beta_init`; their contribution to the residual is
+/// captured because `r` is initialised from the full `β`. The wrapper
+/// uses `r` to KKT-check features outside the working set without
+/// recomputing it from scratch.
+///
+/// Falls back to `cd_solve_subset` when the surrogate has no sample
+/// weights — the unweighted LS path is already at memory bandwidth via
+/// `col_sq_norm`'s lookup cache, and the generic loop is the single
+/// source of truth for that case.
+pub fn cd_solve_subset_weighted_ls(
+    beta_init: Array1<f64>,
+    features: &[usize],
+    design: &dyn DesignMatrix,
+    ls: &LeastSquares,
+    penalty: &dyn Penalty,
+    config: &CdConfig,
+) -> (Array1<f64>, Array1<f64>, CdReport) {
+    let sw = match ls.sample_weights() {
+        Some(w) => w,
+        None => return cd_solve_subset(beta_init, features, design, ls, penalty, config),
+    };
+    let p = design.n_features();
+    let n_f = design.n_samples() as f64;
+    let mut lips = vec![0.0_f64; p];
+    for &j in features {
+        lips[j] = design.col_sq_norm_weighted(j, sw) / n_f;
+    }
+    cd_solve_subset_weighted_ls_with_lips(
+        beta_init, features, design, ls, penalty, config, &lips,
+    )
+}
+
+/// Variant of [`cd_solve_subset_weighted_ls`] that receives a precomputed
+/// Lipschitz cache `lips[j] = (1/n) Σ w_i x_{ij}²`. The prox-Newton
+/// outer loop builds this cache once per outer iter and reuses it for
+/// both the CD inner solve AND the KKT verifier.
+///
+/// Maintains a weighted-residual cache `wr = w · r` alongside `r` so
+/// the coordinate gradient `(1/n) Σ w_i x_{ij} r_i` is computed as a
+/// plain BLAS `col_dot(j, wr)` instead of the manual triple-product
+/// loop in `col_dot_weighted`. The trade-off: every nonzero update
+/// pays one extra weighted axpy (`wr += δ · w · X[:, j]`), but the
+/// gradient queries — one per coord per sweep, the hot path — drop
+/// from a manual loop to a BLAS ddot.
+///
+/// `lips.len()` must equal `p`. The CD loop reads `lips[j]` for `j ∈ features`;
+/// out-of-WS entries are ignored.
+pub fn cd_solve_subset_weighted_ls_with_lips(
+    beta_init: Array1<f64>,
+    features: &[usize],
+    design: &dyn DesignMatrix,
+    ls: &LeastSquares,
+    penalty: &dyn Penalty,
+    config: &CdConfig,
+    lips: &[f64],
+) -> (Array1<f64>, Array1<f64>, CdReport) {
+    let sw = ls
+        .sample_weights()
+        .expect("cd_solve_subset_weighted_ls_with_lips is only valid for weighted-LS surrogates");
+
+    let p = design.n_features();
+    let n = design.n_samples();
+    debug_assert_eq!(beta_init.len(), p, "beta_init length must equal n_features");
+    debug_assert_eq!(lips.len(), p, "lips cache must have length n_features");
+
+    let mut beta = beta_init;
+    let mut r = ls.init_residual(design, beta.view());
+    // wr[i] = w[i] * r[i]. Maintained incrementally with each nonzero
+    // coordinate update; rebuilt from scratch after an Anderson reset.
+    let mut wr = Array1::<f64>::zeros(n);
+    for i in 0..n {
+        wr[i] = sw[i] * r[i];
+    }
+
+    if features.is_empty() {
+        let obj = ls.value(r.view()) + penalty.value(beta.view());
+        return (
+            beta,
+            r,
+            CdReport {
+                iter: 0,
+                converged: true,
+                final_obj: obj,
+            },
+        );
+    }
+
+    let n_f = n as f64;
+    let acceleration = config.acceleration.filter(|&k| k >= 2);
+    let mut history: Vec<Array1<f64>> = Vec::new();
+    if acceleration.is_some() {
+        history.push(beta.clone());
+    }
+
+    let mut report = CdReport {
+        iter: 0,
+        converged: false,
+        final_obj: 0.0,
+    };
+
+    for it in 0..config.max_iter {
+        let mut max_delta = 0.0_f64;
+        for &j in features {
+            let lj = lips[j];
+            if lj == 0.0 {
+                continue;
+            }
+            // BLAS ddot against the cached weighted residual.
+            let grad_j = design.col_dot(j, wr.view()) / n_f;
+            let z = beta[j] - grad_j / lj;
+            let step = 1.0 / lj;
+            let new_bj = penalty.prox_coord(j, z, step);
+            let delta = new_bj - beta[j];
+            if delta != 0.0 {
+                // Update both r and wr so the next coord's gradient
+                // query stays consistent. col_axpy uses BLAS daxpy;
+                // col_axpy_weighted is a manual weighted axpy, paid
+                // only per *nonzero* update — the strong-rule WS
+                // makes that vastly fewer than per-coord gradient
+                // queries.
+                design.col_axpy(j, delta, r.view_mut());
+                design.col_axpy_weighted(j, delta, sw, wr.view_mut());
+                beta[j] = new_bj;
+                let abs_delta = delta.abs();
+                if abs_delta > max_delta {
+                    max_delta = abs_delta;
+                }
+            }
+        }
+
+        let obj = ls.value(r.view()) + penalty.value(beta.view());
+        report.iter = it + 1;
+        report.final_obj = obj;
+        if max_delta < config.tol {
+            report.converged = true;
+            break;
+        }
+
+        if let Some(period) = acceleration {
+            history.push(beta.clone());
+            if history.len() > period + 1 {
+                history.remove(0);
+            }
+            if history.len() == period + 1 {
+                if let Some(beta_acc) = anderson_extrapolate(&history) {
+                    let r_acc = ls.init_residual(design, beta_acc.view());
+                    let obj_acc = ls.value(r_acc.view()) + penalty.value(beta_acc.view());
+                    if obj_acc < obj {
+                        beta = beta_acc;
+                        r = r_acc;
+                        // Rebuild wr from scratch after the Anderson
+                        // jump; incremental maintenance would have
+                        // missed the non-CD coordinate move.
+                        for i in 0..n {
+                            wr[i] = sw[i] * r[i];
+                        }
                         history.clear();
                         history.push(beta.clone());
                     }
@@ -650,5 +836,102 @@ mod tests {
             "expected non-uniform sample weights to change β; max diff = {}",
             max_diff
         );
+    }
+
+    // ---- cd_solve_subset_weighted_ls ----------------------------------
+
+    fn weighted_ls_problem() -> (DenseMatrix, LeastSquares) {
+        // Reproducibly randomised n=80, p=20 weighted-LS problem with
+        // heterogeneous weights spanning four orders of magnitude — the
+        // regime the Poisson surrogate lands in once μ = exp(η) varies
+        // across samples.
+        let n = 80;
+        let p = 20;
+        let mut state: u64 = 0xC0FFEE_C0DE_5678;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            ((state as f64) / (u64::MAX as f64)) * 2.0 - 1.0
+        };
+        let x = Array2::<f64>::from_shape_fn((n, p), |_| next());
+        let y = Array1::<f64>::from_shape_fn(n, |_| next());
+        let w = Array1::<f64>::from_shape_fn(n, |_| {
+            // 1e-2 … 1e2 — same dynamic range as PoissonLog surrogate
+            // weights after a few prox-Newton outer iters.
+            let u = (next() + 1.0) * 0.5;
+            10.0_f64.powf(4.0 * u - 2.0)
+        });
+        let design = DenseMatrix::new(x);
+        let ls = LeastSquares::with_sample_weights(y, w);
+        (design, ls)
+    }
+
+    #[test]
+    fn cd_solve_subset_weighted_ls_full_set_matches_generic_at_tight_tol() {
+        // With `features = (0..p).collect()`, the fast path must match
+        // `cd_solve_warm` on a weighted-LS problem within ULP-level
+        // slack (multiply ordering differs: `w · x · v` vs `(w·v) · x`).
+        let (design, ls) = weighted_ls_problem();
+        let p = design.n_features();
+        let penalty = Mcp::new(0.05, 3.0, p);
+        let cfg = CdConfig {
+            max_iter: 5000,
+            tol: 1e-10,
+            acceleration: Some(5),
+        };
+        let beta_init = Array1::<f64>::zeros(p);
+        let features: Vec<usize> = (0..p).collect();
+
+        let (b_ref, rep_ref) =
+            cd_solve_warm(beta_init.clone(), &design, &ls, &penalty, &cfg);
+        let (b_fast, _r, rep_fast) = cd_solve_subset_weighted_ls(
+            beta_init, &features, &design, &ls, &penalty, &cfg,
+        );
+
+        for j in 0..p {
+            assert_abs_diff_eq!(b_ref[j], b_fast[j], epsilon = 1e-9);
+        }
+        assert_eq!(rep_ref.converged, rep_fast.converged);
+        assert!(
+            (rep_ref.iter as i64 - rep_fast.iter as i64).abs() <= 2,
+            "iteration counts diverged: ref={} fast={}",
+            rep_ref.iter,
+            rep_fast.iter
+        );
+    }
+
+    #[test]
+    fn cd_solve_subset_weighted_ls_falls_back_when_unweighted() {
+        // No sample weights ⇒ delegate to the generic subset path
+        // verbatim (no caching savings to be had — `col_sq_norm` is
+        // already a table lookup for unweighted LS).
+        let x = array![[1.0, 0.5, 0.2], [0.5, 1.0, 0.3], [0.2, 0.8, 1.0]];
+        let y = array![1.0, 0.5, 0.3];
+        let design = DenseMatrix::new(x);
+        let ls = LeastSquares::new(y);
+        let penalty = Mcp::new(0.01, 3.0, 3);
+        let cfg = CdConfig::default();
+        let beta_init = Array1::<f64>::zeros(3);
+        let features: Vec<usize> = (0..3).collect();
+
+        let (b_ref, _, _) = cd_solve_subset(
+            beta_init.clone(),
+            &features,
+            &design,
+            &ls,
+            &penalty,
+            &cfg,
+        );
+        let (b_fast, _, _) = cd_solve_subset_weighted_ls(
+            beta_init, &features, &design, &ls, &penalty, &cfg,
+        );
+        for j in 0..3 {
+            assert_eq!(
+                b_ref[j], b_fast[j],
+                "unweighted fallback must be bit-identical at j={}",
+                j
+            );
+        }
     }
 }

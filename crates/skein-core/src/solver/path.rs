@@ -675,7 +675,7 @@ fn report_phase_log(log: &[PhaseTimings]) {
 
 /// One BLAS gemv to compute the gradient; one O(p) scan to rank.
 /// Argpartition (`select_nth_unstable_by`) avoids a full sort.
-fn priority_rule_screen(
+pub(crate) fn priority_rule_screen(
     design: &dyn DesignMatrix,
     datafit: &dyn Datafit,
     residual: ArrayView1<'_, f64>,
@@ -704,7 +704,7 @@ fn priority_rule_screen(
 /// the previous λ — the warm-start residual at λ_{k+1} is the
 /// post-CD residual at λ_k, so the same matvec result is valid.
 /// (M13.2 cache; saves ~10% wall on medium Lasso.)
-fn priority_rule_screen_with_grad(
+pub(crate) fn priority_rule_screen_with_grad(
     grad: ArrayView1<'_, f64>,
     weights: ArrayView1<'_, f64>,
     beta: ArrayView1<'_, f64>,

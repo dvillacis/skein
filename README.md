@@ -196,8 +196,13 @@ overview.
 # Rust core only (fast iteration on algorithms)
 cargo test -p skein-core --lib
 
-# Full Python package (requires maturin in your env)
-maturin develop --release
+# Full Python package (requires maturin in your env). Always pass the
+# BLAS feature flag — without it ndarray's matvec / rmatvec / dot fall
+# back to a naive Rust loop and the GLM hot path is ~3× slower. The
+# shipped PyPI wheels are built this way; building from source without
+# the flag will not match published benchmark numbers.
+maturin develop --release --features=blas-accelerate   # macOS
+maturin develop --release --features=blas-openblas     # Linux
 pytest
 ```
 

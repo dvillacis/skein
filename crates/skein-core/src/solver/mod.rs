@@ -21,7 +21,8 @@ pub use block_cd::{block_cd_solve, block_cd_solve_subset, block_cd_solve_subset_
 pub use block_path::{block_lambda_max, solve_block_path, BlockPathConfig, BlockPathReport};
 pub use block_path_lla::{solve_block_path_lla, BlockPathLLAReport};
 pub use cd::{
-    cd_solve, cd_solve_subset, cd_solve_warm, cd_solve_warm_with_residual, CdConfig, CdReport,
+    cd_solve, cd_solve_subset, cd_solve_subset_weighted_ls, cd_solve_subset_weighted_ls_with_lips,
+    cd_solve_warm, cd_solve_warm_with_residual, CdConfig, CdReport,
 };
 pub use glasso::{glasso_solve, GlassoConfig, GlassoReport};
 pub use glasso_admm::{joint_glasso_solve, JointGlassoConfig, JointGlassoReport};

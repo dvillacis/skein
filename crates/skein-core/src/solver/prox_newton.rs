@@ -11,15 +11,36 @@
 //! exposes `surrogate_at(β)` returning a weighted-LS [`LeastSquares`]
 //! that the M1 inner solver consumes.
 //!
-//! Inner solve uses `cd_solve_warm` (no per-outer-iter screening yet);
-//! adding screening in the prox-Newton inner is M3.x.
+//! Inner solve routes through `cd_solve_subset_weighted_ls` — the
+//! surrogate is always a weighted [`crate::datafit::LeastSquares`], so we
+//! pay the per-feature Lipschitz scan and the weighted-residual dot
+//! product once per outer iter instead of once per coordinate update.
+//!
+//! Each outer iteration also restricts CD to a strong-rule-seeded working
+//! set and protects it with a KKT verifier (same idiom as `solve_path`'s
+//! outer KKT loop): features whose prox-gradient distance against the
+//! current surrogate exceeds `tol` get added back. The KKT pass is one
+//! `full_grad` matvec per outer iter, paid for many times over once the
+//! sparse-regime active set is ~50× smaller than `p`.
 
-use crate::datafit::GlmDatafit;
+use crate::datafit::{Datafit, GlmDatafit};
 use crate::design::DesignMatrix;
 use crate::penalty::Penalty;
-use crate::solver::cd::{cd_solve_warm, CdConfig};
-use crate::solver::path::{lambda_grid, lambda_max};
+use crate::solver::cd::{cd_solve_subset_weighted_ls_with_lips, CdConfig};
+use crate::solver::path::{lambda_grid, lambda_max, priority_rule_screen_with_grad};
 use ndarray::{Array1, Array2};
+
+/// Minimum working-set size when the strong rule has nothing to lean on
+/// (cold start with β = 0 at λ_max). Same role as `PathConfig::p0`; the
+/// strong rule already grows the WS as the support fills in, so this is
+/// just a floor for the initial pass.
+const PROX_NEWTON_P0: usize = 10;
+
+/// Cap on KKT-expansion passes per outer prox-Newton iteration. Each
+/// pass adds at least one violator; the unbounded worst case is `p`,
+/// so the cap bounds the per-outer-iter cost. In practice 1–3 passes
+/// is plenty even for the densest Poisson cells.
+const KKT_EXPANSION_PASSES: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct ProxNewtonReport {
@@ -65,13 +86,97 @@ pub fn prox_newton_solve(
     let mut outer_converged = false;
     let mut outer_iters = 0usize;
 
+    let weights: Array1<f64> = penalty.weights().to_owned();
+
     for outer in 0..max_outer {
         outer_iters = outer + 1;
         let surrogate = glm.surrogate_at(design, warm.view());
+
         let beta_old = warm.clone();
-        let (new_beta, inner_report) = cd_solve_warm(warm, design, &surrogate, penalty, cd_config);
-        warm = new_beta;
-        inner_iters.push(inner_report.iter);
+        let sw = surrogate
+            .sample_weights()
+            .expect("GlmDatafit surrogates always carry per-sample weights");
+        let n_f = design.n_samples() as f64;
+
+        // L_j = (1/n) Σ w_i x_{ij}² is fixed throughout this outer iter
+        // (weights only change when the next prox-Newton step rebuilds
+        // the surrogate). Cache once; the CD inner reads `lips[j]` for
+        // `j ∈ ws` and the KKT verifier reads it for `j ∉ ws`.
+        let lips: Vec<f64> = (0..p)
+            .map(|j| design.col_sq_norm_weighted(j, sw) / n_f)
+            .collect();
+
+        // Strong-rule WS seeded by `full_grad(r)` — one batched rmatvec
+        // through the design, giving us all `p` gradients at once. The
+        // KKT verifier below reuses the same `full_grad` primitive at
+        // the post-CD residual.
+        let r0 = surrogate.init_residual(design, warm.view());
+        let grad0 = surrogate.full_grad(design, r0.view());
+        let n_support = warm.iter().filter(|&&b| b != 0.0).count();
+        let ws_size = (n_support * 2).max(PROX_NEWTON_P0).min(p);
+        let mut ws = priority_rule_screen_with_grad(
+            grad0.view(),
+            weights.view(),
+            warm.view(),
+            ws_size,
+        );
+
+        let mut inner_iter_total = 0usize;
+        let mut expansion_pass = 0usize;
+
+        // KKT-protected WS loop. CD restricted to `ws` → KKT verify on
+        // the full feature set using one `full_grad` rmatvec and the
+        // cached Lj. Violators (if any) expand the WS; cap and fall
+        // back to the full set so a pathological surrogate can't blow
+        // the outer-iter budget.
+        loop {
+            let (b_new, r_new, rep) = cd_solve_subset_weighted_ls_with_lips(
+                warm,
+                &ws,
+                design,
+                &surrogate,
+                penalty,
+                cd_config,
+                &lips,
+            );
+            warm = b_new;
+            inner_iter_total = inner_iter_total.saturating_add(rep.iter);
+
+            let grad = surrogate.full_grad(design, r_new.view());
+            let violators = find_kkt_violators_batched(
+                penalty,
+                warm.view(),
+                grad.view(),
+                &lips,
+                &ws,
+                cd_config.tol,
+            );
+            if violators.is_empty() {
+                break;
+            }
+            expansion_pass += 1;
+            if expansion_pass >= KKT_EXPANSION_PASSES {
+                ws = (0..p).collect();
+                let (b_new, _r_new, rep) = cd_solve_subset_weighted_ls_with_lips(
+                    warm,
+                    &ws,
+                    design,
+                    &surrogate,
+                    penalty,
+                    cd_config,
+                    &lips,
+                );
+                warm = b_new;
+                inner_iter_total = inner_iter_total.saturating_add(rep.iter);
+                break;
+            }
+            ws.extend(violators);
+            ws.sort_unstable();
+            ws.dedup();
+        }
+
+        inner_iters.push(inner_iter_total);
+        let _ = expansion_pass; // currently observed via tests only
 
         let max_change = (0..p)
             .map(|j| (warm[j] - beta_old[j]).abs())
@@ -92,6 +197,51 @@ pub fn prox_newton_solve(
             final_loss,
         },
     )
+}
+
+/// KKT violators using batched-gradient input.
+///
+/// `grad` is the full-feature gradient (one rmatvec, computed once per
+/// outer-iter KKT pass) and `lips` is the precomputed coord-Lipschitz
+/// cache. For each feature `j ∉ ws`, applies a prox-gradient step at
+/// `(β_j, grad_j)` and reports `j` if the result would move `β_j` by
+/// more than `tol`. Penalty-agnostic: uses the same `prox_coord` the
+/// inner CD calls, so the boundary is consistent.
+///
+/// Per-feature cost is O(1) — no column reads in the verifier loop.
+/// That makes the verifier ~1000× cheaper than the per-feature
+/// `col_dot_weighted` variant it replaced.
+fn find_kkt_violators_batched(
+    penalty: &dyn Penalty,
+    beta: ndarray::ArrayView1<'_, f64>,
+    grad: ndarray::ArrayView1<'_, f64>,
+    lips: &[f64],
+    ws: &[usize],
+    tol: f64,
+) -> Vec<usize> {
+    let p = grad.len();
+    debug_assert_eq!(lips.len(), p);
+    debug_assert_eq!(beta.len(), p);
+
+    let mut violators = Vec::new();
+    let mut ws_idx = 0usize;
+    for j in 0..p {
+        if ws_idx < ws.len() && ws[ws_idx] == j {
+            ws_idx += 1;
+            continue;
+        }
+        let lj = lips[j];
+        if lj == 0.0 {
+            continue;
+        }
+        let step = 1.0 / lj;
+        let z = beta[j] - grad[j] * step;
+        let prox_bj = penalty.prox_coord(j, z, step);
+        if (prox_bj - beta[j]).abs() > tol {
+            violators.push(j);
+        }
+    }
+    violators
 }
 
 /// λ-path prox-Newton solve. Each row of the returned matrix is the β at

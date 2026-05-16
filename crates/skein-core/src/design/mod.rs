@@ -62,4 +62,62 @@ pub trait DesignMatrix: Sync + Send {
         let col = self.columns(&[j]);
         r.scaled_add(alpha, &col.column(0));
     }
+
+    /// `Σ w_i X[i, j] v_i`. Generalises `col_dot` (w = 1) and shows up in
+    /// the weighted-LS inner CD that every GLM's prox-Newton wrapper runs:
+    /// `coord_grad_j = col_dot_weighted(j, sample_weights, residual) / n`.
+    ///
+    /// The default impl materialises `w · v` and routes through
+    /// `col_dot`, which is correct but allocates an n-sized buffer per
+    /// call. Backends with cheap column access should override with a
+    /// single fused loop — the prox-Newton inner hits this for every
+    /// coordinate update of every CD sweep.
+    fn col_dot_weighted(&self, j: usize, w: ArrayView1<f64>, v: ArrayView1<f64>) -> f64 {
+        let weighted: Array1<f64> = (0..w.len()).map(|i| w[i] * v[i]).collect();
+        self.col_dot(j, weighted.view())
+    }
+
+    /// `Σ w_i X[i, j]²`. The weighted analogue of `col_sq_norm`; the
+    /// prox-Newton wrapper precomputes this for every feature once per
+    /// inner CD call to skip the per-coord Lipschitz scan that
+    /// `LeastSquares::coord_lipschitz` would otherwise repeat for every
+    /// coordinate update.
+    ///
+    /// Default impl copies the column via `columns(&[j])` and folds it
+    /// in place; backends with O(1) column access should override.
+    fn col_sq_norm_weighted(&self, j: usize, w: ArrayView1<f64>) -> f64 {
+        let col = self.columns(&[j]);
+        let n = self.n_samples();
+        let mut s = 0.0_f64;
+        for i in 0..n {
+            let v = col[[i, 0]];
+            s += w[i] * v * v;
+        }
+        s
+    }
+
+    /// `target += alpha * w * X[:, j]` in place. Used by the prox-Newton
+    /// inner CD to maintain `wr = w · r` alongside `r` so coord gradients
+    /// can be read as a plain (BLAS) `col_dot(j, wr) / n` instead of the
+    /// manual weighted triple-product `col_dot_weighted` per coordinate.
+    ///
+    /// Default impl materialises `α · w · X[:, j]` and delegates the axpy
+    /// to `col_axpy` — correct but allocates an n-sized buffer per call.
+    /// Backends with cheap column access should override.
+    fn col_axpy_weighted(
+        &self,
+        j: usize,
+        alpha: f64,
+        w: ArrayView1<f64>,
+        target: ArrayViewMut1<f64>,
+    ) {
+        let col = self.columns(&[j]);
+        let n = self.n_samples();
+        let mut scaled = Array1::<f64>::zeros(n);
+        for i in 0..n {
+            scaled[i] = alpha * w[i] * col[[i, 0]];
+        }
+        let mut t = target;
+        t += &scaled;
+    }
 }
