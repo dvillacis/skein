@@ -113,8 +113,11 @@ underneath any GLM × group penalty. The headlines:
    `prox_newton_block_solve_path` via the generalised
    `block_gap_safe_screen`. Wall-clock on bench v2 `logistic_lasso`
    (host `3c43bb844695`): **8.2× small-sparse, 3.1× small-deep,
-   7.2× medium-sparse**. The unweighted-LS path is unchanged
-   (`max(w) → 1.0` collapses to the original FGS 2015 formula).
+   7.2× medium-sparse, 2.2× medium-deep** (the last with 95 %
+   saturation, where the win comes from Anderson dual extrapolation
+   + adaptive inner tol rather than from screening itself). The
+   unweighted-LS path is unchanged (`max(w) → 1.0` collapses to
+   the original FGS 2015 formula).
 5. **Native sparse-group MCP for logistic / Poisson / Cox** (M14c.2)
    — sibling of M13.4c for the sparse-group penalty. New Rust
    `SparseGroupMcp` penalty implements the Breheny & Huang (2015)

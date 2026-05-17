@@ -48,11 +48,12 @@ What shipped:
 
 Wall-clock on bench v2 `logistic_lasso` (host `3c43bb844695`):
 
-| cell | before | after | speedup |
-|---|---:|---:|---:|
-| small-sparse | 0.44 s | 0.05 s | **8.2×** |
-| small-deep | 8.02 s | 2.62 s | **3.1×** |
-| medium-sparse | 27.58 s | 3.82 s | **7.2×** |
+| cell | active set | before | after | speedup |
+|---|---:|---:|---:|---:|
+| small-sparse | 62/200 | 0.44 s | 0.05 s | **8.2×** |
+| small-deep | 191/200 | 8.02 s | 2.62 s | **3.1×** |
+| medium-sparse | 61/1000 | 27.58 s | 3.82 s | **7.2×** |
+| medium-deep | 947/1000 | 219.59 s | 101.63 s | **2.2×** |
 
 `poisson_lasso medium-sparse` is roughly neutral (5.48 s → 6.24 s);
 Poisson's `max(μ) > 1` makes screening necessarily looser than logistic.

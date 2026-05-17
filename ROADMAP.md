@@ -2534,16 +2534,19 @@ v2 logistic_lasso medium-deep cell was 219.6 s vs glmnet 7.9 s
 **Wall-clock on bench v2 logistic_lasso (host `3c43bb844695`, seed 0,
 five timed trials):**
 
-| cell | before | after | speedup |
-|---|---:|---:|---:|
-| `logistic_lasso small-sparse` | 0.44 s | 0.05 s | **8.2×** |
-| `logistic_lasso small-deep` | 8.02 s | 2.62 s | **3.1×** |
-| `logistic_lasso medium-sparse` | 27.58 s | 3.82 s | **7.2×** |
-| `poisson_lasso medium-sparse` | 5.48 s | 6.24 s | 0.88× (noise; max(μ) > 1 makes Poisson screening necessarily looser) |
+| cell | active set | before | after | speedup |
+|---|---:|---:|---:|---:|
+| `logistic_lasso small-sparse` | 62/200 | 0.44 s | 0.05 s | **8.2×** |
+| `logistic_lasso small-deep` | 191/200 | 8.02 s | 2.62 s | **3.1×** |
+| `logistic_lasso medium-sparse` | 61/1000 | 27.58 s | 3.82 s | **7.2×** |
+| `logistic_lasso medium-deep` | 947/1000 | 219.59 s | 101.63 s | **2.2×** |
+| `poisson_lasso medium-sparse` | 46/1000 | 5.48 s | 6.24 s | 0.88× (noise; max(μ) > 1 makes Poisson screening necessarily looser) |
 
 Wins are largest on sparse regimes where the active set is ~5 % of
-features and screening can prune the rest. Saturated regimes hit the
-M13.1 bypass and run the legacy path.
+features and screening can prune the rest. Even at heavy saturation
+(`medium-deep`, 95 % active) the adaptive inner-tol + Anderson dual
+extrapolation deliver a 2.2× win; the M13.1-style bypass keeps the
+overhead bounded when screening itself can't fire.
 
 **Verified gates:** `solve_path_screening_on_matches_screening_off_within_tol`
 (the CLAUDE.md tight-tol pre-flight) passes; cargo test suite at 397

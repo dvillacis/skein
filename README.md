@@ -42,7 +42,7 @@ for the full plan and the open M14b software-paper milestone.
   weighted-LS surrogate** (M13.8: gap-safe sphere + Anderson dual
   extrapolation + adaptive `0.3 × prev_outer_pgd` inner tol +
   weighted strong-convexity correction `r²=2·gap·max(w)/n` —
-  **3–8× wall-clock on `logistic_lasso` v2 cells**); group
+  **2.2–8.2× wall-clock on `logistic_lasso` v2 cells**); group
   block-CD with native non-convex prox for group MCP (M13.4b for
   LS, M13.4c for logistic / Poisson / Cox) and an LLA outer loop
   for the remaining sparse-group MCP / SCAD families (M13.4 Phase
