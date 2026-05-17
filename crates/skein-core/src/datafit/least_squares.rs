@@ -120,13 +120,28 @@ impl Datafit for LeastSquares {
         grad: ArrayView1<'_, f64>,
         scale: f64,
     ) -> Option<f64> {
-        // Sample-weighted LS would need the formula adjusted for the
-        // diagonal weight; skip until that's worked out.
-        if self.sample_weights.is_some() {
-            return None;
-        }
+        // Same formula for unweighted and weighted LS — only `r_sq` (the
+        // residual energy term) picks up the diagonal weight. Derivation:
+        // for `f(z) = (1/2n) zᵀ W z` the Fenchel conjugate is
+        // `f*(θ) = (n/2) Σ θᵢ²/wᵢ` (W = diag(w), wᵢ > 0). The natural
+        // dual point is `θ_naive = −(1/n) W r`, at which `f*(θ_naive) =
+        // (1/2n) Σ wᵢ rᵢ²` and the rest collapses after eliminating `y`
+        // via `Xβ = r + y` exactly as in the unweighted case. So the
+        // closed form is the unweighted formula with `‖r‖²` replaced by
+        // `Σ wᵢ rᵢ²`. The supplied `grad` must be the matching weighted
+        // gradient (`(1/n) Σ wᵢ xᵢⱼ rᵢ`) — `full_grad` already returns
+        // that.
         let n = design.n_samples() as f64;
-        let r_sq: f64 = residual.dot(&residual);
+        let r_sq: f64 = match &self.sample_weights {
+            None => residual.dot(&residual),
+            Some(w) => {
+                let mut s = 0.0_f64;
+                for i in 0..residual.len() {
+                    s += w[i] * residual[i] * residual[i];
+                }
+                s
+            }
+        };
         let beta_dot_grad: f64 = beta.dot(&grad);
         Some((r_sq / n) * scale * (1.0 - 0.5 * scale) - scale * beta_dot_grad)
     }
@@ -272,23 +287,6 @@ mod tests {
     }
 
     #[test]
-    fn lasso_dual_obj_returns_none_when_sample_weights_set() {
-        // Documented carve-out — formula not yet adjusted for diagonal
-        // weight. Lock the contract so the path solver continues to fall
-        // back to prox-grad stationarity for weighted LS.
-        let design = small_design();
-        let y = array![0.0_f64, 0.0, 0.0];
-        let w = array![1.0_f64, 1.0, 1.0];
-        let df = LeastSquares::with_sample_weights(y, w);
-        let beta = array![0.0_f64, 0.0];
-        let r = array![0.0_f64, 0.0, 0.0];
-        let g = array![0.0_f64, 0.0];
-        assert!(df
-            .lasso_dual_obj(&design, beta.view(), r.view(), g.view(), 1.0)
-            .is_none());
-    }
-
-    #[test]
     fn lasso_dual_obj_unweighted_matches_closed_form() {
         let design = small_design();
         let y = array![0.5_f64, -1.0, 2.0];
@@ -305,6 +303,62 @@ mod tests {
             .lasso_dual_obj(&design, beta.view(), r.view(), g.view(), scale)
             .expect("unweighted LS must return a closed-form dual");
         assert_abs_diff_eq!(actual, expected, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn lasso_dual_obj_weighted_matches_closed_form() {
+        // Derivation: D(θ_scaled) = (Σwᵢrᵢ²/n)·scale·(1−scale/2) − scale·βᵀg,
+        // with `grad` = (1/n) Σ wᵢ xᵢⱼ rᵢ (which is what `full_grad`
+        // returns under `with_sample_weights`).
+        let design = small_design();
+        let y = array![0.5_f64, -1.0, 2.0];
+        let w = array![1.5_f64, 0.5, 1.0];
+        let df = LeastSquares::with_sample_weights(y, w.clone());
+        let beta = array![0.3_f64, -0.2];
+        let r = df.init_residual(&design, beta.view());
+        let g = df.full_grad(&design, r.view());
+        let scale = 0.7;
+        let n = design.n_samples() as f64;
+        let wr_sq: f64 = (0..r.len()).map(|i| w[i] * r[i] * r[i]).sum();
+        let bg = beta.dot(&g);
+        let expected = (wr_sq / n) * scale * (1.0 - 0.5 * scale) - scale * bg;
+        let actual = df
+            .lasso_dual_obj(&design, beta.view(), r.view(), g.view(), scale)
+            .expect("weighted LS must return a closed-form dual");
+        assert_abs_diff_eq!(actual, expected, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn lasso_dual_obj_weighted_gap_nonnegative_at_lambda_max() {
+        // Pin the dual ≤ primal contract: at β = 0 (so r = −y) and
+        // λ = max_j |grad_j|/w_j, the gap should be ≥ 0 and small (it
+        // collapses to exactly the L1 envelope's slack — but for weighted
+        // LS we don't have a closed-form gap = 0, so just assert
+        // non-negativity, which is the dual-feasibility contract).
+        let design = small_design();
+        let y = array![1.0_f64, -2.0, 0.5];
+        let w = array![2.0_f64, 1.0, 0.5];
+        let df = LeastSquares::with_sample_weights(y, w.clone());
+        let beta = array![0.0_f64, 0.0];
+        let r = df.init_residual(&design, beta.view());
+        let g = df.full_grad(&design, r.view());
+        let lam = g.iter().fold(0.0_f64, |a, &v| a.max(v.abs()));
+        let lambda_bound = g.iter().fold(0.0_f64, |a, &v| a.max(v.abs()));
+        let scale = if lambda_bound > lam {
+            lam / lambda_bound
+        } else {
+            1.0
+        };
+        let dual = df
+            .lasso_dual_obj(&design, beta.view(), r.view(), g.view(), scale)
+            .expect("weighted LS must return a closed-form dual");
+        let primal = df.value(r.view()); // R(0) = 0
+        assert!(
+            primal - dual >= -1e-12,
+            "gap must be non-negative (primal={} dual={})",
+            primal,
+            dual
+        );
     }
 
     #[test]

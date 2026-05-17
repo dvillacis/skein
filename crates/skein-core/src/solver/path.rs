@@ -836,24 +836,24 @@ fn gap_safe_screen(
 /// One BLAS gemv (`full_grad`) plus `p` per-coord prox calls and a
 /// few O(p) reductions for the gap. Asymptotically the same cost as
 /// the gradient-only KKT verifier the path solver started with.
-struct OuterState {
-    violators: Vec<usize>,
-    max_pgd: f64,
-    gap: Option<f64>,
+pub(crate) struct OuterState {
+    pub(crate) violators: Vec<usize>,
+    pub(crate) max_pgd: f64,
+    pub(crate) gap: Option<f64>,
     #[allow(dead_code)] // surfaced for callers that want the dual-feasibility ratio
-    lambda_bound: f64,
+    pub(crate) lambda_bound: f64,
     /// Indices of features that are provably zero at the optimum
     /// (`β*_j = 0`) by the gap-safe sphere theorem (Fercoq–Gramfort–
     /// Salmon 2015). Empty when the gap isn't available — sphere
     /// screening only applies on penalties whose lasso-form dual is
     /// tight at the optimum.
-    safely_inactive: Vec<usize>,
+    pub(crate) safely_inactive: Vec<usize>,
     /// Full gradient `X^T r / n` computed during the KKT verifier scan.
     /// Surfaced so the path solver can reuse it as the warm-start
     /// gradient for the next λ's `priority_rule_screen` (M13.2 cache —
     /// the warm-start residual at λ_{k+1} is the post-CD residual at
     /// λ_k, so the gradient on that residual is identical).
-    grad: Array1<f64>,
+    pub(crate) grad: Array1<f64>,
 }
 
 // Path-solver inner helper; eleven args read as a single pass-through of
@@ -861,8 +861,15 @@ struct OuterState {
 // extrapolation, the running best-dual accumulator). Wrapping them in a
 // struct just for clippy's threshold isn't worth the indirection at the
 // only call site.
+//
+// `pub(crate)` so the prox-Newton outer loop (`solver::prox_newton`) can
+// drive the same gap-safe screening + Anderson extrapolation logic on the
+// weighted-LS surrogate it solves per outer iter. Same contract: returns
+// `safely_inactive` features that are provably zero at the surrogate's
+// optimum, plus a duality gap that's used both for early termination and
+// for sizing the safe-sphere radius.
 #[allow(clippy::too_many_arguments)]
-fn compute_outer_state(
+pub(crate) fn compute_outer_state(
     design: &dyn DesignMatrix,
     datafit: &dyn Datafit,
     penalty: &dyn Penalty,
@@ -1001,18 +1008,39 @@ fn compute_outer_state(
     };
 
     // Gap-safe sphere screening (Fercoq–Gramfort–Salmon 2015).
-    // The optimal dual θ* lies within radius `r_safe = √(2·gap/n)` of
-    // the current θ in `ℓ_2`. Cauchy–Schwarz gives
-    //   |X_jᵀ θ*| ≤ |X_jᵀ θ| + r_safe · ‖X_j‖_2.
-    // If that upper bound is `< λ · w_j`, KKT slackness forces
-    // `β*_j = 0` — the feature is provably zero at the optimum and can
-    // be removed from the working set forever (for this λ). On the
-    // sparse-regime lasso bench this pulls features out of the WS as
-    // the gap shrinks, which is celer's main lever in that regime.
+    // The optimal dual θ* lies within radius `r_safe` of the current θ
+    // in `ℓ_2`, where `r_safe² = 2·gap / σ` and `σ` is the strong-
+    // convexity constant of the dual obj (−f*) as a function of θ.
+    //
+    // - Unweighted LS:   σ = n              ⇒ r_safe² = 2·gap/n
+    // - Weighted LS:     σ = n / max_i wᵢ   ⇒ r_safe² = 2·gap · max(w) / n
+    //
+    // The weighted formula matters for the GLM surrogate path: logistic
+    // has max(w) ≤ 0.25 (so the unweighted formula over-estimates the
+    // radius, leaving perf on the table), and Poisson has max(w) = max(μ)
+    // which can exceed 1 (so the unweighted formula UNDER-estimates,
+    // producing unsafe screening that the KKT verifier has to re-add as
+    // violators — extra outer passes, observed as a slowdown on the
+    // medium-sparse Poisson cell). `sample_weights()` returning `None`
+    // collapses `max_w` to 1 and the formula matches the original FGS
+    // 2015 unweighted result.
     let n_f = design.n_samples() as f64;
+    let max_w = match datafit.sample_weights() {
+        // The strong-convexity constant of the dual is `σ = n/max(w)`,
+        // derived directly from `f*(θ) = (n/2) Σ θᵢ²/wᵢ`. For logistic
+        // (max(w) ≤ 0.25) this produces a tighter safe radius than the
+        // unweighted formula — more features screened, faster. For
+        // Poisson where max(μ) can exceed 1 it produces a looser radius
+        // — fewer features screened — but soundness is preserved
+        // (without this correction the KKT verifier would re-add the
+        // wrongly-screened features, adding outer passes that cost more
+        // than the lost screening gains).
+        Some(w) => w.iter().fold(0.0_f64, |a, &v| a.max(v)),
+        None => 1.0,
+    };
     let safely_inactive: Vec<usize> = match gap {
         Some(g) if g > 0.0 && lambda > 0.0 => {
-            let r_safe = (2.0 * g / n_f).sqrt();
+            let r_safe = (2.0 * g * max_w / n_f).sqrt();
             (0..p)
                 .filter(|&j| {
                     let w = weights[j];
@@ -1064,7 +1092,7 @@ fn compute_outer_state(
 /// Both sequences must be the same length and have ≥ 3 entries.
 /// Returns `None` if the normal equations are numerically singular
 /// (degenerate input — typical when the trajectory has stalled).
-fn anderson_extrapolate_pair(
+pub(crate) fn anderson_extrapolate_pair(
     seq_a: &[Array1<f64>],
     seq_b: &[Array1<f64>],
 ) -> Option<(Array1<f64>, Array1<f64>)> {

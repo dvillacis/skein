@@ -148,6 +148,12 @@ impl GlmDatafit for Huber {
     fn loss(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> f64 {
         Huber::loss(self, design, beta)
     }
+
+    // Intentionally inherit the `None` defaults for `glm_per_sample_loss_grad`
+    // and `glm_dual_obj`. Huber's conjugate is closed-form (the standard
+    // "soft-thresholding-style" dual), but porting it is a separate
+    // workstream — lower priority than logistic/Poisson where the
+    // perf gap to celer is largest.
 }
 
 #[cfg(test)]

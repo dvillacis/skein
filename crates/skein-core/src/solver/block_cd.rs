@@ -503,8 +503,7 @@ pub(crate) fn block_gap_safe_screen(
         1.0
     };
 
-    // Primal: (1/2n)‖r‖² + λ Σ w_g ‖β_g‖₂.
-    let r_sq: f64 = residual.iter().map(|x| x * x).sum();
+    // Primal: datafit.value(r) (handles weighted vs unweighted) + λ Σ w_g ‖β_g‖₂.
     let mut pen_value = 0.0_f64;
     for gi in 0..n_groups {
         let w = weights[gi].max(0.0);
@@ -515,14 +514,41 @@ pub(crate) fn block_gap_safe_screen(
         let norm: f64 = cols.iter().map(|&j| beta[j] * beta[j]).sum::<f64>().sqrt();
         pen_value += w * norm;
     }
-    let primal_obj = r_sq / (2.0 * n) + lambda * pen_value;
+    let primal_obj = datafit.value(residual) + lambda * pen_value;
 
-    // Dual obj derived from y = Xβ − r so we don't need direct access to y.
-    let beta_dot_g: f64 = (0..design.n_features()).map(|j| beta[j] * g_full[j]).sum();
-    let dual_obj = r_sq / n * scale * (1.0 - scale / 2.0) - beta_dot_g * scale;
-
-    let gap = (primal_obj - dual_obj).max(0.0);
-    let safe_r = (2.0 * gap / n).sqrt();
+    // Dual obj via the trait method: returns the closed-form
+    // `D(scale·θ_naive)` for whichever LS variant the datafit is
+    // (unweighted ‖r‖² or weighted Σwᵢrᵢ² — Phase 1 weighted-LS dual
+    // unlock). Returns `None` for datafits without a closed-form lasso
+    // dual; in that case we fall back to "no screening" (empty WS
+    // expansion is still safe — the caller's KKT verifier catches
+    // anything missed). For the GLM surrogate path the surrogate is a
+    // weighted-LS so `Some(_)` always.
+    let dual_obj_opt = datafit.lasso_dual_obj(design, beta, residual, g_full.view(), scale);
+    // Weighted-LS strong-convexity correction to the safe sphere radius:
+    // σ_dual = n / max(w), so r_safe² = 2·gap·max(w)/n. Matches the
+    // scalar `compute_outer_state` in `solver::path` — see the long
+    // comment there for the derivation and the Poisson-vs-logistic
+    // trade-off.
+    let max_w = match datafit.sample_weights() {
+        Some(w) => w.iter().fold(0.0_f64, |a, &v| a.max(v)),
+        None => 1.0,
+    };
+    let safe_r = match dual_obj_opt {
+        Some(d) => {
+            let g = (primal_obj - d).max(0.0);
+            (2.0 * g * max_w / n).sqrt()
+        }
+        None => {
+            // No dual ⇒ no safe radius ⇒ no screening. Return all groups
+            // so the caller doesn't accidentally prune any.
+            let mut ws = Vec::with_capacity(n_groups);
+            for gi in 0..n_groups {
+                ws.push(gi);
+            }
+            return ws;
+        }
+    };
 
     let mut ws = Vec::with_capacity(n_groups);
     for gi in 0..n_groups {

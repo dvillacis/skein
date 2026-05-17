@@ -82,6 +82,47 @@ pub trait GlmDatafit: Sync + Send {
              prox_newton_fused_solve; classic prox_newton_solve does not require it"
         );
     }
+
+    /// Per-sample loss derivative at the linear predictor `eta = X·β`,
+    /// weighted by `sample_weights` when present. Returns the vector
+    /// `gᵢ = wᵢ · ℓᵢ'(ηᵢ)` so the caller can form the full β-gradient
+    /// via `(1/n) Xᵀ g` in one rmatvec. The full-β gradient is what the
+    /// gap-safe screening loop tests for L1 feasibility.
+    ///
+    /// Per GLM:
+    /// - logistic: `gᵢ = wᵢ · (sigmoid(ηᵢ) − yᵢ)`
+    /// - Poisson:  `gᵢ = wᵢ · (μᵢ − yᵢ)` with `μᵢ = exp(clamp(ηᵢ + oᵢ))`
+    ///
+    /// `None` (default) signals the GLM has no closed-form dual screening
+    /// support; the path solver then falls back to KKT-only termination
+    /// for that GLM (Cox / Huber / Multinomial). Implementors that
+    /// override this must also override [`Self::glm_dual_obj`] so the
+    /// feasibility scaling and dual obj are mutually consistent.
+    fn glm_per_sample_loss_grad(&self, _eta: ArrayView1<'_, f64>) -> Option<Array1<f64>> {
+        None
+    }
+
+    /// Closed-form dual objective evaluated at `θ_scaled = scale · θ_naive`,
+    /// where `θ_naive = ∇f(η)` is the natural dual point implied by the
+    /// composite primal `min_β f(Xβ) + λR(β)`. Mirrors the role of
+    /// [`Datafit::lasso_dual_obj`] but for GLMs whose loss is not LS.
+    ///
+    /// `scale ∈ (0, 1]` is the feasibility shrinkage chosen by the caller
+    /// so that `‖Xᵀθ_scaled‖_∞ ≤ λ · w_j`. The dual is a valid lower
+    /// bound on the primal optimum at every feasible θ; the closer to
+    /// the saddle, the tighter the bound.
+    ///
+    /// Returns `None` (default) for GLMs without a closed-form dual
+    /// (Cox / Huber / Multinomial). Caller (the path solver / prox-Newton
+    /// outer loop) then skips gap-safe screening for that GLM.
+    fn glm_dual_obj(
+        &self,
+        _design: &dyn DesignMatrix,
+        _eta: ArrayView1<'_, f64>,
+        _scale: f64,
+    ) -> Option<f64> {
+        None
+    }
 }
 
 pub trait Datafit: Sync + Send {

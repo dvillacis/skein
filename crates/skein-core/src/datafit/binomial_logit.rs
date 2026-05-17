@@ -135,6 +135,65 @@ impl GlmDatafit for BinomialLogit {
             r_out[i] = (self.y[i] - p) / w_raw;
         }
     }
+
+    fn glm_per_sample_loss_grad(&self, eta: ArrayView1<'_, f64>) -> Option<Array1<f64>> {
+        let n = eta.len();
+        let mut g = Array1::<f64>::zeros(n);
+        for i in 0..n {
+            let p = sigmoid(eta[i]);
+            let sw = self.sample_weights.as_ref().map(|w| w[i]).unwrap_or(1.0);
+            g[i] = sw * (p - self.y[i]);
+        }
+        Some(g)
+    }
+
+    fn glm_dual_obj(
+        &self,
+        design: &dyn DesignMatrix,
+        eta: ArrayView1<'_, f64>,
+        scale: f64,
+    ) -> Option<f64> {
+        // D(θ_scaled) = -(1/n) Σ wᵢ [sᵢ log sᵢ + (1−sᵢ) log(1−sᵢ)]
+        // with sᵢ = yᵢ + scale·(pᵢ − yᵢ) (convex interpolation between
+        // the label and the prediction). sᵢ ∈ (0, 1) for scale ∈ (0, 1]
+        // because sigmoid never reaches 0 or 1 and yᵢ ∈ {0, 1}; the
+        // boundary `scale=0` collapses sᵢ to yᵢ (xlogx → 0).
+        let n = eta.len();
+        debug_assert_eq!(n, design.n_samples());
+        let n_f = n as f64;
+        let mut sum = 0.0_f64;
+        for i in 0..n {
+            let p = sigmoid(eta[i]);
+            let s = self.y[i] + scale * (p - self.y[i]);
+            let term = xlogx(s) + xlogx(1.0 - s);
+            let sw = self.sample_weights.as_ref().map(|w| w[i]).unwrap_or(1.0);
+            sum += sw * term;
+        }
+        Some(-sum / n_f)
+    }
+}
+
+/// Numerically stable `x · log(x)` extended by continuity at 0 and 1
+/// (the binary-entropy boundary). For `x ≤ 0` returns 0 — never called
+/// with a genuinely negative argument in this codebase, but the clamp
+/// keeps stray FP noise from producing `NaN`.
+fn xlogx(x: f64) -> f64 {
+    if x <= 0.0 || x >= 1.0 {
+        // log(1) = 0 also collapses to 0; log(0) is the boundary handled
+        // by the `≤ 0` arm.
+        if x >= 1.0 && (x - 1.0).abs() < 1e-300 {
+            return 0.0;
+        }
+        if x <= 0.0 {
+            return 0.0;
+        }
+        // x > 1 — out of binary-entropy domain; in practice unreachable
+        // because sᵢ ∈ (0, 1) always for scale ∈ (0, 1] (see caller).
+        // Return 0 rather than NaN so the dual remains a (loose) lower
+        // bound rather than disabling screening entirely.
+        return 0.0;
+    }
+    x * x.ln()
 }
 
 /// Numerically stable sigmoid `1 / (1 + exp(-η))`.
@@ -198,5 +257,97 @@ mod tests {
         assert_abs_diff_eq!(sigmoid(1e6), 1.0, epsilon = 1e-12);
         assert_abs_diff_eq!(sigmoid(-1e6), 0.0, epsilon = 1e-12);
         assert_abs_diff_eq!(sigmoid(0.0), 0.5, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn glm_dual_obj_collapses_to_primal_at_beta_zero_with_unit_scale() {
+        // β = 0 ⇒ p = 0.5 ⇒ both primal and D(θ_naive) equal log 2.
+        // β = 0 IS the primal optimum when λ ≥ λ_max; scale = 1 is the
+        // unrestricted natural dual point. Gap should be exactly 0.
+        let x = array![[1.0, 0.5], [0.5, 1.0], [0.2, 0.8], [0.1, 0.4]];
+        let y = array![1.0, 0.0, 1.0, 0.0];
+        let design = DenseMatrix::new(x);
+        let glm = BinomialLogit::new(y);
+        let beta = Array1::<f64>::zeros(2);
+        let eta = design.matvec(beta.view());
+        let dual = glm
+            .glm_dual_obj(&design, eta.view(), 1.0)
+            .expect("binomial must return dual");
+        let primal = glm.loss(&design, beta.view());
+        assert_abs_diff_eq!(dual, primal, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn glm_dual_obj_is_lower_bound_at_arbitrary_beta() {
+        // Composite weak duality: f(Xβ) + λR(β) ≥ -f*(θ) at any θ
+        // feasible for λ, i.e., ‖Xᵀθ‖_∞ ≤ λ. We test at λ chosen so
+        // `scale·θ_naive` is feasible (the path solver's exact scaling
+        // rule). The test must include the penalty term — the dual is
+        // a lower bound on the *penalized* primal, not the unpenalized
+        // loss.
+        let x = array![[1.0_f64, 0.5], [0.5, 1.0], [0.2, 0.8], [-0.3, 0.4]];
+        let y = array![1.0, 0.0, 1.0, 0.0];
+        let design = DenseMatrix::new(x);
+        let glm = BinomialLogit::new(y);
+        let beta = array![0.4_f64, -0.6];
+        let eta = design.matvec(beta.view());
+        let per_sample = glm
+            .glm_per_sample_loss_grad(eta.view())
+            .expect("binomial must return per-sample grad");
+        let n_f = design.n_samples() as f64;
+        let grad_beta = &design.rmatvec(per_sample.view()) / n_f;
+        let lambda_bound = grad_beta.iter().fold(0.0_f64, |a, &v| a.max(v.abs()));
+        let loss = glm.loss(&design, beta.view());
+        for &scale in &[0.25_f64, 0.5, 0.75, 1.0] {
+            // Pick the smallest λ at which `scale·θ_naive` is feasible.
+            let lam = scale * lambda_bound;
+            let pen = lam * beta.iter().map(|&b| b.abs()).sum::<f64>();
+            let primal = loss + pen;
+            let dual = glm
+                .glm_dual_obj(&design, eta.view(), scale)
+                .expect("binomial must return dual");
+            assert!(
+                primal - dual >= -1e-12,
+                "gap non-negative at scale={}, primal={}, dual={}",
+                scale,
+                primal,
+                dual
+            );
+        }
+    }
+
+    #[test]
+    fn glm_per_sample_loss_grad_matches_p_minus_y() {
+        let x = array![[1.0_f64, 0.5], [0.5, 1.0], [0.2, 0.8], [-0.3, 0.4]];
+        let y = array![1.0, 0.0, 1.0, 0.0];
+        let design = DenseMatrix::new(x);
+        let glm = BinomialLogit::new(y.clone());
+        let beta = array![0.4_f64, -0.6];
+        let eta = design.matvec(beta.view());
+        let g = glm
+            .glm_per_sample_loss_grad(eta.view())
+            .expect("binomial must return per-sample grad");
+        for i in 0..4 {
+            let p = sigmoid(eta[i]);
+            assert_abs_diff_eq!(g[i], p - y[i], epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn glm_per_sample_loss_grad_respects_sample_weights() {
+        let x = array![[1.0_f64, 0.5], [0.5, 1.0]];
+        let y = array![1.0, 0.0];
+        let w = array![2.0_f64, 0.5];
+        let design = DenseMatrix::new(x);
+        let glm = BinomialLogit::with_sample_weights(y.clone(), w.clone());
+        let beta = array![0.4_f64, -0.6];
+        let eta = design.matvec(beta.view());
+        let g = glm
+            .glm_per_sample_loss_grad(eta.view())
+            .expect("binomial must return per-sample grad");
+        for i in 0..2 {
+            let p = sigmoid(eta[i]);
+            assert_abs_diff_eq!(g[i], w[i] * (p - y[i]), epsilon = 1e-12);
+        }
     }
 }

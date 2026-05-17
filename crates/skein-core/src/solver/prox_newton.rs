@@ -27,8 +27,26 @@ use crate::datafit::{Datafit, GlmDatafit};
 use crate::design::DesignMatrix;
 use crate::penalty::Penalty;
 use crate::solver::cd::{cd_solve_subset_weighted_ls_with_lips, CdConfig};
-use crate::solver::path::{lambda_grid, lambda_max, priority_rule_screen_with_grad};
+use crate::solver::path::{
+    anderson_extrapolate_pair, compute_outer_state, lambda_grid, lambda_max,
+    priority_rule_screen_with_grad,
+};
 use ndarray::{Array1, Array2};
+
+/// Cap on the per-PN-iter dual-extrapolation history. Matches the path
+/// solver's `DUAL_HISTORY_MAX` (celer's K=6); also bounds the per-iter
+/// memory footprint at `2 · K · p · 8` bytes (= 96 KB at p=1000).
+const DUAL_HISTORY_MAX: usize = 6;
+
+/// Once the warm β has more than this fraction of nonzero entries, skip
+/// the screened inner loop and fall back to the legacy KKT-only path.
+/// Mirrors `solver::path::SCREENING_SATURATION_THRESHOLD` (M13.1) — at
+/// saturation, dual extrapolation + safe-sphere screening overhead
+/// (1 extra rmatvec per pass, O(p) prox calls) exceeds the screening
+/// gain because nearly all features are active and can't be screened.
+/// Measured on logistic_lasso small-deep (active 191/200): without
+/// this bypass the screened loop is ~15% slower than the legacy path.
+const PN_SCREENING_SATURATION_THRESHOLD: f64 = 0.5;
 
 /// Minimum working-set size when the strong rule has nothing to lean on
 /// (cold start with β = 0 at λ_max). Same role as `PathConfig::p0`; the
@@ -66,10 +84,27 @@ pub struct ProxNewtonPathReport {
     pub final_losses: Vec<f64>,
 }
 
-/// Single-λ proximal-Newton solve for any GLM that exposes a weighted-LS
-/// surrogate via [`GlmDatafit`].
+/// Single-λ proximal-Newton solve **with gap-safe sphere screening +
+/// Anderson dual extrapolation on the surrogate** — celer's per-λ
+/// pattern, ported into the prox-Newton inner subproblem.
+///
+/// Equivalent to [`prox_newton_solve`] when `lambda = None`; otherwise
+/// each outer PN iter runs the same KKT-with-screening loop as
+/// [`crate::solver::solve_path`] does at one λ, using the surrogate's
+/// weighted-LS dual obj for gap computation. Screened features are
+/// reset per PN outer iter (the surrogate changes each iter, so a
+/// feature provably zero at one surrogate's optimum is not guaranteed
+/// to stay zero at the next).
+///
+/// **Why the explicit `lambda` arg.** The penalty trait encodes λ
+/// internally (it's baked into `prox_coord` and `value`), but the
+/// safe-sphere bound `|grad_j| + r_safe·‖X_j‖₂ < λ·w_j` needs the
+/// scalar λ separately to project the dual point and to test
+/// feasibility. The path driver knows λ from the grid; the standalone
+/// [`prox_newton_solve`] doesn't (and falls back to the unscreened
+/// path by passing `None`).
 #[allow(clippy::too_many_arguments)]
-pub fn prox_newton_solve(
+pub(crate) fn prox_newton_solve_screened(
     design: &dyn DesignMatrix,
     glm: &dyn GlmDatafit,
     penalty: &dyn Penalty,
@@ -77,6 +112,7 @@ pub fn prox_newton_solve(
     cd_config: &CdConfig,
     max_outer: usize,
     outer_tol: f64,
+    lambda: Option<f64>,
 ) -> (Array1<f64>, ProxNewtonReport) {
     let p = design.n_features();
     debug_assert_eq!(init_beta.len(), p, "init_beta length must equal n_features");
@@ -98,9 +134,6 @@ pub fn prox_newton_solve(
             .expect("GlmDatafit surrogates always carry per-sample weights");
         let n_f = design.n_samples() as f64;
 
-        // Batched BLAS gemv (`X².t().dot(w)`) on dense designs — falls
-        // back to the per-column manual fold for sparse / mmap backends
-        // via the default `DesignMatrix::weighted_col_sq_norms`.
         let lips_arr = design.weighted_col_sq_norms(sw);
         let lips: Vec<f64> = lips_arr.iter().map(|&v| v / n_f).collect();
 
@@ -111,50 +144,26 @@ pub fn prox_newton_solve(
         let mut ws =
             priority_rule_screen_with_grad(grad0.view(), weights.view(), warm.view(), ws_size);
 
-        let mut inner_iter_total = 0usize;
-        let mut expansion_pass = 0usize;
+        // Saturation bypass: when the warm β has more than
+        // PN_SCREENING_SATURATION_THRESHOLD × p nonzero entries, the
+        // screening overhead (extra rmatvec for Anderson + O(p) prox
+        // for safe-sphere test) outweighs the screening gain, because
+        // active features can't be screened. Fall back to the legacy
+        // KKT-only loop in that regime. Mirrors path.rs's M13.1.
+        let saturated = (n_support as f64) > PN_SCREENING_SATURATION_THRESHOLD * (p as f64);
+        let effective_lambda = if saturated { None } else { lambda };
 
-        // KKT-protected WS loop. CD restricted to `ws` → KKT verify on
-        // the full feature set using one `full_grad` rmatvec and the
-        // cached Lj. Violators (if any) expand the WS; cap and fall
-        // back to the full set so a pathological surrogate can't blow
-        // the outer-iter budget.
-        loop {
-            let (b_new, r_new, rep) = cd_solve_subset_weighted_ls_with_lips(
-                warm, &ws, design, &surrogate, penalty, cd_config, &lips,
-            );
-            warm = b_new;
-            inner_iter_total = inner_iter_total.saturating_add(rep.iter);
-
-            let grad = surrogate.full_grad(design, r_new.view());
-            let violators = find_kkt_violators_batched(
-                penalty,
-                warm.view(),
-                grad.view(),
-                &lips,
-                &ws,
-                cd_config.tol,
-            );
-            if violators.is_empty() {
-                break;
-            }
-            expansion_pass += 1;
-            if expansion_pass >= KKT_EXPANSION_PASSES {
-                ws = (0..p).collect();
-                let (b_new, _r_new, rep) = cd_solve_subset_weighted_ls_with_lips(
-                    warm, &ws, design, &surrogate, penalty, cd_config, &lips,
-                );
-                warm = b_new;
-                inner_iter_total = inner_iter_total.saturating_add(rep.iter);
-                break;
-            }
-            ws.extend(violators);
-            ws.sort_unstable();
-            ws.dedup();
-        }
+        let inner_iter_total = match effective_lambda {
+            // No screening — reproduce the legacy KKT-only loop bit-for-bit.
+            None => run_kkt_only_loop(
+                design, &surrogate, penalty, cd_config, &lips, &mut warm, &mut ws, p,
+            ),
+            Some(lam) => run_screened_loop(
+                design, &surrogate, penalty, cd_config, &lips, &mut warm, &mut ws, p, lam,
+            ),
+        };
 
         inner_iters.push(inner_iter_total);
-        let _ = expansion_pass; // currently observed via tests only
 
         let max_change = (0..p)
             .map(|j| (warm[j] - beta_old[j]).abs())
@@ -174,6 +183,229 @@ pub fn prox_newton_solve(
             inner_iters,
             final_loss,
         },
+    )
+}
+
+/// Original KKT-only inner loop (no dual extrapolation, no gap-safe
+/// screening). Kept as the legacy path so [`prox_newton_solve`] is
+/// behaviorally unchanged when called without a λ.
+#[allow(clippy::too_many_arguments)]
+fn run_kkt_only_loop(
+    design: &dyn DesignMatrix,
+    surrogate: &crate::datafit::LeastSquares,
+    penalty: &dyn Penalty,
+    cd_config: &CdConfig,
+    lips: &[f64],
+    warm: &mut Array1<f64>,
+    ws: &mut Vec<usize>,
+    p: usize,
+) -> usize {
+    let mut inner_iter_total = 0usize;
+    let mut expansion_pass = 0usize;
+    loop {
+        let beta_in = std::mem::take(warm);
+        let (b_new, r_new, rep) = cd_solve_subset_weighted_ls_with_lips(
+            beta_in, ws, design, surrogate, penalty, cd_config, lips,
+        );
+        *warm = b_new;
+        inner_iter_total = inner_iter_total.saturating_add(rep.iter);
+
+        let grad = surrogate.full_grad(design, r_new.view());
+        let violators =
+            find_kkt_violators_batched(penalty, warm.view(), grad.view(), lips, ws, cd_config.tol);
+        if violators.is_empty() {
+            break;
+        }
+        expansion_pass += 1;
+        if expansion_pass >= KKT_EXPANSION_PASSES {
+            *ws = (0..p).collect();
+            let beta_in = std::mem::take(warm);
+            let (b_new, _r_new, rep) = cd_solve_subset_weighted_ls_with_lips(
+                beta_in, ws, design, surrogate, penalty, cd_config, lips,
+            );
+            *warm = b_new;
+            inner_iter_total = inner_iter_total.saturating_add(rep.iter);
+            break;
+        }
+        ws.extend(violators);
+        ws.sort_unstable();
+        ws.dedup();
+    }
+    inner_iter_total
+}
+
+/// Per-PN-iter screening loop. Mirrors `solver::path::solve_path`'s per-λ
+/// outer KKT loop: gap-safe sphere screening using the surrogate's
+/// weighted-LS dual obj, Anderson dual extrapolation on `(β, r)` pairs,
+/// adaptive inner tolerance via the previous outer's prox-grad distance.
+///
+/// The screened mask resets per PN outer iter (surrogate-level screening
+/// only — a feature provably zero at one surrogate's optimum is not
+/// guaranteed to stay zero at the next surrogate). Persistent
+/// across-PN-iter screening using the GLM-level dual obj from
+/// [`GlmDatafit::glm_dual_obj`] is a follow-up; this implementation
+/// gets most of the wall-clock benefit at much lower complexity.
+#[allow(clippy::too_many_arguments)]
+fn run_screened_loop(
+    design: &dyn DesignMatrix,
+    surrogate: &crate::datafit::LeastSquares,
+    penalty: &dyn Penalty,
+    cd_config: &CdConfig,
+    lips: &[f64],
+    warm: &mut Array1<f64>,
+    ws: &mut Vec<usize>,
+    p: usize,
+    lambda: f64,
+) -> usize {
+    let mut inner_iter_total = 0usize;
+    let mut expansion_pass = 0usize;
+    let mut beta_history: Vec<Array1<f64>> = Vec::with_capacity(DUAL_HISTORY_MAX);
+    let mut residual_history: Vec<Array1<f64>> = Vec::with_capacity(DUAL_HISTORY_MAX);
+    let mut best_dual_obj: f64 = f64::NEG_INFINITY;
+    let mut screened: Vec<bool> = vec![false; p];
+    let mut prev_outer_pgd: f64 = f64::INFINITY;
+    let mut inner_cd_cfg = cd_config.clone();
+
+    loop {
+        // Adaptive inner tolerance, celer/skglm style. Same constants as
+        // the path solver (`path.rs:398-402`). Loose at the start
+        // (10×config.cd.tol) when there's no prior PGD; tightens to the
+        // user-requested tol as the outer loop converges.
+        inner_cd_cfg.tol = if prev_outer_pgd.is_finite() {
+            cd_config.tol.max(0.3 * prev_outer_pgd)
+        } else {
+            cd_config.tol * 10.0
+        };
+
+        let beta_in = std::mem::take(warm);
+        let (b_new, r_new, rep) = cd_solve_subset_weighted_ls_with_lips(
+            beta_in,
+            ws,
+            design,
+            surrogate,
+            penalty,
+            &inner_cd_cfg,
+            lips,
+        );
+        *warm = b_new;
+        inner_iter_total = inner_iter_total.saturating_add(rep.iter);
+
+        // Push current (β, r) into dual-extrapolation history.
+        if beta_history.len() == DUAL_HISTORY_MAX {
+            beta_history.remove(0);
+            residual_history.remove(0);
+        }
+        beta_history.push(warm.clone());
+        residual_history.push(r_new.clone());
+
+        let extrapolation = if residual_history.len() >= 3 {
+            anderson_extrapolate_pair(&residual_history, &beta_history)
+        } else {
+            None
+        };
+
+        let mut outer = compute_outer_state(
+            design,
+            surrogate,
+            penalty,
+            warm.view(),
+            r_new.view(),
+            ws,
+            lips,
+            lambda,
+            cd_config.tol,
+            extrapolation
+                .as_ref()
+                .map(|(r_acc, beta_acc)| (r_acc.view(), beta_acc.view())),
+            &mut best_dual_obj,
+        );
+        // `outer.grad` isn't reused here (no cross-PN-iter grad cache);
+        // the path solver's M13.2 cache is between λ's, not between
+        // surrogates. Drop it explicitly via `take` to avoid the clone
+        // path the compiler would otherwise pick.
+        let _ = std::mem::take(&mut outer.grad);
+        prev_outer_pgd = outer.max_pgd;
+
+        // Apply gap-safe screening: pull provably-zero features out of
+        // the working set permanently (for this PN iter).
+        if !outer.safely_inactive.is_empty() {
+            for &j in &outer.safely_inactive {
+                screened[j] = true;
+            }
+            ws.retain(|&j| !screened[j]);
+        }
+
+        // Outer convergence check — gap-based OR PGD stationarity.
+        // Mirrors `path.rs:499-505`.
+        let converged = match outer.gap {
+            Some(g) => g < cd_config.tol * cd_config.tol || outer.max_pgd < cd_config.tol,
+            None => outer.max_pgd < cd_config.tol,
+        };
+        if converged {
+            break;
+        }
+
+        if outer.violators.is_empty() {
+            // WS is correct but the inner CD stopped sloppy. Next pass
+            // will rerun with a tighter inner_tol via shrinking
+            // prev_outer_pgd.
+            continue;
+        }
+
+        expansion_pass += 1;
+        if expansion_pass >= KKT_EXPANSION_PASSES {
+            // Fall back to the full feature set, minus anything we've
+            // already screened out. Same protective cap as the legacy
+            // KKT-only path so a pathological surrogate can't blow the
+            // outer-iter budget.
+            *ws = (0..p).filter(|j| !screened[*j]).collect();
+            let beta_in = std::mem::take(warm);
+            let (b_new, _r_new, rep) = cd_solve_subset_weighted_ls_with_lips(
+                beta_in,
+                ws,
+                design,
+                surrogate,
+                penalty,
+                &inner_cd_cfg,
+                lips,
+            );
+            *warm = b_new;
+            inner_iter_total = inner_iter_total.saturating_add(rep.iter);
+            break;
+        }
+
+        for j in outer.violators {
+            if !screened[j] {
+                ws.push(j);
+            }
+        }
+        ws.sort_unstable();
+        ws.dedup();
+    }
+    inner_iter_total
+}
+
+/// Single-λ proximal-Newton solve for any GLM that exposes a weighted-LS
+/// surrogate via [`GlmDatafit`].
+///
+/// Public surface preserved (no signature change) — internally delegates
+/// to [`prox_newton_solve_screened`] with `lambda = None`, which falls
+/// back to the legacy KKT-only inner loop (no gap-safe screening, no
+/// dual extrapolation). Callers that have an explicit λ on hand (the
+/// path solver, M13 GLM-screening milestone) should route through
+/// [`prox_newton_solve_screened`] directly to opt into screening.
+#[allow(clippy::too_many_arguments)]
+pub fn prox_newton_solve(
+    design: &dyn DesignMatrix,
+    glm: &dyn GlmDatafit,
+    penalty: &dyn Penalty,
+    init_beta: Array1<f64>,
+    cd_config: &CdConfig,
+    max_outer: usize,
+    outer_tol: f64,
+) -> (Array1<f64>, ProxNewtonReport) {
+    prox_newton_solve_screened(
+        design, glm, penalty, init_beta, cd_config, max_outer, outer_tol, None,
     )
 }
 
@@ -432,8 +664,21 @@ where
 
     for (k, &lam) in lambdas.iter().enumerate() {
         let pen = make_penalty(lam);
-        let (new_beta, report) =
-            prox_newton_solve(design, glm, &*pen, warm, cd_config, max_outer, outer_tol);
+        // Route through the screened variant — `lambda = Some(lam)` enables
+        // gap-safe sphere screening + Anderson dual extrapolation on the
+        // surrogate (celer's per-λ pattern). The standalone single-λ
+        // `prox_newton_solve` keeps the legacy KKT-only path for callers
+        // that don't have λ in hand.
+        let (new_beta, report) = prox_newton_solve_screened(
+            design,
+            glm,
+            &*pen,
+            warm,
+            cd_config,
+            max_outer,
+            outer_tol,
+            Some(lam),
+        );
         warm = new_beta;
         betas.row_mut(k).assign(&warm);
         outer_iters_out.push(report.outer_iters);
@@ -1495,6 +1740,67 @@ mod tests {
         );
         for j in 0..p {
             assert_abs_diff_eq!(beta_fused[j], beta_classic[j], epsilon = 1e-4);
+        }
+    }
+
+    /// Mirror of `solver::path::tests::solve_path_screening_on_matches_screening_off_within_tol`
+    /// for the GLM path. The screening-enabled
+    /// `prox_newton_solve_screened(lambda=Some(λ))` path must produce
+    /// numerically equivalent coefficients to the legacy KKT-only path
+    /// (`lambda=None`) at tight tol. If a `gap_safe` formula slips below
+    /// the double-precision floor, the screened loop will sweep
+    /// `max_iter × n_lambdas` per test and starve the runner — exactly
+    /// the pathology CLAUDE.md's solver-change pre-flight warns about.
+    #[test]
+    fn prox_newton_screening_matches_no_screening_within_tol() {
+        let (design, y, _) = logistic_problem(7);
+        let glm = BinomialLogit::new(y);
+        let p = design.n_features();
+        let cfg = CdConfig {
+            max_iter: 200,
+            tol: 1e-10,
+            acceleration: None,
+        };
+        let lambdas = [0.10_f64, 0.05, 0.02, 0.01];
+        let mut betas_off = Array2::<f64>::zeros((lambdas.len(), p));
+        let mut warm_off = Array1::<f64>::zeros(p);
+        for (k, &lam) in lambdas.iter().enumerate() {
+            // Force the legacy KKT-only path (`lambda = None`).
+            let (b, _) = prox_newton_solve_screened(
+                &design,
+                &glm,
+                &Mcp::new(lam, 1e6, p), // γ → ∞ ⇒ pure L1 — well-conditioned
+                warm_off,
+                &cfg,
+                30,
+                1e-9,
+                None,
+            );
+            warm_off = b.clone();
+            betas_off.row_mut(k).assign(&b);
+        }
+        let mut betas_on = Array2::<f64>::zeros((lambdas.len(), p));
+        let mut warm_on = Array1::<f64>::zeros(p);
+        for (k, &lam) in lambdas.iter().enumerate() {
+            // Screened path (`lambda = Some(lam)` → gap-safe screening
+            // + Anderson dual extrapolation on the surrogate enabled).
+            let (b, _) = prox_newton_solve_screened(
+                &design,
+                &glm,
+                &Mcp::new(lam, 1e6, p),
+                warm_on,
+                &cfg,
+                30,
+                1e-9,
+                Some(lam),
+            );
+            warm_on = b.clone();
+            betas_on.row_mut(k).assign(&b);
+        }
+        for k in 0..lambdas.len() {
+            for j in 0..p {
+                assert_abs_diff_eq!(betas_on[[k, j]], betas_off[[k, j]], epsilon = 5e-6);
+            }
         }
     }
 }

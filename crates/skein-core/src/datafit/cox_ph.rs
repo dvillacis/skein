@@ -333,6 +333,15 @@ impl GlmDatafit for CoxPH {
         CoxPH::loss(self, design, beta)
     }
 
+    // Intentionally inherit the `None` defaults for `glm_per_sample_loss_grad`
+    // and `glm_dual_obj`. Cox's partial-likelihood dual under Breslow/Efron
+    // tie handling has no closed form analogous to logistic/Poisson — the
+    // risk-set structure couples samples, so the conjugate doesn't decouple
+    // per-sample. Wu & Lange (2008) sketch a constrained dual but it's not
+    // a single-shot evaluation. Gap-safe screening for Cox is therefore
+    // deferred; the prox-Newton outer loop falls back to KKT-only
+    // termination for this GLM.
+
     fn refresh_surrogate_components(
         &self,
         eta: ArrayView1<'_, f64>,

@@ -228,6 +228,67 @@ impl GlmDatafit for PoissonLog {
             r_out[i] = (self.y[i] - mu) / w_raw;
         }
     }
+
+    fn glm_per_sample_loss_grad(&self, eta: ArrayView1<'_, f64>) -> Option<Array1<f64>> {
+        // `eta` here is the un-offset `X·β` (matches the convention used
+        // by `refresh_surrogate_components`); apply the offset and the
+        // same η clamp `loss` uses so the gradient and the dual obj see
+        // the same μᵢ.
+        let n = eta.len();
+        let mut g = Array1::<f64>::zeros(n);
+        for i in 0..n {
+            let offset_i = self.offset.as_ref().map(|o| o[i]).unwrap_or(0.0);
+            let eta_c = (eta[i] + offset_i).clamp(-ETA_CLAMP, ETA_CLAMP);
+            let mu = eta_c.exp();
+            let sw = self.sample_weights.as_ref().map(|w| w[i]).unwrap_or(1.0);
+            g[i] = sw * (mu - self.y[i]);
+        }
+        Some(g)
+    }
+
+    fn glm_dual_obj(
+        &self,
+        design: &dyn DesignMatrix,
+        eta: ArrayView1<'_, f64>,
+        scale: f64,
+    ) -> Option<f64> {
+        // Derivation (with optional offset oᵢ; same η clamp `loss` uses):
+        //   Per-sample primal loss   ℓᵢ(η_full) = exp(η_full) − yᵢ·η_full
+        //                          = exp(oᵢ)·exp((Xβ)ᵢ) − yᵢ·(Xβ)ᵢ − yᵢ·oᵢ
+        //   So skein's primal P_skein(β) = f((Xβ)) + C, where
+        //     f(η) = (1/n) Σ wᵢ [exp(oᵢ)·exp(ηᵢ) − yᵢ·ηᵢ],
+        //     C = −(1/n) Σ wᵢ·yᵢ·oᵢ.
+        //   The Fenchel conjugate of `tη − exp(oᵢ)·exp(η)` is
+        //     ℓᵢ*(t) = sᵢ·(log sᵢ − oᵢ − 1)  for sᵢ = t + yᵢ > 0,
+        //   so f*(θ) = (1/n) Σ wᵢ·sᵢ·(log sᵢ − oᵢ − 1) with
+        //   sᵢ = n·θᵢ/wᵢ + yᵢ.
+        //   At θ_naive = (wᵢ/n)·(μᵢ − yᵢ) we get sᵢ = μᵢ > 0 (feasible).
+        //   For θ_scaled = scale·θ_naive, sᵢ = scale·(μᵢ − yᵢ) + yᵢ ≥ 0
+        //   (convex combination of two non-negatives). The composite
+        //   dual is then D = −f*(θ_scaled) + C — the constant C cancels
+        //   the −yᵢoᵢ contribution that the conjugate added back, so
+        //   the net offset-dependent term in D is `−scale·(μᵢ − yᵢ)·oᵢ`.
+        let n = eta.len();
+        debug_assert_eq!(n, design.n_samples());
+        let n_f = n as f64;
+        let mut sum = 0.0_f64;
+        for i in 0..n {
+            let offset_i = self.offset.as_ref().map(|o| o[i]).unwrap_or(0.0);
+            let eta_c = (eta[i] + offset_i).clamp(-ETA_CLAMP, ETA_CLAMP);
+            let mu = eta_c.exp();
+            let s = self.y[i] + scale * (mu - self.y[i]);
+            // sᵢ log sᵢ extended by continuity at sᵢ = 0 (no harm: yᵢ=0
+            // AND μᵢ=0 would require yᵢ=0 since μᵢ > 0 always given the
+            // clamp, but scale → 0 with yᵢ = 0 gives sᵢ → 0, and
+            // x·log(x) → 0).
+            let slogs = if s > 0.0 { s * s.ln() } else { 0.0 };
+            let offset_term = scale * (mu - self.y[i]) * offset_i;
+            let term = slogs - s - offset_term;
+            let sw = self.sample_weights.as_ref().map(|w| w[i]).unwrap_or(1.0);
+            sum += sw * term;
+        }
+        Some(-sum / n_f)
+    }
 }
 
 #[cfg(test)]
@@ -378,6 +439,110 @@ mod tests {
             glm_no.loss(&design, beta_b.view()),
             epsilon = 1e-12
         );
+    }
+
+    #[test]
+    fn glm_dual_obj_collapses_to_primal_at_beta_zero_with_unit_scale() {
+        // At β=0 (no offset), μ=1 ⇒ s=1 ⇒ D = (1/n) Σ wᵢ.
+        // Primal = (1/n) Σ wᵢ μᵢ = (1/n) Σ wᵢ at β=0.
+        let x = array![[1.0_f64, 0.5], [0.5, 1.0], [0.2, 0.8], [0.1, 0.4]];
+        let y = array![3.0, 0.0, 1.0, 5.0];
+        let design = DenseMatrix::new(x);
+        let glm = PoissonLog::new(y);
+        let beta = Array1::<f64>::zeros(2);
+        let eta = design.matvec(beta.view());
+        let dual = glm
+            .glm_dual_obj(&design, eta.view(), 1.0)
+            .expect("poisson must return dual");
+        let primal = glm.loss(&design, beta.view());
+        assert_abs_diff_eq!(dual, primal, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn glm_dual_obj_collapses_to_primal_at_beta_zero_with_offset() {
+        // Same identity with offset: β=0 is the primal optimum when
+        // λ ≥ λ_max, and the dual at θ_naive must equal the primal.
+        let x = array![[1.0_f64, 0.5], [0.5, 1.0], [0.2, 0.8], [0.1, 0.4]];
+        let y = array![3.0_f64, 0.0, 1.0, 5.0];
+        let offset = array![0.5_f64, -0.3, 1.0, 0.2];
+        let design = DenseMatrix::new(x);
+        let glm = PoissonLog::with_offset(y, offset);
+        let beta = Array1::<f64>::zeros(2);
+        let eta = design.matvec(beta.view());
+        let dual = glm
+            .glm_dual_obj(&design, eta.view(), 1.0)
+            .expect("poisson must return dual");
+        let primal = glm.loss(&design, beta.view());
+        assert_abs_diff_eq!(dual, primal, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn glm_dual_obj_is_lower_bound_at_arbitrary_beta() {
+        // Same composite weak-duality test as binomial: pick λ at which
+        // `scale·θ_naive` is just feasible, then dual ≤ penalized primal.
+        let x = array![[1.0_f64, 0.5], [0.5, 1.0], [0.2, 0.8], [-0.3, 0.4]];
+        let y = array![3.0_f64, 0.0, 1.0, 2.0];
+        let design = DenseMatrix::new(x);
+        let glm = PoissonLog::new(y);
+        let beta = array![0.2_f64, -0.3];
+        let eta = design.matvec(beta.view());
+        let per_sample = glm
+            .glm_per_sample_loss_grad(eta.view())
+            .expect("poisson must return per-sample grad");
+        let n_f = design.n_samples() as f64;
+        let grad_beta = &design.rmatvec(per_sample.view()) / n_f;
+        let lambda_bound = grad_beta.iter().fold(0.0_f64, |a, &v| a.max(v.abs()));
+        let loss = glm.loss(&design, beta.view());
+        for &scale in &[0.25_f64, 0.5, 0.75, 1.0] {
+            let lam = scale * lambda_bound;
+            let pen = lam * beta.iter().map(|&b| b.abs()).sum::<f64>();
+            let primal = loss + pen;
+            let dual = glm
+                .glm_dual_obj(&design, eta.view(), scale)
+                .expect("poisson must return dual");
+            assert!(
+                primal - dual >= -1e-12,
+                "gap non-negative at scale={}, primal={}, dual={}",
+                scale,
+                primal,
+                dual
+            );
+        }
+    }
+
+    #[test]
+    fn glm_per_sample_loss_grad_matches_mu_minus_y() {
+        let x = array![[1.0_f64, 0.5], [0.5, 1.0], [0.2, 0.8]];
+        let y = array![3.0, 0.0, 2.0];
+        let design = DenseMatrix::new(x);
+        let glm = PoissonLog::new(y.clone());
+        let beta = array![0.2_f64, -0.3];
+        let eta = design.matvec(beta.view());
+        let g = glm
+            .glm_per_sample_loss_grad(eta.view())
+            .expect("poisson must return per-sample grad");
+        for i in 0..3 {
+            let mu = eta[i].clamp(-ETA_CLAMP, ETA_CLAMP).exp();
+            assert_abs_diff_eq!(g[i], mu - y[i], epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn glm_per_sample_loss_grad_includes_offset() {
+        let x = array![[1.0_f64, 0.5], [0.5, 1.0]];
+        let y = array![3.0_f64, 0.0];
+        let off = array![0.5_f64, -0.3];
+        let design = DenseMatrix::new(x);
+        let glm = PoissonLog::with_offset(y.clone(), off.clone());
+        let beta = array![0.2_f64, -0.3];
+        let eta = design.matvec(beta.view());
+        let g = glm
+            .glm_per_sample_loss_grad(eta.view())
+            .expect("poisson must return per-sample grad");
+        for i in 0..2 {
+            let mu = (eta[i] + off[i]).clamp(-ETA_CLAMP, ETA_CLAMP).exp();
+            assert_abs_diff_eq!(g[i], mu - y[i], epsilon = 1e-12);
+        }
     }
 
     #[test]

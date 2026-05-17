@@ -26,15 +26,34 @@
 //! Per-outer-iter screening is not yet wired (the inner CD uses the
 //! full-group set); follow-up.
 
-use crate::datafit::GlmDatafit;
+use crate::datafit::{Datafit, GlmDatafit};
 use crate::design::DesignMatrix;
 use crate::groups::Groups;
 use crate::penalty::GroupPenalty;
-use crate::solver::block_cd::{block_cd_solve_subset_with_cache, group_lipschitz_cache};
+use crate::solver::block_cd::{
+    block_cd_solve_subset_with_cache, block_find_kkt_violators, block_gap_safe_screen,
+    group_lipschitz_cache,
+};
 use crate::solver::block_path::block_lambda_max;
 use crate::solver::cd::CdConfig;
 use crate::solver::path::lambda_grid;
 use ndarray::{Array1, Array2, ArrayView1};
+
+/// Cap on KKT-expansion passes per outer prox-Newton iteration. Same role
+/// and same number as the scalar `KKT_EXPANSION_PASSES` in
+/// `solver::prox_newton`: at most this many extend-and-resolve cycles
+/// before we fall back to the full group set. In practice 1–3 passes is
+/// plenty even for the densest GLM × group cells.
+const BLOCK_KKT_EXPANSION_PASSES: usize = 5;
+
+/// Saturation threshold for the block-PN screening bypass. Mirrors the
+/// scalar PN bypass and path.rs's M13.1: when more than this fraction
+/// of groups are already active at the start of a PN outer iter,
+/// `block_gap_safe_screen` + KKT-WS expansion is pure overhead because
+/// active groups can't be screened. Skip the screening machinery and
+/// fall back to a single full-group block-CD call (the original
+/// pre-Phase-4 behavior).
+const BLOCK_PN_SCREENING_SATURATION_THRESHOLD: f64 = 0.5;
 
 #[derive(Debug, Clone)]
 pub struct ProxNewtonBlockPathReport {
@@ -112,7 +131,6 @@ where
     // than necessary). A tighter cache that recomputes per outer iter
     // is M3.x.
     let group_lip = group_lipschitz_cache(design, groups);
-    let group_subset: Vec<usize> = (0..n_groups).collect();
 
     for &lam in lambdas.iter() {
         let mut outer_iters = 0usize;
@@ -125,18 +143,136 @@ where
             let inner_pen = make_inner(warm.view(), groups, lam);
             let beta_old = warm.clone();
 
-            let (new_beta, inner_report) = block_cd_solve_subset_with_cache(
-                warm,
-                &group_subset,
-                &group_lip,
+            // Per-PN-iter KKT loop with gap-safe screening on the
+            // weighted-LS surrogate. Mirrors the scalar
+            // `run_screened_loop` in `solver::prox_newton`: initial WS
+            // from `block_gap_safe_screen`, inner block-CD, KKT verifier
+            // on the full group set, expand-and-resolve if violators,
+            // cap at `BLOCK_KKT_EXPANSION_PASSES` and fall back to the
+            // full group set otherwise.
+            //
+            // Screened groups are reset per PN outer iter (surrogate-
+            // level screening only). The KKT verifier guarantees
+            // correctness: anything wrongly screened gets re-added as a
+            // violator before we declare convergence at this PN iter.
+            //
+            // Note: `block_gap_safe_screen` reads `inner_pen.weights()`
+            // for the screening test; the LLA convex surrogate's
+            // weights compose with `lam` the way the unscreened path
+            // expects, so screening works for both pure group-lasso
+            // (constant base_weights) and LLA-wrapped non-convex
+            // surrogates (per-group adaptive weights).
+            //
+            // Saturation bypass: when more than half the groups are
+            // already active at the start of this PN iter, screening
+            // can't help (active groups can't be screened); fall back
+            // to the single full-group block-CD call (the pre-Phase-4
+            // behavior). Mirrors the scalar PN bypass — see the const
+            // definition above for rationale.
+            let n_active_groups = (0..n_groups)
+                .filter(|&g| groups.group(g).iter().any(|&j| warm[j] != 0.0))
+                .count();
+            let saturated = (n_active_groups as f64)
+                > BLOCK_PN_SCREENING_SATURATION_THRESHOLD * (n_groups as f64);
+            if saturated {
+                let group_subset: Vec<usize> = (0..n_groups).collect();
+                let (b_new, inner_report) = block_cd_solve_subset_with_cache(
+                    warm,
+                    &group_subset,
+                    &group_lip,
+                    design,
+                    &surrogate,
+                    &*inner_pen,
+                    groups,
+                    cd_config,
+                );
+                warm = b_new;
+                total_inner += inner_report.iter;
+                // Skip directly to outer-convergence check below.
+                let mut max_block_change = 0.0_f64;
+                for g in 0..n_groups {
+                    let mut sum_sq = 0.0_f64;
+                    for &j in groups.group(g) {
+                        let d = warm[j] - beta_old[j];
+                        sum_sq += d * d;
+                    }
+                    let nb = sum_sq.sqrt();
+                    if nb > max_block_change {
+                        max_block_change = nb;
+                    }
+                }
+                if max_block_change < outer_tol {
+                    outer_converged = true;
+                    break;
+                }
+                continue;
+            }
+
+            let pen_weights = inner_pen.weights().to_owned();
+            let r0 = surrogate.init_residual(design, warm.view());
+            let mut ws = block_gap_safe_screen(
                 design,
                 &surrogate,
-                &*inner_pen,
+                r0.view(),
+                warm.view(),
+                pen_weights.view(),
                 groups,
-                cd_config,
+                lam,
+                &group_lip,
             );
+            let mut expansion_pass = 0usize;
+            let new_beta = loop {
+                let (b_new, inner_report) = block_cd_solve_subset_with_cache(
+                    warm,
+                    &ws,
+                    &group_lip,
+                    design,
+                    &surrogate,
+                    &*inner_pen,
+                    groups,
+                    cd_config,
+                );
+                warm = b_new.clone();
+                total_inner += inner_report.iter;
+
+                let r_new = surrogate.init_residual(design, warm.view());
+                let violators = block_find_kkt_violators(
+                    design,
+                    &surrogate,
+                    r_new.view(),
+                    pen_weights.view(),
+                    &ws,
+                    groups,
+                    lam,
+                    cd_config.tol,
+                );
+                if violators.is_empty() {
+                    break b_new;
+                }
+                expansion_pass += 1;
+                if expansion_pass >= BLOCK_KKT_EXPANSION_PASSES {
+                    // Fall back to the full group set so a pathological
+                    // surrogate can't blow the outer budget. Cost: one
+                    // extra block-CD over all groups.
+                    ws = (0..n_groups).collect();
+                    let (b_full, full_report) = block_cd_solve_subset_with_cache(
+                        warm,
+                        &ws,
+                        &group_lip,
+                        design,
+                        &surrogate,
+                        &*inner_pen,
+                        groups,
+                        cd_config,
+                    );
+                    total_inner += full_report.iter;
+                    break b_full;
+                }
+                ws.extend(violators);
+                ws.sort_unstable();
+                ws.dedup();
+            };
             warm = new_beta;
-            total_inner += inner_report.iter;
 
             // Outer convergence: max group-block L₂ change.
             let mut max_block_change = 0.0_f64;

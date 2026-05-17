@@ -177,6 +177,13 @@ impl GlmDatafit for MultinomialLogit {
     fn loss(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> f64 {
         MultinomialLogit::loss(self, design, beta)
     }
+
+    // Intentionally inherit the `None` defaults for `glm_per_sample_loss_grad`
+    // and `glm_dual_obj`. Multinomial logit has a per-sample dual via the
+    // softmax conjugate, but the natural L1 dual feasibility constraint
+    // couples tasks (block ℓ_∞ across K classes), which would need a
+    // block-shape dual obj method rather than the scalar one this trait
+    // exposes. Out of scope for the M13 GLM-screening milestone.
 }
 
 /// Reshape a length-`nK` task-outer η (as produced by
