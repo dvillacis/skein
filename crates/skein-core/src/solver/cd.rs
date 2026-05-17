@@ -237,9 +237,7 @@ pub fn cd_solve_subset_weighted_ls(
     for &j in features {
         lips[j] = design.col_sq_norm_weighted(j, sw) / n_f;
     }
-    cd_solve_subset_weighted_ls_with_lips(
-        beta_init, features, design, ls, penalty, config, &lips,
-    )
+    cd_solve_subset_weighted_ls_with_lips(beta_init, features, design, ls, penalty, config, &lips)
 }
 
 /// Variant of [`cd_solve_subset_weighted_ls`] that receives a precomputed
@@ -852,7 +850,7 @@ mod tests {
         // across samples.
         let n = 80;
         let p = 20;
-        let mut state: u64 = 0xC0FFEE_C0DE_5678;
+        let mut state: u64 = 0x00C0_FFEE_C0DE_5678;
         let mut next = || {
             state ^= state << 13;
             state ^= state >> 7;
@@ -888,11 +886,9 @@ mod tests {
         let beta_init = Array1::<f64>::zeros(p);
         let features: Vec<usize> = (0..p).collect();
 
-        let (b_ref, rep_ref) =
-            cd_solve_warm(beta_init.clone(), &design, &ls, &penalty, &cfg);
-        let (b_fast, _r, rep_fast) = cd_solve_subset_weighted_ls(
-            beta_init, &features, &design, &ls, &penalty, &cfg,
-        );
+        let (b_ref, rep_ref) = cd_solve_warm(beta_init.clone(), &design, &ls, &penalty, &cfg);
+        let (b_fast, _r, rep_fast) =
+            cd_solve_subset_weighted_ls(beta_init, &features, &design, &ls, &penalty, &cfg);
 
         for j in 0..p {
             assert_abs_diff_eq!(b_ref[j], b_fast[j], epsilon = 1e-9);
@@ -920,17 +916,10 @@ mod tests {
         let beta_init = Array1::<f64>::zeros(3);
         let features: Vec<usize> = (0..3).collect();
 
-        let (b_ref, _, _) = cd_solve_subset(
-            beta_init.clone(),
-            &features,
-            &design,
-            &ls,
-            &penalty,
-            &cfg,
-        );
-        let (b_fast, _, _) = cd_solve_subset_weighted_ls(
-            beta_init, &features, &design, &ls, &penalty, &cfg,
-        );
+        let (b_ref, _, _) =
+            cd_solve_subset(beta_init.clone(), &features, &design, &ls, &penalty, &cfg);
+        let (b_fast, _, _) =
+            cd_solve_subset_weighted_ls(beta_init, &features, &design, &ls, &penalty, &cfg);
         for j in 0..3 {
             assert_eq!(
                 b_ref[j], b_fast[j],
