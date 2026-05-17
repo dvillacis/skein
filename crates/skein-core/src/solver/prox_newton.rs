@@ -294,7 +294,7 @@ mod tests {
     use super::*;
     use crate::datafit::{BinomialLogit, CoxPH, Huber, PoissonLog};
     use crate::design::{DenseMatrix, Standardized};
-    use crate::penalty::Mcp;
+    use crate::penalty::{Mcp, Scad};
     use approx::assert_abs_diff_eq;
     use ndarray::{Array1, Array2};
 
@@ -1098,6 +1098,64 @@ mod tests {
             active <= 65,
             "expected ≤ 65 active features at λ_min; got {} \
              (pre-M14e: ~80, ncvreg at this scale: similar to skein)",
+            active
+        );
+    }
+
+    /// SCAD analog of the MCP bloat-fix gate. Pre-M14e, SCAD had the
+    /// same kind of degeneracy as MCP for GLM IRLS surrogates: the
+    /// middle-branch denominator `1 − step/(a−1)` flips sign when
+    /// `step ≥ a − 1` (≈ 2.7 for default `a = 3.7`), which IRLS step
+    /// `1/L_jj` routinely exceeds when samples saturate. The if-else
+    /// cascade also degenerated because `(1+step)·λ > a·λ` once
+    /// `step > a − 1`, eliminating the middle (SCAD-quadratic)
+    /// region entirely and forcing features above the lasso boundary
+    /// to land in the identity branch (pinned at warm β unchanged).
+    /// M14e's v-scaled SCAD prox in `prox::scad_prox` fixes both
+    /// issues. On the bench-shape problem (n=10k, p=1k)
+    /// logistic_scad now matches logistic_mcp almost exactly: 108
+    /// vs 107 active, 19.4s vs 20.8s.
+    #[test]
+    fn logistic_scad_path_active_set_stays_bounded_at_small_lambda() {
+        let (design, y) = logistic_problem_medium(11);
+        let glm = BinomialLogit::new(y);
+        let p = design.n_features();
+
+        let (betas, report) = prox_newton_solve_path(
+            &design,
+            &glm,
+            |lam| Box::new(Scad::new(lam, 3.7, p)),
+            50,
+            5e-2,
+            None,
+            &CdConfig {
+                max_iter: 1000,
+                tol: 1e-7,
+                acceleration: Some(5),
+            },
+            50,
+            1e-7,
+        );
+
+        let unconverged = report.outer_converged.iter().filter(|&&c| !c).count();
+        assert!(
+            unconverged <= 5,
+            "expected ≤ 5 un-converged λs; got {} (out of 50). converged: {:?}",
+            unconverged,
+            report.outer_converged
+        );
+
+        // Bound looser than MCP's (≤ 65) because SCAD's middle
+        // quadratic region shrinks less aggressively by design — the
+        // penalty curvature is gentler in the transition band. At
+        // this small scale the empirical post-M14e count is ~72;
+        // bound at 85 to gate against a regression toward the pre-M14e
+        // ~p=100 baseline.
+        let last_row = betas.row(betas.nrows() - 1);
+        let active = last_row.iter().filter(|&&b| b != 0.0).count();
+        assert!(
+            active <= 85,
+            "expected ≤ 85 active features at λ_min; got {} (pre-M14e: ~p=100)",
             active
         );
     }
