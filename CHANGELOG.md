@@ -4,7 +4,21 @@ All notable changes to `skein-glm` are recorded here. The project follows
 semantic versioning, with the pre-1.0 minor-bump-on-feature policy
 documented in `docs/extending/rust-api.md`.
 
-## [Unreleased]
+## [0.10.0] — 2026-05-17
+
+Perf milestone: extends the celer-style screening + Anderson dual
+extrapolation infrastructure (shipped LS-only in M10 wave F) across
+the GLM prox-Newton paths. 3–8× wall-clock on `logistic_lasso` v2
+cells without changing the public API (the legacy `prox_newton_solve`
+signature is preserved; opt-in via the new
+`prox_newton_solve_screened` and via `prox_newton_solve_path` /
+`prox_newton_block_solve_path`, which both route through the
+screened variant automatically).
+
+Test count: **397 cargo lib + 8 cargo integration + 455 pytest, all
+green** (up from 387 + 455 at 0.9.0 — 10 new dual-obj unit tests
++ a `prox_newton_screening_matches_no_screening_within_tol`
+regression test).
 
 ### M13.8 — Celer-style gap-safe screening on the GLM prox-Newton surrogate
 
