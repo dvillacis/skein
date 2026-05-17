@@ -222,6 +222,172 @@ fn find_kkt_violators_batched(
     violators
 }
 
+/// Fused IRLS + CD GLM solver — ncvreg's `src/glm.c::cdfit_glm` pattern.
+///
+/// Differs from [`prox_newton_solve`] by collapsing the per-outer-iter
+/// "build full surrogate + run inner CD to tol" pattern into a single
+/// fused loop where each iteration both refreshes the IRLS surrogate
+/// components (`w`, `r`) at the current `eta` and performs ONE sweep
+/// through the active set. This eliminates the upfront `O(n·p)` work
+/// (`lips_arr` + `grad0`) that the classic solver pays per outer iter
+/// — the per-feature `xwr` and `xwx` are computed lazily inside the
+/// sweep, costing `O(n·|active|)` total. On the bench-shape
+/// `logistic_mcp medium-sparse` problem this closes most of the
+/// 6× wall-clock gap to ncvreg (target ~5s, vs classic skein 20s
+/// and ncvreg 3.3s).
+///
+/// The function maintains state `(β, η, w, r)` where:
+///   - `β` is the coefficient vector (updated in place)
+///   - `η = X β` is the linear predictor (updated incrementally as
+///     `η ← η + shift · X[:, j]` whenever a coordinate changes)
+///   - `w` and `r` are the IRLS surrogate's per-sample weight and
+///     working residual; refreshed from `η` at the start of each
+///     iter via `GlmDatafit::refresh_surrogate_components`
+///
+/// Working-set strategy mirrors ncvreg's two-tier scan:
+///   1. Inner loop iterates until `max_change < tol` on the current
+///      active set `ws`.
+///   2. After inner converges, scan all features outside `ws` for
+///      KKT violators (using the same `find_kkt_violators_batched`
+///      the classic solver uses).
+///   3. Add violators to `ws` and re-enter step 1.
+///   4. If no violators, the path-level optimum at this λ is reached.
+///
+/// **Precondition:** `glm.refresh_surrogate_components` must be
+/// implemented (the default `unimplemented!()`). All of `BinomialLogit`,
+/// `PoissonLog`, `CoxPH` provide it; other datafits do not and must
+/// route through [`prox_newton_solve`] instead.
+#[allow(clippy::too_many_arguments)]
+pub fn prox_newton_fused_solve(
+    design: &dyn DesignMatrix,
+    glm: &dyn GlmDatafit,
+    penalty: &dyn Penalty,
+    init_beta: Array1<f64>,
+    cd_config: &CdConfig,
+    max_outer: usize,
+    outer_tol: f64,
+) -> (Array1<f64>, ProxNewtonReport) {
+    let n = design.n_samples();
+    let p = design.n_features();
+    let n_f = n as f64;
+    debug_assert_eq!(init_beta.len(), p, "init_beta length must equal n_features");
+
+    let mut beta = init_beta;
+    let mut eta = design.matvec(beta.view());
+    let mut w = Array1::<f64>::zeros(n);
+    let mut r = Array1::<f64>::zeros(n);
+    glm.refresh_surrogate_components(eta.view(), w.view_mut(), r.view_mut());
+
+    let weights: Array1<f64> = penalty.weights().to_owned();
+
+    // Seed the working set via the strong-rule screen on the initial
+    // gradient at `warm`. Gradient = `-(1/n) · X^T (w · r)`, derived
+    // lazily from one column-dot pass.
+    let mut grad0 = Array1::<f64>::zeros(p);
+    for j in 0..p {
+        grad0[j] = -design.col_dot_weighted(j, w.view(), r.view()) / n_f;
+    }
+    let n_support = beta.iter().filter(|&&b| b != 0.0).count();
+    let ws_size = (n_support * 2).max(PROX_NEWTON_P0).min(p);
+    let mut ws = priority_rule_screen_with_grad(grad0.view(), weights.view(), beta.view(), ws_size);
+
+    let mut total_iters = 0usize;
+    let mut total_inner = 0usize;
+    let mut converged = false;
+
+    // Outer KKT-expansion loop (ncvreg's "strong set" tier).
+    'outer: loop {
+        // Inner fused loop: refresh surrogate, sweep active features,
+        // check convergence.
+        let mut inner_converged = false;
+        for _ in 0..max_outer {
+            total_iters += 1;
+            total_inner += 1;
+            glm.refresh_surrogate_components(eta.view(), w.view_mut(), r.view_mut());
+
+            let mut max_change = 0.0_f64;
+            for &j in &ws {
+                let xwr = design.col_dot_weighted(j, w.view(), r.view());
+                let xwx = design.col_sq_norm_weighted(j, w.view());
+                let v = xwx / n_f;
+                if v <= 0.0 {
+                    continue;
+                }
+                let u = xwr / n_f + v * beta[j];
+                // Translate to skein's `prox_coord(z, step)` API:
+                //   skein z = β_j - step · grad_j
+                //   step = 1 / v
+                //   z = u / v
+                let step = 1.0 / v;
+                let z = u / v;
+                let new_b = penalty.prox_coord(j, z, step);
+                let shift = new_b - beta[j];
+                if shift != 0.0 {
+                    beta[j] = new_b;
+                    // Incremental updates: r ← r − shift · X[:, j] and
+                    // η ← η + shift · X[:, j]. Two column reads per
+                    // changed coord — no combined primitive exists,
+                    // but the column is cache-hot from the just-prior
+                    // `col_dot_weighted` / `col_sq_norm_weighted`.
+                    design.col_axpy(j, -shift, r.view_mut());
+                    design.col_axpy(j, shift, eta.view_mut());
+                    let change = shift.abs() * v.sqrt();
+                    if change > max_change {
+                        max_change = change;
+                    }
+                }
+            }
+
+            if max_change < cd_config.tol {
+                inner_converged = true;
+                break;
+            }
+        }
+
+        if !inner_converged {
+            // Hit max_outer without inner convergence on the current
+            // ws. The classic solver's pattern is to keep iterating;
+            // here we surface this as outer non-convergence and bail.
+            break;
+        }
+
+        // KKT scan on features outside ws. Compute the full lips +
+        // gradient ONLY at this expansion check (not per inner iter).
+        let lips_arr = design.weighted_col_sq_norms(w.view());
+        let lips: Vec<f64> = lips_arr.iter().map(|&v| v / n_f).collect();
+        let mut grad_full = Array1::<f64>::zeros(p);
+        for j in 0..p {
+            grad_full[j] = -design.col_dot_weighted(j, w.view(), r.view()) / n_f;
+        }
+        let violators = find_kkt_violators_batched(
+            penalty,
+            beta.view(),
+            grad_full.view(),
+            &lips,
+            &ws,
+            outer_tol,
+        );
+        if violators.is_empty() {
+            converged = true;
+            break 'outer;
+        }
+        ws.extend(violators);
+        ws.sort_unstable();
+        ws.dedup();
+    }
+
+    let final_loss = glm.loss(design, beta.view());
+    (
+        beta,
+        ProxNewtonReport {
+            outer_iters: total_iters,
+            outer_converged: converged,
+            inner_iters: vec![1; total_inner],
+            final_loss,
+        },
+    )
+}
+
 /// λ-path prox-Newton solve. Each row of the returned matrix is the β at
 /// the corresponding λ; β warm-starts across the path. Auto-grid uses
 /// `lambda_max` on the surrogate at `β = 0`.
@@ -268,6 +434,72 @@ where
         let pen = make_penalty(lam);
         let (new_beta, report) =
             prox_newton_solve(design, glm, &*pen, warm, cd_config, max_outer, outer_tol);
+        warm = new_beta;
+        betas.row_mut(k).assign(&warm);
+        outer_iters_out.push(report.outer_iters);
+        outer_converged_out.push(report.outer_converged);
+        let total_inner: usize = report.inner_iters.iter().sum();
+        inner_iters_out.push(total_inner);
+        final_losses_out.push(report.final_loss);
+    }
+
+    (
+        betas,
+        ProxNewtonPathReport {
+            lambdas,
+            outer_iters: outer_iters_out,
+            outer_converged: outer_converged_out,
+            inner_iters: inner_iters_out,
+            final_losses: final_losses_out,
+        },
+    )
+}
+
+/// λ-path wrapper around [`prox_newton_fused_solve`]. Same signature
+/// as [`prox_newton_solve_path`]; callers swap by name. Used by the
+/// Python `solve_{logistic,poisson,cox}_{mcp,scad}_path` bindings
+/// since M14f. ElasticNet GLM bindings stay on `prox_newton_solve_path`
+/// (convex penalty, upfront `lips` amortizes fine).
+#[allow(clippy::too_many_arguments)]
+pub fn prox_newton_fused_solve_path<F>(
+    design: &dyn DesignMatrix,
+    glm: &dyn GlmDatafit,
+    make_penalty: F,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    explicit_lambdas: Option<Vec<f64>>,
+    cd_config: &CdConfig,
+    max_outer: usize,
+    outer_tol: f64,
+) -> (Array2<f64>, ProxNewtonPathReport)
+where
+    F: Fn(f64) -> Box<dyn Penalty>,
+{
+    let p = design.n_features();
+
+    let lambdas = match explicit_lambdas {
+        Some(v) => v,
+        None => {
+            let beta_zero = Array1::<f64>::zeros(p);
+            let surrogate0 = glm.surrogate_at(design, beta_zero.view());
+            let sample_pen = make_penalty(1.0);
+            let lam_max = lambda_max(design, &surrogate0, sample_pen.weights());
+            lambda_grid(lam_max, n_lambdas, lambda_min_ratio)
+        }
+    };
+
+    let n_lams = lambdas.len();
+    let mut betas = Array2::<f64>::zeros((n_lams, p));
+    let mut warm = Array1::<f64>::zeros(p);
+    let mut outer_iters_out = Vec::with_capacity(n_lams);
+    let mut outer_converged_out = Vec::with_capacity(n_lams);
+    let mut inner_iters_out = Vec::with_capacity(n_lams);
+    let mut final_losses_out = Vec::with_capacity(n_lams);
+
+    for (k, &lam) in lambdas.iter().enumerate() {
+        let pen = make_penalty(lam);
+        let (new_beta, report) =
+            prox_newton_fused_solve(design, glm, &*pen, warm, cd_config, max_outer, outer_tol);
         warm = new_beta;
         betas.row_mut(k).assign(&warm);
         outer_iters_out.push(report.outer_iters);
@@ -1158,5 +1390,111 @@ mod tests {
             "expected ≤ 85 active features at λ_min; got {} (pre-M14e: ~p=100)",
             active
         );
+    }
+
+    /// M14f cross-solver agreement: the fused IRLS+CD solver should
+    /// converge to a β within tight tolerance of the classic solver on
+    /// the same problem. The math problem solved is identical (v-scaled
+    /// MCP via M14e); only the iteration strategy differs.
+    #[test]
+    fn fused_solve_matches_classic_logistic_mcp() {
+        let (design, y, _) = logistic_problem(3);
+        let glm = BinomialLogit::new(y);
+        let p = design.n_features();
+        let lambda = 0.05;
+        let cfg = CdConfig {
+            max_iter: 5000,
+            tol: 1e-10,
+            acceleration: None,
+        };
+        let (beta_classic, _) = prox_newton_solve(
+            &design,
+            &glm,
+            &Mcp::new(lambda, 3.0, p),
+            Array1::<f64>::zeros(p),
+            &cfg,
+            50,
+            1e-8,
+        );
+        let (beta_fused, _) = prox_newton_fused_solve(
+            &design,
+            &glm,
+            &Mcp::new(lambda, 3.0, p),
+            Array1::<f64>::zeros(p),
+            &cfg,
+            500, // fused inner is cheaper per iter → can afford more
+            1e-8,
+        );
+        for j in 0..p {
+            assert_abs_diff_eq!(beta_fused[j], beta_classic[j], epsilon = 1e-4);
+        }
+    }
+
+    #[test]
+    fn fused_solve_matches_classic_poisson_mcp() {
+        let (design, y, _) = poisson_problem(5);
+        let glm = PoissonLog::new(y);
+        let p = design.n_features();
+        let lambda = 0.05;
+        let cfg = CdConfig {
+            max_iter: 5000,
+            tol: 1e-10,
+            acceleration: None,
+        };
+        let (beta_classic, _) = prox_newton_solve(
+            &design,
+            &glm,
+            &Mcp::new(lambda, 3.0, p),
+            Array1::<f64>::zeros(p),
+            &cfg,
+            50,
+            1e-8,
+        );
+        let (beta_fused, _) = prox_newton_fused_solve(
+            &design,
+            &glm,
+            &Mcp::new(lambda, 3.0, p),
+            Array1::<f64>::zeros(p),
+            &cfg,
+            500,
+            1e-8,
+        );
+        for j in 0..p {
+            assert_abs_diff_eq!(beta_fused[j], beta_classic[j], epsilon = 1e-4);
+        }
+    }
+
+    #[test]
+    fn fused_solve_matches_classic_cox_mcp() {
+        let (design, time, event, _) = cox_problem(7);
+        let glm = CoxPH::new(time, event);
+        let p = design.n_features();
+        let lambda = 0.05;
+        let cfg = CdConfig {
+            max_iter: 5000,
+            tol: 1e-10,
+            acceleration: None,
+        };
+        let (beta_classic, _) = prox_newton_solve(
+            &design,
+            &glm,
+            &Mcp::new(lambda, 3.0, p),
+            Array1::<f64>::zeros(p),
+            &cfg,
+            50,
+            1e-8,
+        );
+        let (beta_fused, _) = prox_newton_fused_solve(
+            &design,
+            &glm,
+            &Mcp::new(lambda, 3.0, p),
+            Array1::<f64>::zeros(p),
+            &cfg,
+            500,
+            1e-8,
+        );
+        for j in 0..p {
+            assert_abs_diff_eq!(beta_fused[j], beta_classic[j], epsilon = 1e-4);
+        }
     }
 }

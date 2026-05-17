@@ -33,6 +33,7 @@ pub use lla::{
 pub use path::{lambda_grid, lambda_max, solve_path, PathConfig, PathReport, Screening};
 pub use path_lla::{solve_path_lla, PathLLAReport};
 pub use prox_newton::{
-    prox_newton_solve, prox_newton_solve_path, ProxNewtonPathReport, ProxNewtonReport,
+    prox_newton_fused_solve, prox_newton_fused_solve_path, prox_newton_solve,
+    prox_newton_solve_path, ProxNewtonPathReport, ProxNewtonReport,
 };
 pub use prox_newton_block::{prox_newton_block_solve_path, ProxNewtonBlockPathReport};

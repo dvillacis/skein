@@ -31,7 +31,8 @@ use skein_core::{
         ElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad, SparseGroupLasso, SparseGroupMcp,
     },
     solver::{
-        prox_newton_block_solve_path, prox_newton_solve_path, surrogate_sparse_group_scad, CdConfig,
+        prox_newton_block_solve_path, prox_newton_fused_solve_path, prox_newton_solve_path,
+        surrogate_sparse_group_scad, CdConfig,
     },
     Penalty,
 };
@@ -227,6 +228,7 @@ fn build_glm_path_outputs<'py, F, V, G>(
     validate_y: V,
     make_glm: G,
     make_penalty: F,
+    use_fused: bool,
 ) -> PyResult<crate::ls::PathOutput<'py>>
 where
     F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty> + Send,
@@ -322,13 +324,33 @@ where
     // Release the GIL during the heavy compute so Python-side thread
     // pools (CV fold loops, joblib in stability selection, debiased
     // lasso nodewise loop, etc.) actually run concurrently.
-    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
-        Some(scales) => {
+    // Branch on `use_fused`: GLM × MCP/SCAD routes through the M14f
+    // fused IRLS+CD solver (`prox_newton_fused_solve_path`); GLM ×
+    // ElasticNet / Huber × {MCP, SCAD} stay on the classic solver.
+    let (betas_aug, report) = py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
+        (Some(scales), true) => {
             let mut x_scale_eff = Array1::<f64>::ones(design.n_features());
             for j in 0..p_user {
                 x_scale_eff[j] = scales[j];
             }
-            // Intercept column (last) stays at 1.0.
+            let std_design = Standardized::new(design, x_scale_eff);
+            prox_newton_fused_solve_path(
+                &std_design,
+                &*glm,
+                make_pen,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
+            )
+        }
+        (Some(scales), false) => {
+            let mut x_scale_eff = Array1::<f64>::ones(design.n_features());
+            for j in 0..p_user {
+                x_scale_eff[j] = scales[j];
+            }
             let std_design = Standardized::new(design, x_scale_eff);
             prox_newton_solve_path(
                 &std_design,
@@ -342,7 +364,18 @@ where
                 outer_tol,
             )
         }
-        None => prox_newton_solve_path(
+        (None, true) => prox_newton_fused_solve_path(
+            &design,
+            &*glm,
+            make_pen,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
+        ),
+        (None, false) => prox_newton_solve_path(
             &design,
             &*glm,
             make_pen,
@@ -428,6 +461,7 @@ pub(crate) fn solve_logistic_mcp_path<'py>(
             None => Box::new(BinomialLogit::new(y_arr)),
         },
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
+        true,
     )
 }
 
@@ -480,6 +514,7 @@ pub(crate) fn solve_logistic_scad_path<'py>(
             None => Box::new(BinomialLogit::new(y_arr)),
         },
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
+        true,
     )
 }
 
@@ -537,6 +572,7 @@ pub(crate) fn solve_logistic_elastic_net_path<'py>(
             None => Box::new(BinomialLogit::new(y_arr)),
         },
         move |lam, w| Box::new(ElasticNet::with_weights(lam, alpha, w)),
+        false,
     )
 }
 
@@ -601,6 +637,7 @@ pub(crate) fn solve_huber_mcp_path<'py>(
             None => Box::new(Huber::new(y_arr, delta)),
         },
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
+        false,
     )
 }
 
@@ -659,6 +696,7 @@ pub(crate) fn solve_huber_scad_path<'py>(
             None => Box::new(Huber::new(y_arr, delta)),
         },
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
+        false,
     )
 }
 
@@ -1276,6 +1314,7 @@ pub(crate) fn solve_poisson_mcp_path<'py>(
         validate_y_nonneg,
         make_glm,
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
+        true,
     )
 }
 
@@ -1328,6 +1367,7 @@ pub(crate) fn solve_poisson_scad_path<'py>(
         validate_y_nonneg,
         make_glm,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
+        true,
     )
 }
 
@@ -1385,6 +1425,7 @@ pub(crate) fn solve_poisson_elastic_net_path<'py>(
         validate_y_nonneg,
         make_glm,
         move |lam, w| Box::new(ElasticNet::with_weights(lam, alpha, w)),
+        false,
     )
 }
 
@@ -1848,6 +1889,7 @@ fn build_cox_path_outputs<'py, F>(
     outer_tol: f64,
     ties: TieHandling,
     make_penalty: F,
+    use_fused: bool,
 ) -> PyResult<crate::ls::PathOutput<'py>>
 where
     F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty> + Send,
@@ -1913,8 +1955,22 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (mut betas, report) = py.allow_threads(|| match scales_user.as_ref() {
-        Some(scales) => {
+    let (mut betas, report) = py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
+        (Some(scales), true) => {
+            let std_design = Standardized::new(design, scales.clone());
+            prox_newton_fused_solve_path(
+                &std_design,
+                &glm,
+                make_pen,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
+            )
+        }
+        (Some(scales), false) => {
             let std_design = Standardized::new(design, scales.clone());
             prox_newton_solve_path(
                 &std_design,
@@ -1928,7 +1984,18 @@ where
                 outer_tol,
             )
         }
-        None => prox_newton_solve_path(
+        (None, true) => prox_newton_fused_solve_path(
+            &design,
+            &glm,
+            make_pen,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
+        ),
+        (None, false) => prox_newton_solve_path(
             &design,
             &glm,
             make_pen,
@@ -2160,6 +2227,7 @@ pub(crate) fn solve_cox_mcp_path<'py>(
         outer_tol,
         ties,
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
+        true,
     )
 }
 
@@ -2208,6 +2276,7 @@ pub(crate) fn solve_cox_scad_path<'py>(
         outer_tol,
         ties,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
+        true,
     )
 }
 
@@ -2550,6 +2619,7 @@ fn build_glm_path_outputs_sparse<'py, F, V, G>(
     validate_y: V,
     make_glm: G,
     make_penalty: F,
+    use_fused: bool,
 ) -> PyResult<crate::ls::PathOutput<'py>>
 where
     F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty> + Send,
@@ -2614,8 +2684,26 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
-        Some(scales) => {
+    let (betas_aug, report) = py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
+        (Some(scales), true) => {
+            let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
+            for j in 0..n_cols {
+                x_scale_eff[j] = scales[j];
+            }
+            let std_design = Standardized::new(csc_eff, x_scale_eff);
+            prox_newton_fused_solve_path(
+                &std_design,
+                &*glm,
+                make_pen,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
+            )
+        }
+        (Some(scales), false) => {
             let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
             for j in 0..n_cols {
                 x_scale_eff[j] = scales[j];
@@ -2633,7 +2721,18 @@ where
                 outer_tol,
             )
         }
-        None => prox_newton_solve_path(
+        (None, true) => prox_newton_fused_solve_path(
+            &csc_eff,
+            &*glm,
+            make_pen,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
+        ),
+        (None, false) => prox_newton_solve_path(
             &csc_eff,
             &*glm,
             make_pen,
@@ -2855,6 +2954,7 @@ fn build_cox_path_outputs_sparse<'py, F>(
     outer_tol: f64,
     ties: TieHandling,
     make_penalty: F,
+    use_fused: bool,
 ) -> PyResult<crate::ls::PathOutput<'py>>
 where
     F: Fn(f64, ndarray::Array1<f64>) -> Box<dyn Penalty> + Send,
@@ -2915,8 +3015,22 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (mut betas, report) = py.allow_threads(|| match scales_user.as_ref() {
-        Some(scales) => {
+    let (mut betas, report) = py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
+        (Some(scales), true) => {
+            let std_design = Standardized::new(csc, scales.clone());
+            prox_newton_fused_solve_path(
+                &std_design,
+                &glm,
+                make_pen,
+                n_lambdas,
+                lambda_min_ratio,
+                lambdas_vec,
+                &cd_cfg,
+                max_outer,
+                outer_tol,
+            )
+        }
+        (Some(scales), false) => {
             let std_design = Standardized::new(csc, scales.clone());
             prox_newton_solve_path(
                 &std_design,
@@ -2930,7 +3044,18 @@ where
                 outer_tol,
             )
         }
-        None => prox_newton_solve_path(
+        (None, true) => prox_newton_fused_solve_path(
+            &csc,
+            &glm,
+            make_pen,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
+        ),
+        (None, false) => prox_newton_solve_path(
             &csc,
             &glm,
             make_pen,
@@ -3172,6 +3297,7 @@ pub(crate) fn solve_logistic_mcp_path_sparse<'py>(
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
+        true,
     )
 }
 
@@ -3226,6 +3352,7 @@ pub(crate) fn solve_logistic_scad_path_sparse<'py>(
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
+        true,
     )
 }
 
@@ -3285,6 +3412,7 @@ pub(crate) fn solve_logistic_elastic_net_path_sparse<'py>(
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |lam, w| Box::new(ElasticNet::with_weights(lam, alpha, w)),
+        false,
     )
 }
 
@@ -3700,6 +3828,7 @@ pub(crate) fn solve_poisson_mcp_path_sparse<'py>(
         validate_y_nonneg,
         make_glm,
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
+        true,
     )
 }
 
@@ -3756,6 +3885,7 @@ pub(crate) fn solve_poisson_scad_path_sparse<'py>(
         validate_y_nonneg,
         make_glm,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
+        true,
     )
 }
 
@@ -3817,6 +3947,7 @@ pub(crate) fn solve_poisson_elastic_net_path_sparse<'py>(
         validate_y_nonneg,
         make_glm,
         move |lam, w| Box::new(ElasticNet::with_weights(lam, alpha, w)),
+        false,
     )
 }
 
@@ -4242,6 +4373,7 @@ pub(crate) fn solve_cox_mcp_path_sparse<'py>(
         outer_tol,
         ties,
         move |lam, w| Box::new(Mcp::with_weights(lam, gamma, w)),
+        true,
     )
 }
 
@@ -4298,6 +4430,7 @@ pub(crate) fn solve_cox_scad_path_sparse<'py>(
         outer_tol,
         ties,
         move |lam, w| Box::new(Scad::with_weights(lam, a, w)),
+        true,
     )
 }
 

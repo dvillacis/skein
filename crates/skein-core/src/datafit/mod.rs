@@ -28,7 +28,7 @@ pub use multinomial_logit::MultinomialLogit;
 pub use poisson_log::PoissonLog;
 
 use crate::design::DesignMatrix;
-use ndarray::{Array1, ArrayView1};
+use ndarray::{Array1, ArrayView1, ArrayViewMut1};
 
 /// GLM-shaped datafit: exposes a local quadratic surrogate `surrogate_at(β)`
 /// (the prox-Newton IRLS step) and the original (non-quadratic) `loss(β)`
@@ -49,6 +49,39 @@ pub trait GlmDatafit: Sync + Send {
     /// implementor's docs for the exact formula). Used by the outer loop
     /// for reporting only.
     fn loss(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> f64;
+
+    /// Refresh the IRLS surrogate components in-place from a given
+    /// linear predictor `eta`. The fused IRLS+CD solver in
+    /// `solver::prox_newton::prox_newton_fused_solve` calls this once
+    /// per outer iter, with `eta` maintained incrementally across
+    /// coordinate updates (no need for a fresh `X·β` matvec).
+    ///
+    /// Writes to two output buffers:
+    /// - `w_out[i] = effective per-sample IRLS weight` (incorporates
+    ///   the GLM's Hessian-diagonal floor at `W_FLOOR` and any user-
+    ///   supplied `sample_weights`).
+    /// - `r_out[i] = (y_i − μ_i) / w_raw_i` = the **working residual**
+    ///   in classical IRLS notation. Note: divides by the unscaled
+    ///   `w_raw`, not the scaled `w_out[i]`, so `Σ x_ij · w_out_i · r_i
+    ///   = Σ x_ij · scale_i · (y_i − μ_i)` — the natural form of the
+    ///   coordinate gradient.
+    ///
+    /// Default impl is `unimplemented!()`; override in GLMs that want
+    /// to support the fused solver (BinomialLogit / PoissonLog /
+    /// CoxPH). Out-of-scope implementors (Huber, MultinomialLogit)
+    /// keep the default and are routed through the classic
+    /// `prox_newton_solve` instead.
+    fn refresh_surrogate_components(
+        &self,
+        _eta: ArrayView1<'_, f64>,
+        _w_out: ArrayViewMut1<'_, f64>,
+        _r_out: ArrayViewMut1<'_, f64>,
+    ) {
+        unimplemented!(
+            "refresh_surrogate_components must be overridden to route through \
+             prox_newton_fused_solve; classic prox_newton_solve does not require it"
+        );
+    }
 }
 
 pub trait Datafit: Sync + Send {

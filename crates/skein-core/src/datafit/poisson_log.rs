@@ -41,7 +41,7 @@
 use super::{GlmDatafit, LeastSquares};
 use crate::design::DesignMatrix;
 use crate::numerics::{ETA_CLAMP, W_FLOOR};
-use ndarray::{Array1, ArrayView1};
+use ndarray::{Array1, ArrayView1, ArrayViewMut1};
 
 /// Poisson regression with non-negative count outcomes and the canonical
 /// log link.
@@ -204,6 +204,29 @@ impl GlmDatafit for PoissonLog {
 
     fn loss(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> f64 {
         PoissonLog::loss(self, design, beta)
+    }
+
+    fn refresh_surrogate_components(
+        &self,
+        eta: ArrayView1<'_, f64>,
+        mut w_out: ArrayViewMut1<'_, f64>,
+        mut r_out: ArrayViewMut1<'_, f64>,
+    ) {
+        // The fused solver passes the un-offset `eta = X·β`; we
+        // recombine with the optional offset here and apply the
+        // ETA_CLAMP exactly as `surrogate_at` does.
+        let n = eta.len();
+        debug_assert_eq!(w_out.len(), n);
+        debug_assert_eq!(r_out.len(), n);
+        for i in 0..n {
+            let offset_i = self.offset.as_ref().map(|o| o[i]).unwrap_or(0.0);
+            let eta_c = (eta[i] + offset_i).clamp(-ETA_CLAMP, ETA_CLAMP);
+            let mu = eta_c.exp();
+            let w_raw = mu.max(W_FLOOR);
+            let scale = self.sample_weights.as_ref().map(|sw| sw[i]).unwrap_or(1.0);
+            w_out[i] = scale * w_raw;
+            r_out[i] = (self.y[i] - mu) / w_raw;
+        }
     }
 }
 

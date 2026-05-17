@@ -50,7 +50,7 @@
 use super::{GlmDatafit, LeastSquares};
 use crate::design::DesignMatrix;
 use crate::numerics::{ETA_CLAMP, W_FLOOR};
-use ndarray::{Array1, ArrayView1};
+use ndarray::{Array1, ArrayView1, ArrayViewMut1};
 
 /// Tie-handling method for `CoxPH`. See module docs for the math.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -331,6 +331,43 @@ impl GlmDatafit for CoxPH {
 
     fn loss(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> f64 {
         CoxPH::loss(self, design, beta)
+    }
+
+    fn refresh_surrogate_components(
+        &self,
+        eta: ArrayView1<'_, f64>,
+        mut w_out: ArrayViewMut1<'_, f64>,
+        mut r_out: ArrayViewMut1<'_, f64>,
+    ) {
+        // Mirrors `CoxPH::surrogate_at` minus the matvec; the caller's
+        // fused solver maintains `eta = X·β` incrementally. Cox doesn't
+        // expose user `sample_weights`, so `w_out[i] = w_floored` and
+        // `r_out[i] = -g_raw_i / w_floored_i` (the surrogate's
+        // `z_i − η_i` working residual).
+        let n = eta.len();
+        debug_assert_eq!(w_out.len(), n);
+        debug_assert_eq!(r_out.len(), n);
+
+        // Snapshot eta into an owned Array so the helpers (which take
+        // `&Array1<f64>`) can call it.
+        let eta_owned = eta.to_owned();
+        let exp_eta_sorted = self.exp_eta_in_sort_order(&eta_owned);
+        let s = self.compute_s_per_sample(&exp_eta_sorted);
+        let (cum_h, cum_h2) = self.compute_cum_h(&s, &exp_eta_sorted);
+
+        for (k, &orig) in self.sort_order.iter().enumerate() {
+            let exp_eta_k = exp_eta_sorted[k];
+            let cum_h_k = cum_h[k];
+            let cum_h2_k = cum_h2[k];
+            let event_k = self.event[orig];
+
+            let w_raw = exp_eta_k * cum_h_k - exp_eta_k * exp_eta_k * cum_h2_k;
+            let w_floored = w_raw.max(W_FLOOR);
+            let g_raw = -event_k + exp_eta_k * cum_h_k;
+
+            w_out[orig] = w_floored;
+            r_out[orig] = -g_raw / w_floored;
+        }
     }
 }
 

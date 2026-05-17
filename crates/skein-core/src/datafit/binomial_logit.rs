@@ -22,7 +22,7 @@
 use super::{GlmDatafit, LeastSquares};
 use crate::design::DesignMatrix;
 use crate::numerics::W_FLOOR;
-use ndarray::{Array1, ArrayView1};
+use ndarray::{Array1, ArrayView1, ArrayViewMut1};
 
 /// Binomial logistic regression with binary labels in `{0, 1}`.
 ///
@@ -116,6 +116,24 @@ impl GlmDatafit for BinomialLogit {
 
     fn loss(&self, design: &dyn DesignMatrix, beta: ArrayView1<'_, f64>) -> f64 {
         BinomialLogit::loss(self, design, beta)
+    }
+
+    fn refresh_surrogate_components(
+        &self,
+        eta: ArrayView1<'_, f64>,
+        mut w_out: ArrayViewMut1<'_, f64>,
+        mut r_out: ArrayViewMut1<'_, f64>,
+    ) {
+        let n = eta.len();
+        debug_assert_eq!(w_out.len(), n);
+        debug_assert_eq!(r_out.len(), n);
+        for i in 0..n {
+            let p = sigmoid(eta[i]);
+            let w_raw = (p * (1.0 - p)).max(W_FLOOR);
+            let scale = self.sample_weights.as_ref().map(|sw| sw[i]).unwrap_or(1.0);
+            w_out[i] = scale * w_raw;
+            r_out[i] = (self.y[i] - p) / w_raw;
+        }
     }
 }
 
