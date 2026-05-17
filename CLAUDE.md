@@ -10,14 +10,10 @@ nonconvex, graphical lasso family, etc. The Rust crates do all the
 numerics; the Python package is a sklearn-compatible facade over PyO3
 bindings.
 
-See `ROADMAP.md` for the full milestone plan and current status. As of
-v0.10.0: M0–M2, M5, M8, M11, M12 done; M3/M4/M6/M7 partial (demand-
-driven follow-ups); M9 done for LS family; M10 shipped through wave F;
-M13 shipped through M13.4c (native group MCP for all GLM families) +
-M13.8 (celer-style gap-safe screening on the GLM prox-Newton surrogate,
-2.2–8.2× wall on `logistic_lasso` v2 cells); M14a / M14c shipped, M14b
-(paper) pending. `README.md` has the public-facing pitch and headline
-benchmark numbers.
+Current shipping version: **v0.10.0**. `ROADMAP.md` is the authoritative
+milestone plan and status table; `README.md` is the public-facing pitch
+and headline benchmark numbers; `CHANGELOG.md` is the per-release
+narrative. Don't restate any of those here.
 
 ## Build & test
 
@@ -37,17 +33,28 @@ maturin develop                                        # dev profile (no BLAS); 
 pytest                           # all python tests
 pytest tests/test_smoke.py -k name_substring   # single test
 
-# Pre-PR checks (mirror CI)
+# Pre-PR checks (mirror CI, in order)
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p skein-core --lib solve_path_screening_on_matches_screening_off_within_tol -- --nocapture
+cargo test -p skein-core --lib              # the rust gate; workspace test is NOT a gate
+maturin develop --release --features=blas-accelerate   # or blas-openblas on Linux
 ruff check python/ tests/
 mypy python/
+pytest tests/                                # ~8 s on a warm cache
 sphinx-build -W -b html docs docs/_build/html   # docs build is -W (warnings = errors)
 ```
 
-CI runs `cargo test -p skein-core --lib` only — workspace-level
-`cargo test` is **not** the gate, and the PyO3 bindings crate has no
-standalone Rust tests (it's exercised via pytest after `maturin develop`).
+**What CI actually runs** (`.github/workflows/ci.yml`): a `rust` job on
+ubuntu + macos with the five rust steps above (fmt → clippy → solver
+pre-flight → `cargo test -p skein-core --lib`), and a `python` job on
+ubuntu + macos × {3.10, 3.11, 3.12} that does `pip install -e ".[dev]"`
+(which triggers maturin under `MATURIN_PEP517_ARGS="--profile dev"`) →
+import smoke → ruff → mypy → pytest. The workspace-level `cargo test`
+is **not** the gate, and the PyO3 bindings crate has no standalone Rust
+tests (exercised via pytest after `maturin develop`). The `bench-smoke`
+workflow runs two `benches/v2` cells per PR to catch pipeline breakage;
+the `wheels.yml` workflow builds + publishes on tag push.
 
 ## Benchmarks
 
@@ -204,3 +211,106 @@ threshold (e.g. `gap < tol²` becoming `1e-24`) makes `solve_path` sweep
   at true support). User-facing prose says "dense" instead of "deep"
   to describe what the *solution* does at the tail; the internal key
   stays `deep` for back-compat with committed snapshots.
+
+## Releases
+
+A release is `git tag v$X.$Y.$Z && git push origin v$X.$Y.$Z`. The tag
+push triggers `wheels.yml` to build cibuildwheel wheels for Linux
+(x86_64 + aarch64), macOS (arm64 + x86_64), and Windows (AMD64), and
+publish to PyPI via Trusted Publishers (no API token — the `pending`
+publisher trick is documented in the workflow header). **The tag push
+is the irreversible step. Do not push a tag until every CI gate is
+verified green.**
+
+Semver policy (per `docs/extending/rust-api.md`): we're 0.x, so any
+release may break incidental `pub` items. New trait methods with
+non-trivial `None`/default impls bump the **minor**; bug fixes bump the
+**patch**. The public surface re-exported in `lib.rs` follows the v0.x
+stability promise per ROADMAP M8.
+
+### Release-prep checklist
+
+1. **Bump versions.** Both files must move together:
+   - `Cargo.toml` → `[workspace.package] version = "X.Y.Z"`
+   - `pyproject.toml` → `[project] version = "X.Y.Z"`
+   - Run `cargo check` once to refresh `Cargo.lock` (the workspace
+     bump propagates to `skein-core` and `skein-py`).
+2. **Move the CHANGELOG.** Rename `## [Unreleased]` to
+   `## [X.Y.Z] — YYYY-MM-DD`. Date is the calendar date of the tag,
+   not the implementation date. Don't leave an empty `[Unreleased]`
+   header behind.
+3. **Update version pointers.** The one-line status line in this file
+   ("Current shipping version: vX.Y.Z") and any matching line in
+   `docs/index.md` / `README.md`.
+4. **Verify CI locally on HEAD (not your working tree).** See below.
+5. **Commit the release.** Subject `release(vX.Y.Z): ...`. Body
+   summarises the major work + a `git tag` reminder.
+6. **Tag and push** — `git tag vX.Y.Z && git push origin main vX.Y.Z`.
+   Watch the `wheels.yml` run; the PyPI publish job is gated by `if:`
+   so a failed build won't ship a half-broken wheel.
+
+### Verifying CI locally — gotchas from past misses
+
+The whole point of local verification is to fail fast before the tag
+push. Two failure modes have bitten us, both of which CI catches but
+local-only runs miss:
+
+**(1) `cargo fmt --check` and `cargo clippy` must run against HEAD,
+not your working tree.** Working trees accumulate ad-hoc fmt fixes
+across sessions (rustfmt sweeps every `.rs` file in the workspace, not
+just the ones you've touched), so a green `cargo fmt --check` locally
+doesn't prove that the *committed* state passes. Before the tag push:
+
+```bash
+git stash -u                                    # park working-tree changes
+cargo fmt --all -- --check                      # against HEAD only
+cargo clippy --workspace --all-targets -- -D warnings
+git stash pop                                   # restore working tree
+```
+
+If either step fails on HEAD, you have an unstaged fmt/clippy fix
+floating in your working tree that needs its own commit before the
+release commit lands.
+
+**(2) Run pytest against the Python version + scipy version CI uses.**
+The CI matrix is `{3.10, 3.11, 3.12}`. Python 3.10 pip-installs scipy
+≤ 1.15.x (scipy 1.16+ dropped 3.10 support); local Python 3.12 pulls
+scipy 1.17+. Several scipy upstream bugs differ between those versions
+(e.g. `multivariate_normal.cdf` returns NaN on `-np.inf` input in 1.15,
+fixed in 1.16). To reproduce the 3.10 environment:
+
+```bash
+python3.10 -m venv /tmp/skein_py310
+/tmp/skein_py310/bin/pip install --upgrade pip
+/tmp/skein_py310/bin/pip install -e ".[dev]"   # or pip install numpy scipy scikit-learn pytest for a Python-only smoke
+/tmp/skein_py310/bin/pytest tests/
+```
+
+**Full local CI sequence** (in order — same as `.github/workflows/ci.yml`):
+
+```bash
+# Rust job — run on HEAD via the stash trick above.
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p skein-core --lib solve_path_screening_on_matches_screening_off_within_tol -- --nocapture
+cargo test -p skein-core --lib
+
+# Python job — every Python version in the CI matrix.
+maturin develop --release --features=blas-accelerate
+ruff check python/ tests/
+mypy python/
+python - <<'PY'                                 # import smoke (CI literal)
+import skein_glm
+for name in ("MCPRegressor", "SCADRegressor", "GroupLassoRegressor",
+             "GroupMCPRegressor", "LogisticLassoRegressor",
+             "PoissonLassoRegressor"):
+    assert hasattr(skein_glm, name)
+print("ok")
+PY
+pytest tests/
+
+# Docs gate.
+sphinx-build -W -b html docs docs/_build/html
+```
+
+Only after **all of the above are green on HEAD** push the tag.
