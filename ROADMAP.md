@@ -2769,6 +2769,65 @@ A future investigation should compare the **objective values** at
 each algorithm's converged β to characterize the trade-off
 quantitatively.
 
+#### ✅ M14e — ncvreg-equivalent v-scaled MCP/SCAD prox (closes the bloat)
+
+The M14d "open" item above was root-caused by reading ncvreg's
+`src/ncvreg_init.c::MCP` and `::SCAD`. ncvreg has been quietly using a
+**v-scaled** firm-threshold prox since Breheny & Huang 2011 — not the
+vanilla MCP/SCAD prox. The shrinkage-branch denominator is
+`v·(1−1/γ)` (always positive for `γ > 1`) instead of the vanilla
+`(1−step/γ)` (flips sign when `step > γ`). The saturation boundary is
+also wider — `|z| > γλ·step` instead of `|z| > γλ` — so features in
+the band `(γλ, γλ·step)` get shrunk instead of left pinned at their
+warm value. On the GLM IRLS surrogate where `step = 1/v` is large on
+saturated samples, this prevents the bloat that vanilla MCP exhibits.
+
+The penalty being optimized is `λw|β| − v·β²/(2γ)` instead of vanilla
+`λw|β| − β²/(2γ)`. For LS callers (where `step ≈ 1` on standardized
+X), the formulas are byte-identical to vanilla and behavior is
+unchanged. For GLM IRLS callers, the prox shrinks more aggressively
+on features whose surrogate Hessian is small (low informativeness),
+which is the right inductive bias.
+
+Implementation: ~30-line rewrite of `crates/skein-core/src/prox.rs::mcp_prox`
+and `::scad_prox`. The solver / working-set / KKT machinery is
+unchanged. Trait method `min_step_for_unimodal()` is kept (now
+vestigial for tree consumers) — referenced for downstream extension
+that might want to detect "would-have-been multimodal under vanilla
+MCP" explicitly.
+
+Bench impact on `logistic_mcp medium-sparse` (n=10000, p=1000, γ=3,
+λ_min_ratio=5e-2, identical synthetic data to the M14d probe):
+
+| Metric | M14d baseline | M14e |
+|---|---|---|
+| \|active\| at λ_min | 842 | **107** (matches ncvreg's 107 exactly) |
+| Wall-clock | 123 s | **20.8 s** (6× speedup) |
+
+New tests: `prox::tests::{mcp,scad}_matches_ncvreg_v_scaled_at_glm_bench_tail`
+and `prox::tests::{mcp,scad}_ls_regime_matches_vanilla_prox` pin both
+the new behavior on the bench tail and the LS-regime invariant. A
+Rust integration test
+`prox_newton::tests::logistic_mcp_path_active_set_stays_bounded_at_small_lambda`
+runs a small saturating logistic problem (n=500, p=100, truth=10)
+and asserts the active set at λ_min stays ≤ 65 (vs ~80 pre-M14e).
+
+The change is documented in `Mcp`, `Scad`, and `prox` docstrings as a
+deliberate behavior choice for GLM IRLS callers; `value()` continues
+to evaluate the vanilla MCP/SCAD penalty for diagnostic purposes
+(value and prox refer to the same objective only when `v=1`, i.e.,
+on LS). This trade-off is acceptable because `value()` isn't consumed
+by any solver internals — `has_lasso_form_dual_gap()` returns `false`
+for MCP/SCAD so the path solver uses prox-gradient stationarity, not
+the value, for convergence.
+
+Verified gates: fmt + clippy + 382 cargo lib + 5 integration + 455
+pytest. Group-SCAD / sparse-group-SCAD / SparseGroupMcp from the
+uncommitted LS-family migration continue to use vanilla MCP/SCAD
+prox (correct since LS callers have `v ≈ 1`); extending ncvreg-
+equivalence to the group variants for the GLM family is an open
+follow-up.
+
 ---
 
 ## Differentiators (the elevator pitch)

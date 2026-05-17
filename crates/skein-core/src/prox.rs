@@ -28,39 +28,73 @@ pub fn soft_threshold(z: f64, step: f64, lambda: f64, weight: f64) -> f64 {
     }
 }
 
-/// MCP scalar prox.
+/// MCP scalar prox — ncvreg-style v-scaled firm-threshold.
 ///
-/// Penalty: `p(x; λ, γ) = λ|x| - x²/(2γ)` for `|x| ≤ γλ`, else `γλ²/2`.
-/// Assumes the typical regime `γ > step`; for `γ ≤ step` the prox is
-/// non-unique and we return the hard-threshold convention.
+/// The penalty this prox optimizes is the **v-scaled MCP**:
+/// `p(β; λ, γ, v) = λ|β| − v·β²/(2γ)`. The concavity term scales with
+/// the per-coordinate surrogate Hessian `v = 1/step`, so for LS where
+/// `step ≈ 1` we recover vanilla MCP, while for GLM IRLS surrogates
+/// (where `v = (1/n)Σ x_ij²·w_i` can be small when samples saturate)
+/// the prox shrinks more aggressively. This is what ncvreg has been
+/// using since Breheny & Huang 2011; their `src/ncvreg_init.c::MCP`
+/// is the direct C analogue.
+///
+/// Closed form, three regions in `u = v·z` space:
+///   - `|u| ≤ λ·w` (hard threshold): return 0
+///   - `λ·w < |u| ≤ γ·λ·w` (firm-threshold shrinkage):
+///     `sign(z) · (|u|−λ·w) / (v·(1−1/γ))`
+///   - `|u| > γ·λ·w` (saturation): return z
+///
+/// Compared to the vanilla MCP prox `(|z|−step·λ)/(1−step/γ)`, the
+/// shrinkage denominator uses `(1−1/γ)` instead of `(1−step/γ)`. Both
+/// agree when `step = 1` (LS family on standardized X); they diverge
+/// when `step ≠ 1`, with the v-scaled form remaining well-defined for
+/// any `γ > 1` even in the regime where vanilla MCP's prox would be
+/// multimodal (`step > γ`).
+///
+/// The saturation boundary also shifts: vanilla MCP saturates at
+/// `|z| ≥ γλ`; v-scaled MCP saturates at `|z| ≥ γλ·step`. For GLM
+/// IRLS this is the difference between leaving moderate-|β| features
+/// pinned (vanilla, leads to active-set bloat on saturating data) and
+/// shrinking them toward zero (v-scaled, what ncvreg does).
 pub fn mcp_prox(z: f64, step: f64, lambda: f64, gamma: f64, weight: f64) -> f64 {
     let lam = lambda * weight;
+    let v = 1.0 / step;
     let abs_z = z.abs();
-    if abs_z >= gamma * lam {
-        return z;
-    }
-    if gamma > step {
-        let s = (abs_z - step * lam).max(0.0);
-        z.signum() * s / (1.0 - step / gamma)
+    let abs_u = abs_z * v;
+    if abs_u <= lam {
+        0.0
+    } else if abs_u <= gamma * lam {
+        z.signum() * (abs_u - lam) / (v * (1.0 - 1.0 / gamma))
     } else {
-        let cutoff = (2.0 * step * gamma * lam * lam / 2.0).sqrt();
-        if abs_z > cutoff {
-            z
-        } else {
-            0.0
-        }
+        z
     }
 }
 
-/// SCAD scalar prox with shape parameter `a > 2`.
+/// SCAD scalar prox with shape parameter `a > 2` — ncvreg-style
+/// v-scaled firm-threshold.
+///
+/// Same v-scaling idea as [`mcp_prox`]: matches vanilla SCAD on LS
+/// (step = 1) and ncvreg's `src/ncvreg_init.c::SCAD` everywhere else.
+/// The four-region structure (zero / lasso / quadratic / saturation)
+/// is parameterized in `u = v·z`:
+///   - `|u| ≤ λ·w`: return 0
+///   - `λ·w < |u| ≤ 2·λ·w`: `sign(z)·(|u|−λ·w)/v` (lasso region)
+///   - `2·λ·w < |u| ≤ a·λ·w`: SCAD-quadratic shrinkage with
+///     `(1 − 1/(a−1))` denominator (stays positive for `a > 2`)
+///   - `|u| > a·λ·w`: return z
 pub fn scad_prox(z: f64, step: f64, lambda: f64, a: f64, weight: f64) -> f64 {
     let lam = lambda * weight;
+    let v = 1.0 / step;
     let abs_z = z.abs();
-    if abs_z <= (1.0 + step) * lam {
-        soft_threshold(z, step, lambda, weight)
-    } else if abs_z <= a * lam {
-        let denom = 1.0 - step / (a - 1.0);
-        let num = abs_z - step * a * lam / (a - 1.0);
+    let abs_u = abs_z * v;
+    if abs_u <= lam {
+        0.0
+    } else if abs_u <= 2.0 * lam {
+        z.signum() * (abs_u - lam) / v
+    } else if abs_u <= a * lam {
+        let denom = v * (1.0 - 1.0 / (a - 1.0));
+        let num = abs_u - a * lam / (a - 1.0);
         z.signum() * num / denom
     } else {
         z
@@ -325,6 +359,109 @@ mod tests {
     fn mcp_weight_scales_threshold() {
         // weight=2 should zero out z=0.7 since effective λ = 1.0
         assert_abs_diff_eq!(mcp_prox(0.7, 1.0, 0.5, 3.0, 2.0), 0.0);
+    }
+
+    #[test]
+    fn mcp_matches_ncvreg_v_scaled_at_glm_bench_tail() {
+        // Bench-tail GLM IRLS surrogate parameters: step=4 (i.e. v=0.25),
+        // λ=0.05, γ=3. Pre-M14e (vanilla MCP prox) returned z=0.5
+        // unchanged because |z|=0.5 fell in the saturation region (>γλ).
+        // ncvreg's v-scaled MCP applies the shrinkage branch instead:
+        //   u = v·z = 0.125; |u| ≤ γ·λ = 0.15 → branch 2;
+        //   β = sign(z)·(|u|−λ)/(v·(1−1/γ)) = 0.075 / (0.25·2/3) = 0.45.
+        let beta = mcp_prox(0.5, 4.0, 0.05, 3.0, 1.0);
+        assert_abs_diff_eq!(beta, 0.45, epsilon = 1e-12);
+
+        // Below the (now wider) zero region: |u| ≤ λ ⇒ 0.
+        // For step=4, λ=0.05: zero region is |z| ≤ step·λ = 0.2.
+        assert_abs_diff_eq!(mcp_prox(0.15, 4.0, 0.05, 3.0, 1.0), 0.0);
+
+        // Above the saturation region: |u| > γλ ⇒ return z.
+        // For step=4, λ=0.05, γ=3: saturation at |z| > γλ·step = 0.6.
+        assert_abs_diff_eq!(mcp_prox(0.7, 4.0, 0.05, 3.0, 1.0), 0.7, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn mcp_ls_regime_matches_vanilla_prox() {
+        // For step=1 (LS family on standardized X), the v-scaled prox
+        // is bit-for-bit identical to the vanilla MCP prox because
+        // (1−1/γ) == (1−step/γ) iff step=1, and the saturation boundary
+        // γλ == γλ·step iff step=1.
+        for &z in &[-2.0_f64, -0.6, -0.3, 0.0, 0.3, 0.6, 2.0] {
+            for &lam in &[0.1_f64, 0.5, 1.0] {
+                for &w in &[0.5_f64, 1.0, 2.0] {
+                    let step = 1.0;
+                    let gamma = 3.0;
+                    let lam_w = lam * w;
+                    let abs_z = z.abs();
+                    // Vanilla MCP prox (step=1, γ>step convex branch).
+                    let expected = if abs_z >= gamma * lam_w {
+                        z
+                    } else {
+                        let s = (abs_z - lam_w).max(0.0);
+                        z.signum() * s / (1.0 - 1.0 / gamma)
+                    };
+                    assert_abs_diff_eq!(
+                        mcp_prox(z, step, lam, gamma, w),
+                        expected,
+                        epsilon = 1e-15
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn scad_matches_ncvreg_v_scaled_at_glm_bench_tail() {
+        // step=4 (v=0.25), λ=0.05, a=3.7. u = v·z.
+        // Middle region: 2λ < |u| ≤ aλ ⟺ 0.4 < |z|·v ≤ 0.185 (impossible!)
+        // Actually: 2λ=0.1, aλ=0.185, so for v=0.25 z-range is 0.4..0.74.
+        // Pick z=0.6: |u|=0.15 in (0.1, 0.185] → SCAD middle region.
+        //   denom = v·(1 − 1/(a−1)) = 0.25·(1 − 1/2.7) = 0.25·0.6296 = 0.1574
+        //   num = 0.15 − 3.7·0.05/2.7 = 0.15 − 0.06852 = 0.08148
+        //   β = 0.08148 / 0.1574 = 0.5177
+        let beta = scad_prox(0.6, 4.0, 0.05, 3.7, 1.0);
+        let denom = 0.25 * (1.0 - 1.0 / 2.7);
+        let num = 0.15 - 3.7 * 0.05 / 2.7;
+        let expected = num / denom;
+        assert_abs_diff_eq!(beta, expected, epsilon = 1e-10);
+
+        // Lasso region: λ < |u| ≤ 2λ ⟺ 0.2 < |z| ≤ 0.4 for step=4, λ=0.05.
+        // z=0.3, |u|=0.075 in (0.05, 0.1] → lasso branch.
+        //   β = sign(z)·(|u|−λ)/v = 0.025 / 0.25 = 0.1
+        assert_abs_diff_eq!(scad_prox(0.3, 4.0, 0.05, 3.7, 1.0), 0.1, epsilon = 1e-12);
+
+        // Saturation: |u| > aλ ⟺ |z| > aλ·step = 0.74. Return z.
+        assert_abs_diff_eq!(scad_prox(0.8, 4.0, 0.05, 3.7, 1.0), 0.8, epsilon = 1e-12);
+
+        // Zero region: |u| ≤ λ ⟺ |z| ≤ step·λ = 0.2. Return 0.
+        assert_abs_diff_eq!(scad_prox(0.15, 4.0, 0.05, 3.7, 1.0), 0.0);
+    }
+
+    #[test]
+    fn scad_ls_regime_matches_vanilla_prox() {
+        // For step=1, v-scaled SCAD equals vanilla SCAD bit-for-bit.
+        let step = 1.0;
+        let a = 3.7;
+        for &z in &[-2.0_f64, -1.0, -0.4, 0.0, 0.4, 1.0, 2.0] {
+            for &lam in &[0.1_f64, 0.5, 1.0] {
+                for &w in &[0.5_f64, 1.0, 2.0] {
+                    let lam_w = lam * w;
+                    let abs_z = z.abs();
+                    let expected = if abs_z <= lam_w {
+                        0.0
+                    } else if abs_z <= 2.0 * lam_w {
+                        // Lasso region at step=1: soft threshold.
+                        z.signum() * (abs_z - lam_w)
+                    } else if abs_z <= a * lam_w {
+                        z.signum() * (abs_z - a * lam_w / (a - 1.0)) / (1.0 - 1.0 / (a - 1.0))
+                    } else {
+                        z
+                    };
+                    assert_abs_diff_eq!(scad_prox(z, step, lam, a, w), expected, epsilon = 1e-15);
+                }
+            }
+        }
     }
 
     #[test]

@@ -42,7 +42,6 @@ const PROX_NEWTON_P0: usize = 10;
 /// is plenty even for the densest Poisson cells.
 const KKT_EXPANSION_PASSES: usize = 5;
 
-
 #[derive(Debug, Clone)]
 pub struct ProxNewtonReport {
     pub outer_iters: usize,
@@ -109,12 +108,8 @@ pub fn prox_newton_solve(
         let grad0 = surrogate.full_grad(design, r0.view());
         let n_support = warm.iter().filter(|&&b| b != 0.0).count();
         let ws_size = (n_support * 2).max(PROX_NEWTON_P0).min(p);
-        let mut ws = priority_rule_screen_with_grad(
-            grad0.view(),
-            weights.view(),
-            warm.view(),
-            ws_size,
-        );
+        let mut ws =
+            priority_rule_screen_with_grad(grad0.view(), weights.view(), warm.view(), ws_size);
 
         let mut inner_iter_total = 0usize;
         let mut expansion_pass = 0usize;
@@ -126,13 +121,7 @@ pub fn prox_newton_solve(
         // the outer-iter budget.
         loop {
             let (b_new, r_new, rep) = cd_solve_subset_weighted_ls_with_lips(
-                warm,
-                &ws,
-                design,
-                &surrogate,
-                penalty,
-                cd_config,
-                &lips,
+                warm, &ws, design, &surrogate, penalty, cd_config, &lips,
             );
             warm = b_new;
             inner_iter_total = inner_iter_total.saturating_add(rep.iter);
@@ -153,13 +142,7 @@ pub fn prox_newton_solve(
             if expansion_pass >= KKT_EXPANSION_PASSES {
                 ws = (0..p).collect();
                 let (b_new, _r_new, rep) = cd_solve_subset_weighted_ls_with_lips(
-                    warm,
-                    &ws,
-                    design,
-                    &surrogate,
-                    penalty,
-                    cd_config,
-                    &lips,
+                    warm, &ws, design, &surrogate, penalty, cd_config, &lips,
                 );
                 warm = b_new;
                 inner_iter_total = inner_iter_total.saturating_add(rep.iter);
@@ -1032,5 +1015,90 @@ mod tests {
         for k in 0..p {
             assert_abs_diff_eq!(beta_huber[k], beta_ls[k], epsilon = 1e-5);
         }
+    }
+
+    /// Pins the M14e bloat fix. At small λ the IRLS surrogate
+    /// `step = 1/L_jj` exceeds γ=3 on most features (saturated samples
+    /// drive `w_i → W_FLOOR = 1e-4`, shrinking L_jj). Vanilla MCP's
+    /// firm-threshold returns `z` unchanged in the wide saturation
+    /// band `[γλ, γλ·step]` → features pile up at their warm value →
+    /// active set bloats to ~80% of p. ncvreg's v-scaled MCP prox
+    /// (shipped M14e in `prox::mcp_prox`) shrinks throughout this
+    /// band, so the support stays close to the planted truth.
+    fn logistic_problem_medium(seed: u64) -> (DenseMatrix, Array1<f64>) {
+        let n = 500;
+        let p = 100;
+        let mut state = seed.max(1);
+        let mut sample = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            ((state as f64) / (u64::MAX as f64)) * 2.0 - 1.0
+        };
+        let x = Array2::<f64>::from_shape_fn((n, p), |_| sample());
+        let mut true_beta = Array1::<f64>::zeros(p);
+        for k in 0..10 {
+            true_beta[k] = if k % 2 == 0 { 1.0 } else { -1.0 };
+        }
+        let eta = x.dot(&true_beta);
+        let mut y = Array1::<f64>::zeros(n);
+        for i in 0..n {
+            let p_i = 1.0 / (1.0 + (-eta[i]).exp());
+            let u = (sample() + 1.0) * 0.5;
+            y[i] = if u < p_i { 1.0 } else { 0.0 };
+        }
+        (DenseMatrix::new(x), y)
+    }
+
+    #[test]
+    fn logistic_mcp_path_active_set_stays_bounded_at_small_lambda() {
+        let (design, y) = logistic_problem_medium(7);
+        let glm = BinomialLogit::new(y);
+        let p = design.n_features();
+
+        let (betas, report) = prox_newton_solve_path(
+            &design,
+            &glm,
+            |lam| Box::new(Mcp::new(lam, 3.0, p)),
+            50,
+            5e-2,
+            None,
+            &CdConfig {
+                max_iter: 1000,
+                tol: 1e-7,
+                acceleration: Some(5),
+            },
+            50,
+            1e-7,
+        );
+
+        // Allow a handful of transitional λs to not converge (the
+        // first IRLS surrogate at the convex→non-convex boundary can
+        // bounce). Pre-M14e the entire tail failed to converge; with
+        // the v-scaled prox the tail converges cleanly and only the
+        // crossing region might wobble.
+        let unconverged = report.outer_converged.iter().filter(|&&c| !c).count();
+        assert!(
+            unconverged <= 5,
+            "expected ≤ 5 un-converged λs (transitional); got {} (out of 50). converged: {:?}",
+            unconverged,
+            report.outer_converged
+        );
+
+        // True support is 10. The empirical post-M14e count on this
+        // tiny problem is ~56; ncvreg gets a similar count at this
+        // scale (noisier per-feature than the bench-shape n=10k/p=1k
+        // problem where both algorithms converge to ~107 active).
+        // Bound the assertion at 65 — generous headroom over the
+        // observed ~56 — to gate against regressions to the pre-M14e
+        // ~80+ baseline without false-failing on platform noise.
+        let last_row = betas.row(betas.nrows() - 1);
+        let active = last_row.iter().filter(|&&b| b != 0.0).count();
+        assert!(
+            active <= 65,
+            "expected ≤ 65 active features at λ_min; got {} \
+             (pre-M14e: ~80, ncvreg at this scale: similar to skein)",
+            active
+        );
     }
 }

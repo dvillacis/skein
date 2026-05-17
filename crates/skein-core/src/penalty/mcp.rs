@@ -2,6 +2,19 @@ use super::Penalty;
 use crate::prox::mcp_prox;
 use ndarray::{Array1, ArrayView1};
 
+/// Minimax concave penalty (Zhang 2010), in the **ncvreg-equivalent
+/// v-scaled** firm-threshold parameterization. The `value()` method
+/// reports the *vanilla* MCP penalty `λw|β| − β²/(2γ)` for diagnostic
+/// purposes, but `prox_coord()` solves the **v-scaled** MCP problem
+/// `λw|β| − v·β²/(2γ)` where `v = 1/step` is the local surrogate
+/// Hessian (the per-feature `(1/n)Σ x_ij²·w_i` in IRLS). See
+/// `prox::mcp_prox` for the rationale and the literature pointer
+/// (Breheny & Huang 2011 / ncvreg's `src/ncvreg_init.c::MCP`).
+///
+/// For LS callers on standardized X, `v ≈ 1` uniformly so the value
+/// and the prox refer to the same objective. For GLM IRLS callers
+/// the two diverge: the prox is what the solver actually optimizes;
+/// the value is what gets reported back.
 pub struct Mcp {
     lambda: f64,
     gamma: f64,
@@ -50,8 +63,13 @@ impl Penalty for Mcp {
     }
 
     fn min_step_for_unimodal(&self) -> f64 {
-        // MCP prox is unimodal iff step < γ (the firm-threshold formula's
-        // convex regime). Beyond γ the prox is multimodal.
+        // The vanilla MCP prox is unimodal iff step < γ; the ncvreg-
+        // equivalent v-scaled prox shipped in M14e is unimodal at any
+        // step (the denominator `(1 − 1/γ)` is always positive for
+        // γ > 1). This method is retained from M14d and currently has
+        // no in-tree consumer — kept as a hook for downstream solvers
+        // that want to detect the "would have been multimodal under
+        // vanilla MCP" regime explicitly.
         self.gamma
     }
 }

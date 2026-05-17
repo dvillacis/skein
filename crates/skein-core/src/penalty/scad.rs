@@ -2,6 +2,13 @@ use super::Penalty;
 use crate::prox::scad_prox;
 use ndarray::{Array1, ArrayView1};
 
+/// Smoothly-clipped absolute deviation penalty (Fan & Li 2001), in
+/// the **ncvreg-equivalent v-scaled** parameterization. Like [`super::Mcp`],
+/// the `value()` method reports the vanilla SCAD penalty while
+/// `prox_coord()` solves the v-scaled variant (denominator stays
+/// positive for any `a > 2`). Behavior is identical to vanilla SCAD
+/// for LS callers on standardized X; diverges for GLM IRLS callers.
+/// See `prox::scad_prox` for details.
 pub struct Scad {
     lambda: f64,
     a: f64,
@@ -49,8 +56,12 @@ impl Penalty for Scad {
     }
 
     fn min_step_for_unimodal(&self) -> f64 {
-        // SCAD's middle-branch divisor `1 - step/(a-1)` flips sign when
-        // step ≥ a - 1, beyond which the prox is no longer unimodal.
+        // The vanilla SCAD prox's middle-branch divisor `1 − step/(a−1)`
+        // flips sign when `step ≥ a − 1`; the ncvreg-equivalent
+        // v-scaled prox shipped in M14e uses `(1 − 1/(a−1))` which
+        // stays positive for any `a > 2`. Returned threshold matches
+        // [`super::Mcp::min_step_for_unimodal`] in spirit — diagnostic
+        // for downstream solvers, not consumed in tree.
         self.a - 1.0
     }
 }
