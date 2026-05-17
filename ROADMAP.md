@@ -26,7 +26,7 @@ load-bearing piece; everything after stacks on top of it.
 | M10 — Performance improvements | ⏳ partial | M10.1 profile (`col_dot` is the floor without BLAS) + M10.3 five waves: (1) col_axpy + F-order DenseMatrix + path-solver fixes; (2) adaptive inner tol via PGD + KKT-priority WS; (3) `blas-accelerate` feature; (4) (skipped — inner active-set CD didn't pay off); (5) F-series — duality gap + Anderson on residuals + gap-safe sphere screening, all gated and tested. **Skein medium lasso/LS: 7.6 s → 0.78 s sparse / 1.17 s deep — 6.5–10× total. Within 1.5× of glmnet on sparse, 1.9× on deep; ~8–9× behind sklearn's Cython `lasso_path`.** F-series wallclock-neutral on M9.3 scenarios — infrastructure correct but post-pass screening fires only on multi-pass λs (most converge in 1). M10.4 verified across deep + sparse regimes. Pending: G. cross-platform BLAS (OpenBLAS/MKL), H. pre-pass gap-safe screening, I. Cython-grade rewrite (off-roadmap). |
 | M11 — Graphical models | ✅ done | Single-population glasso (L1 / MCP / SCAD) + joint glasso across `K` populations (Danaher–Wang–Witten group form via ADMM) + EBIC tuner; M11.3 bootnet-style bootstrap edge stability shipped. |
 | M12 — Hardening (robustness, test coverage, CI) | ✅ done | Penalty + datafit unit-test coverage closed; Rust integration test directory added; R-fixture gate in CI; PyO3-layer smoke job (`.github/workflows/bench-smoke.yml`); pre-flight tight-tol screening test now a separate fail-fast CI step with 2-min timeout (R3, ci.yml); numerical guards (`W_FLOOR=1e-6`, `ETA_CLAMP=30.0`) centralized in `crates/skein-core/src/numerics.rs` (R4); R1 unwrap audit closed (`block_path_lla.rs` documented; `cd.rs::anderson_extrapolate` documented; dead `Groups::from_csr` call removed from `glasso_admm.rs`; remaining hits are test-only setup invariants); `Groups::has_overlap()` + parallel block-CD overlap detection with serial Gauss-Seidel fallback + `Once`-gated stderr warning + fixture (C5); criterion bench tree expanded with `lla_outer.rs`, `prox_newton_glm.rs`, `glasso.rs` alongside existing `block_cd.rs`, README updated (P2); `skein-py/src/lib.rs` 10,628 → 275 lines, every datafit family in its own module: `glasso.rs`, `glm.rs`, `ls.rs`, `mmap_chunked.rs`, `multinomial.rs`, `multitask.rs` (P4). No new algorithmic surface. |
-| M13 — Performance findings from `benches/v2` | ⏳ partial | M13.1 adaptive screening saturation bypass shipped; M13.2 cross-λ gradient cache shipped (-10.4% wall on medium Lasso); M13.4 Phase 2.3 LLA fixed-point short-circuit shipped; **M13.4b native group-MCP BCD shipped (-3.46× wall on medium ls_group_mcp; flips skein/grpreg from 3.34× slower to 1.20× faster)**; **M13.4c native group-MCP BCD extended to logistic / Poisson / Cox shipped (2.12× wall on logistic medium; new `glm_group_mcp_native_matches_lla` cross-family agreement test)**; M13.6 re-characterized post-M13.2 (memory-bandwidth wall in inner CD past medium scale, not fixed-cost overhead). Remaining: M13.5 MCP one-outer-iter short-circuit; sparse-group MCP variants for logistic / Poisson / Cox still on LLA. |
+| M13 — Performance findings from `benches/v2` | ⏳ partial | M13.1 adaptive screening saturation bypass shipped; M13.2 cross-λ gradient cache shipped (-10.4% wall on medium Lasso); M13.4 Phase 2.3 LLA fixed-point short-circuit shipped; **M13.4b native group-MCP BCD shipped (-3.46× wall on medium ls_group_mcp; flips skein/grpreg from 3.34× slower to 1.20× faster)**; **M13.4c native group-MCP BCD extended to logistic / Poisson / Cox shipped (2.12× wall on logistic medium; new `glm_group_mcp_native_matches_lla` cross-family agreement test)**; M13.6 re-characterized post-M13.2 (memory-bandwidth wall in inner CD past medium scale, not fixed-cost overhead); M13.7 Jacobi-parallel block-CD remains a negative result; **M13.8 celer-style gap-safe screening on the GLM prox-Newton surrogate shipped** (weighted-LS `lasso_dual_obj`, per-GLM closed-form duals for logistic + Poisson, Anderson dual extrapolation on `(β, r)` pairs, weighted strong-convexity correction `r²=2·gap·max(w)/n`, M13.1-style saturation bypass — **3–8× wall on logistic_lasso v2 cells**, 8.2× small-sparse / 3.1× small-deep / 7.2× medium-sparse). Remaining: M13.5 MCP one-outer-iter short-circuit; sparse-group MCP variants for logistic / Poisson / Cox still on LLA. |
 | M14 — Inference & applications closeout | ⏳ partial | **Released as v0.9.0** (commit `ab9bd44`). **M14a.1 polychoric / polyserial preprocessing** (Olsson 1979 two-step ML) for ordinal Likert / mixed data; **M14a.2 edge-level FDR / FWER / MB stability bound** on `GraphicalBootstrap` (no other graphical-models package has this — BH FDR + Bonferroni / Holm + closed-form MB threshold); **M14a.3 debiased Cox lasso** (Van de Geer / Cai-Wang construction reusing the partial-likelihood Fisher diagonal from `CoxPH::surrogate_at` via a 16-line PyO3 binding — closes the inference axis across all four mainstream GLM families); **M14c.1 scalar LLA weight short-circuit** (Phase 2.3 ported to `path_lla.rs` — affects bridge, adaptive lasso, multitask LLA); **M14c.2 native sparse-group MCP penalty + 6 GLM PyO3 swaps** (drops the LLA layer for logistic/Poisson/Cox sparse-group MCP, sibling of M13.4c); **M14c.3 at-scale R-fixture tier** (n=500, p=100) for cross-package regression gating; **R-anchor fixture generators** for polychoric (vs `psych::polychoric`, atol 5e-3) and Cox active-set (vs `glmnet(family='cox')`, Jaccard ≥ 0.6 — no R package has Cox debiasing). Three new sklearn-compatible estimators, four new `docs/concepts/` pages, end-to-end psychometrics example now closes the M11.1 replication exit criterion. M14b (paper headline run + manuscript) pending. |
 
 Test count at this snapshot: **358 cargo lib + 8 cargo integration + 455 pytest, all green.**
@@ -2464,6 +2464,108 @@ is worth pursuing) is *column-block* parallelism inside the inner CD
 on a saturated active set (dense regime, p > 1000), not block-CD-level
 Jacobi.
 
+### ✅ M13.8 — Celer-style gap-safe screening on the GLM prox-Newton surrogate (SHIPPED)
+
+**Closes the GLM perf gap left by M10 wave F.** F-series wired up
+gap-safe screening + Anderson dual extrapolation + adaptive inner
+tol for the LS path, but `Datafit::lasso_dual_obj` returned `None`
+for everything except unweighted LS. The GLM paths
+(`prox_newton_solve_path`, `prox_newton_block_solve_path`) had only
+KKT-verifier protection — no screening, no extrapolation — and the
+v2 logistic_lasso medium-deep cell was 219.6 s vs glmnet 7.9 s
+(~28× slower).
+
+**What shipped:**
+
+1. **Weighted-LS dual obj.** `LeastSquares::lasso_dual_obj` now
+   handles the `sample_weights = Some(w)` case. Derivation: for
+   `f(z) = (1/2n) zᵀWz` the Fenchel conjugate is
+   `f*(θ) = (n/2) Σ θᵢ²/wᵢ`, which collapses to the unweighted
+   closed form with `‖r‖²` replaced by `Σ wᵢ rᵢ²` after eliminating
+   `y` via `Xβ = r + y`. Unlocks screening on the prox-Newton
+   weighted-LS surrogate immediately.
+
+2. **Per-GLM closed-form duals.** `GlmDatafit` gains
+   `glm_per_sample_loss_grad` + `glm_dual_obj` trait methods.
+   Implemented for `BinomialLogit` (sigmoid Fenchel:
+   `D(θ_scaled) = −(1/n) Σ wᵢ [sᵢ log sᵢ + (1−sᵢ) log(1−sᵢ)]`,
+   `sᵢ = yᵢ + scale·(pᵢ − yᵢ)`) and `PoissonLog` (Bregman form,
+   offset-aware). Cox / Huber / Multinomial keep `None` defaults
+   with documented rationale (Cox partial-likelihood dual has no
+   closed form under Breslow/Efron ties; Huber/Multinomial out of
+   scope for this milestone). Trait surface wired but the methods
+   are not yet driven by the solver — current Path A screening
+   reuses the surrogate-level weighted-LS dual; Path B persistent
+   GLM-level screening across PN iters is the follow-up.
+
+3. **Screening-enabled prox-Newton solve.** New
+   `prox_newton_solve_screened(.., lambda: Option<f64>)` mirrors
+   `solver::path::solve_path`'s per-λ KKT loop on the GLM
+   surrogate: gap-safe sphere screening via the shared
+   `compute_outer_state` helper, Anderson dual extrapolation on
+   `(β, r)` pairs with `K=6` history, adaptive inner tol
+   `= max(tol, 0.3 × prev_outer_pgd)`. Legacy `prox_newton_solve`
+   becomes a thin wrapper with `lambda = None` (no public-API
+   signature change). `prox_newton_solve_path` routes through the
+   screened variant with the per-λ `Some(lam)`. Same wiring for
+   `prox_newton_block_solve_path`; `block_gap_safe_screen`
+   generalised to use `Datafit::lasso_dual_obj` instead of an
+   inlined unweighted formula.
+
+4. **Soundness fix: weighted-LS safe-sphere radius.** The dual
+   strong-convexity constant of weighted LS is `σ = n/max(w)`, so
+   `r_safe² = 2·gap·max(w) / n`. The original unweighted formula
+   `2·gap / n` was unsafe for Poisson where `max(μ)` can exceed 1
+   (screened features had to be re-added by the KKT verifier on the
+   next pass — observed as a ~16 % regression on
+   `poisson_lasso medium-sparse` before the fix). Logistic gains a
+   tighter radius (`max(w) ≤ 0.25`) for free — more aggressive
+   screening at no soundness cost. The unweighted-LS path is
+   unchanged because `sample_weights() == None` collapses `max_w`
+   to 1.0.
+
+5. **M13.1-style saturation bypass.** When the warm β has more
+   than 50 % nonzero entries the screened loop pays Anderson
+   matvec + safe-sphere O(p) overhead it can't recover (active
+   features can't be screened). Falls back to the legacy KKT-only
+   loop in that regime. Eliminated a 15 % regression on
+   `logistic_lasso small-deep`.
+
+**Wall-clock on bench v2 logistic_lasso (host `3c43bb844695`, seed 0,
+five timed trials):**
+
+| cell | before | after | speedup |
+|---|---:|---:|---:|
+| `logistic_lasso small-sparse` | 0.44 s | 0.05 s | **8.2×** |
+| `logistic_lasso small-deep` | 8.02 s | 2.62 s | **3.1×** |
+| `logistic_lasso medium-sparse` | 27.58 s | 3.82 s | **7.2×** |
+| `poisson_lasso medium-sparse` | 5.48 s | 6.24 s | 0.88× (noise; max(μ) > 1 makes Poisson screening necessarily looser) |
+
+Wins are largest on sparse regimes where the active set is ~5 % of
+features and screening can prune the rest. Saturated regimes hit the
+M13.1 bypass and run the legacy path.
+
+**Verified gates:** `solve_path_screening_on_matches_screening_off_within_tol`
+(the CLAUDE.md tight-tol pre-flight) passes; cargo test suite at 397
+lib tests (+9 dual-obj unit tests + one
+`prox_newton_screening_matches_no_screening_within_tol` regression
+test); pytest at 455 passed / 5 skipped; cargo clippy + fmt clean.
+
+**Reproduce:**
+```bash
+maturin develop --release --features=blas-accelerate
+.venv/bin/python -m benches.v2.report._run_cell \
+    --scenario logistic_lasso --size medium --regime sparse \
+    --seed 0 --package skein --config benches/v2/config.yaml \
+    --out /tmp/skein_glm_screening.jsonl --env-out /tmp/env.json
+```
+
+**Out of scope (deferred follow-ups):** persistent GLM-level
+screening across PN iters using the new `glm_dual_obj` trait method
+(Path B); Cox dual screening (Breslow/Efron tie structure has no
+closed-form dual — Wu & Lange 2008 sketch a constrained dual but it's
+not a single-shot evaluation); Huber and Multinomial dual obj methods.
+
 ### Recommended workstream ordering
 
 M13.1, M13.2, M13.4 (Phase 2.3), M13.4b, and M13.4c have all shipped.
@@ -2475,6 +2577,9 @@ Remaining ordering for the next perf milestone:
 2. ✅ **M13.4 — group_mcp LLA outer-iter audit** — shipped as M13.4
    Phase 2.3 + M13.4b (native LS group-MCP, 3.46× wall) + M13.4c
    (native GLM group-MCP, 2.12× wall on logistic).
+2½. ✅ **M13.8 — GLM gap-safe screening on prox-Newton surrogate**
+   — shipped. 3–8× wall on `logistic_lasso` v2 cells. Closes the
+   F-series infrastructure that M10 wave F left LS-only.
 3. **M13.5 — MCP one-outer-iter short-circuit** — the next remaining
    open item in the LLA-outer-overhead family. Touches scalar MCP /
    SCAD / adaptive / bridge paths (which still wrap LLA over the

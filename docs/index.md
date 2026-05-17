@@ -87,7 +87,7 @@ underneath any GLM × group penalty. The headlines:
    v0.7 — `docs/examples/psychometrics.md` is now an end-to-end
    `polychoric → GraphicalMCP → bootstrap-FDR` pipeline.
 
-### Performance & correctness closeout (M13.4c + M14c)
+### Performance & correctness closeout (M13.4c + M13.8 + M14c)
 
 4. **Native group-MCP block-CD for logistic / Poisson / Cox**
    (M13.4c) — extends M13.4b across GLM families. The
@@ -97,6 +97,24 @@ underneath any GLM × group penalty. The headlines:
    `logistic group-MCP medium` cell (n=4 000, p=400, γ=3.0): **wall
    drops 226.7 s → 106.8 s (-2.12×)** with min support Jaccard 0.97
    vs LLA and identical final-λ objective.
+
+4½. **Celer-style gap-safe screening on the GLM prox-Newton
+   surrogate** (M13.8) — closes the F-series infrastructure that
+   M10 wave F left LS-only. `LeastSquares::lasso_dual_obj` now
+   handles the weighted case (`Σwᵢrᵢ²` replaces `‖r‖²`), and
+   `GlmDatafit` gains `glm_dual_obj` / `glm_per_sample_loss_grad`
+   with closed-form impls for `BinomialLogit` (sigmoid Fenchel)
+   and `PoissonLog` (Bregman, offset-aware). The new
+   `prox_newton_solve_screened` runs the same per-λ KKT loop as
+   `solve_path` does for LS — gap-safe sphere screening,
+   Anderson dual extrapolation on `(β, r)` pairs, adaptive inner
+   tol `= max(tol, 0.3 × prev_outer_pgd)`, M13.1-style saturation
+   bypass — on the weighted-LS surrogate. Same wiring in
+   `prox_newton_block_solve_path` via the generalised
+   `block_gap_safe_screen`. Wall-clock on bench v2 `logistic_lasso`
+   (host `3c43bb844695`): **8.2× small-sparse, 3.1× small-deep,
+   7.2× medium-sparse**. The unweighted-LS path is unchanged
+   (`max(w) → 1.0` collapses to the original FGS 2015 formula).
 5. **Native sparse-group MCP for logistic / Poisson / Cox** (M14c.2)
    — sibling of M13.4c for the sparse-group penalty. New Rust
    `SparseGroupMcp` penalty implements the Breheny & Huang (2015)
@@ -174,7 +192,9 @@ parallelism is real rather than a no-op. Wheels are built via
 `cibuildwheel` for Linux (x86_64 + aarch64), macOS (x86_64 +
 arm64), and Windows (AMD64). **M12 hardening done**, **M13 perf
 work done** through M13.4c (native group-MCP for all GLM
-families), and **M14 inference + applications + perf closeout
+families) and **M13.8** (celer-style gap-safe screening on the
+GLM prox-Newton surrogate, 3–8× wall on `logistic_lasso` v2
+cells), and **M14 inference + applications + perf closeout
 done** through M14a / M14c — Cox debiasing, edge-level FDR/FWER/MB,
 polychoric preprocessing, scalar LLA short-circuit, native
 sparse-group MCP for GLMs, and an at-scale R-fixture tier.

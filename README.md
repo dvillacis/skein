@@ -25,20 +25,28 @@ control on graphical models, ships polychoric / polyserial
 preprocessing for ordinal Likert data, and finishes the M13 / M14c
 perf work — every GLM × group penalty (plain + sparse-group) now
 runs native, no LLA wrappers underneath any prox-Newton outer.
-M5 model selection + inference + threaded CV folds + M11 graphical
-lasso (single + joint) + M12 hardening all carried over from v0.8.
-See [ROADMAP.md](ROADMAP.md) for the full plan and the open M14b
-software-paper milestone.
+M13.8 (post-v0.9) ports celer's gap-safe screening + Anderson dual
+extrapolation to the GLM prox-Newton surrogate, closing the
+F-series gap that M10 left LS-only — 3–8× wall-clock on
+`logistic_lasso` v2 cells. M5 model selection + inference +
+threaded CV folds + M11 graphical lasso (single + joint) + M12
+hardening all carried over from v0.8. See [ROADMAP.md](ROADMAP.md)
+for the full plan and the open M14b software-paper milestone.
 
 **Done so far:**
 
 - **Solvers** — production CD core (path solver, strong rule + KKT
   verification, gap-safe screening, Anderson acceleration, M13.1
-  saturation bypass, M13.2 cross-λ gradient cache); group block-CD
-  with native non-convex prox for group MCP (M13.4b for LS,
-  M13.4c for logistic / Poisson / Cox) and an LLA outer loop for
-  the remaining sparse-group MCP / SCAD families (M13.4 Phase 2.3
-  weight-space short-circuit); Rayon-parallel group sweeps;
+  saturation bypass, M13.2 cross-λ gradient cache); **GLM
+  prox-Newton paths run the same celer-style screening on the
+  weighted-LS surrogate** (M13.8: gap-safe sphere + Anderson dual
+  extrapolation + adaptive `0.3 × prev_outer_pgd` inner tol +
+  weighted strong-convexity correction `r²=2·gap·max(w)/n` —
+  **3–8× wall-clock on `logistic_lasso` v2 cells**); group
+  block-CD with native non-convex prox for group MCP (M13.4b for
+  LS, M13.4c for logistic / Poisson / Cox) and an LLA outer loop
+  for the remaining sparse-group MCP / SCAD families (M13.4 Phase
+  2.3 weight-space short-circuit); Rayon-parallel group sweeps;
   operator-norm Lipschitz via power iteration.
 - **Datafits** — least squares, binomial logistic, Poisson (log link,
   with offsets), Cox PH (Breslow + Efron ties), multinomial softmax,

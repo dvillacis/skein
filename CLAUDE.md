@@ -11,10 +11,13 @@ numerics; the Python package is a sklearn-compatible facade over PyO3
 bindings.
 
 See `ROADMAP.md` for the full milestone plan and current status. As of
-v0.7.0: M0–M2, M5, M8, M11, M12 done; M3/M4/M6/M7 partial (demand-driven
-follow-ups); M9 done for LS family; M10 shipped through wave F; M13
-perf workstream open. `README.md` has the public-facing pitch and
-headline benchmark numbers.
+v0.9.0 + M13.8 (post-release): M0–M2, M5, M8, M11, M12 done;
+M3/M4/M6/M7 partial (demand-driven follow-ups); M9 done for LS family;
+M10 shipped through wave F; M13 shipped through M13.4c (native group
+MCP for all GLM families) + M13.8 (celer-style gap-safe screening on
+the GLM prox-Newton surrogate, 3–8× wall on `logistic_lasso` v2 cells);
+M14a / M14c shipped, M14b (paper) pending. `README.md` has the
+public-facing pitch and headline benchmark numbers.
 
 ## Build & test
 

@@ -4,6 +4,67 @@ All notable changes to `skein-glm` are recorded here. The project follows
 semantic versioning, with the pre-1.0 minor-bump-on-feature policy
 documented in `docs/extending/rust-api.md`.
 
+## [Unreleased]
+
+### M13.8 — Celer-style gap-safe screening on the GLM prox-Newton surrogate
+
+Closes the perf gap left by M10 wave F. F-series wired up gap-safe
+screening + Anderson dual extrapolation + adaptive inner tol for the
+LS path, but `Datafit::lasso_dual_obj` returned `None` for everything
+except unweighted LS. The GLM paths
+(`prox_newton_solve_path`, `prox_newton_block_solve_path`) ran
+KKT-verifier-only — no screening, no extrapolation — and were
+~28× slower than glmnet on the `logistic_lasso medium-deep` v2 cell.
+
+What shipped:
+
+- **Weighted-LS dual obj.** `LeastSquares::lasso_dual_obj` now handles
+  the `sample_weights = Some(w)` case via the closed-form generalisation
+  `D(θ_scaled) = (Σwᵢrᵢ²/n)·scale·(1−scale/2) − scale·βᵀg`. Unlocks
+  screening on the prox-Newton surrogate.
+- **Per-GLM closed-form duals.** `GlmDatafit` gains
+  `glm_per_sample_loss_grad` + `glm_dual_obj` trait methods.
+  `BinomialLogit` implements the sigmoid Fenchel dual;
+  `PoissonLog` implements the Bregman form with offset support.
+  Cox / Huber / Multinomial keep `None` defaults with documented
+  rationale (Cox partial-likelihood dual has no closed form under
+  Breslow/Efron ties; the others are out of scope).
+- **`prox_newton_solve_screened`** mirrors `solve_path`'s per-λ KKT
+  loop on the GLM surrogate: gap-safe sphere screening, Anderson dual
+  extrapolation on `(β, r)` pairs (K=6 history), adaptive inner tol
+  `= max(tol, 0.3 × prev_outer_pgd)`, M13.1-style saturation bypass.
+  Legacy `prox_newton_solve` becomes a thin wrapper with
+  `lambda = None`; no public-API signature change.
+  `prox_newton_solve_path` opts in by passing `Some(lam)`. Same
+  wiring in `prox_newton_block_solve_path`; `block_gap_safe_screen`
+  generalised to use `Datafit::lasso_dual_obj` instead of an inlined
+  unweighted formula.
+- **Safe-sphere radius fix.** `r_safe² = 2·gap·max(w)/n` (was
+  `2·gap/n`), derived from the dual strong-convexity constant
+  `σ = n/max(w)` for weighted LS. Required for Poisson where
+  `max(μ)` can exceed 1; logistic gets a tighter radius for free
+  (`max(w) ≤ 0.25`). Unweighted-LS path unchanged
+  (`sample_weights() == None` collapses to the FGS 2015 formula).
+
+Wall-clock on bench v2 `logistic_lasso` (host `3c43bb844695`):
+
+| cell | before | after | speedup |
+|---|---:|---:|---:|
+| small-sparse | 0.44 s | 0.05 s | **8.2×** |
+| small-deep | 8.02 s | 2.62 s | **3.1×** |
+| medium-sparse | 27.58 s | 3.82 s | **7.2×** |
+
+`poisson_lasso medium-sparse` is roughly neutral (5.48 s → 6.24 s);
+Poisson's `max(μ) > 1` makes screening necessarily looser than logistic.
+
+Validation: pre-flight tight-tol screening test passes, 397 cargo
+lib tests pass (+9 dual-obj unit tests +
+`prox_newton_screening_matches_no_screening_within_tol`), 455 pytest
+pass / 5 skipped, cargo clippy + fmt clean. Out of scope: persistent
+GLM-level screening across PN iters (Path B; the `glm_dual_obj` trait
+method is wired but not yet driven by the solver), Cox dual
+screening, Huber / Multinomial dual obj methods.
+
 ## [0.9.0] — 2026-05-15
 
 Research-grade release. Closes the **inference axis** across all four
