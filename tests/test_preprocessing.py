@@ -257,6 +257,40 @@ def test_polychoric_covariance_matrix_validates_mask_shape():
         polychoric_covariance_matrix(X, continuous_mask=[True, False])
 
 
+def test_threshold_endpoints_produce_finite_rectangle_probabilities():
+    """Regression: scipy 1.15 (Python 3.10 pip default) returns NaN from
+    `multivariate_normal.cdf` when any coordinate is `-np.inf`; this
+    silently breaks `_bivariate_rect_prob` (NaN → clipped to _PI_FLOOR →
+    constant log-likelihood → Brent returns ±0.236 = golden-section
+    init point regardless of true ρ). The fix replaces ±inf endpoints
+    with ±_INF_SENTINEL (= 8.0) inside `_thresholds_from_counts`.
+
+    This test exercises the exact failure mode: build a threshold
+    vector with the new sentinel endpoints, compute the bivariate
+    rectangle probabilities at several ρ values, and assert finiteness
+    of *every* cell. If scipy regresses on inf-handling again, or if
+    someone reintroduces a raw ±inf into the threshold sentinel, this
+    will fail under any scipy version that mishandles inf in the CDF
+    input.
+    """
+    from skein_glm.preprocessing import _bivariate_rect_prob, _thresholds_from_counts
+
+    # 5-level Likert marginal — exercises the same endpoint structure
+    # as the failing tests reproduced.
+    counts = np.array([100, 200, 400, 200, 100], dtype=np.int64)
+    tau = _thresholds_from_counts(counts)
+    assert np.all(np.isfinite(tau)), f"threshold sentinels must be finite, got {tau}"
+    for rho in (-0.7, -0.236, 0.0, 0.236, 0.7):
+        pi = _bivariate_rect_prob(tau, tau, rho)
+        assert np.all(np.isfinite(pi)), (
+            f"rectangle probability has NaN/inf at rho={rho}; scipy "
+            f"`multivariate_normal.cdf` may be regressing on inf-handling"
+        )
+        # Cell probabilities should sum to ~1 (probability mass over
+        # the full real plane).
+        assert abs(pi.sum() - 1.0) < 1e-6, f"pi sums to {pi.sum()} at rho={rho}"
+
+
 # -------------------------------------------------------------------
 # R-anchor (skipped without fixture)
 # -------------------------------------------------------------------

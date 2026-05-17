@@ -57,6 +57,18 @@ from scipy.optimize import minimize_scalar
 _RHO_EDGE = 1e-6
 _PI_FLOOR = 1e-12
 _DEFAULT_ORDINAL_LEVELS = 10  # ≤ this many unique values → treated as ordinal
+# Threshold sentinels in place of ±inf. `scipy.stats.multivariate_normal.cdf`
+# in scipy < 1.16 returns NaN when any coordinate is `-np.inf` (the +inf
+# arm works), which silently breaks `_bivariate_rect_prob` → every cell
+# probability gets clipped to _PI_FLOOR → log-likelihood is constant in ρ
+# → Brent's optimizer terminates at its golden-section initial point
+# (≈ ±0.236). Fixed in scipy 1.16+ but Python 3.10 pip-installs ≤ 1.15.
+# Φ(±8) is 1 − 6.2e-16 / 6.2e-16 in double precision — effectively ±∞ for
+# the rectangle-difference arithmetic, and the interior thresholds are
+# bounded in `[stats.norm.ppf(1e-15), stats.norm.ppf(1-1e-15)] ≈ [-7.94,
+# 7.94]` by the `cum` clipping below, so ±8 is safely outside the
+# interior-threshold range.
+_INF_SENTINEL = 8.0
 
 
 def _normalize_ordinal_column(col: NDArray) -> NDArray[np.int64]:
@@ -86,7 +98,7 @@ def _thresholds_from_counts(counts: NDArray[np.int64]) -> NDArray[np.float64]:
     """
     n = counts.sum()
     if n == 0:
-        return np.array([-np.inf, np.inf])
+        return np.array([-_INF_SENTINEL, _INF_SENTINEL])
     # Olsson 0.5 continuity correction for zero-count cells avoids
     # τ = ±inf for the lowest / highest observed level.
     safe = np.maximum(counts, 0.5)
@@ -94,7 +106,14 @@ def _thresholds_from_counts(counts: NDArray[np.int64]) -> NDArray[np.float64]:
     # Clip away from 0 / 1 so Φ⁻¹ doesn't return ±inf.
     cum = np.clip(cum, 1e-15, 1.0 - 1e-15)
     interior = stats.norm.ppf(cum[:-1])
-    return np.concatenate(([-np.inf], interior, [np.inf]))
+    # ±_INF_SENTINEL instead of ±np.inf at endpoints — see the constant's
+    # docstring for the scipy 1.15 `multivariate_normal.cdf` NaN-at-(-inf)
+    # bug that motivates this. The interior values from `stats.norm.ppf`
+    # are bounded by the `cum` clipping above (|x| ≤ 7.94), so ±8 stays
+    # strictly outside the interior range and the rectangle-difference
+    # arithmetic in `_bivariate_rect_prob` still recovers `≈1` for the
+    # full-domain integral.
+    return np.concatenate(([-_INF_SENTINEL], interior, [_INF_SENTINEL]))
 
 
 def _bivariate_rect_prob(
