@@ -22,12 +22,12 @@ load-bearing piece; everything after stacks on top of it.
 | M6 — Penalty zoo | ⏳ partial | sparse-group already done in M2.7; elastic net (scalar LS) done in M6.1; group elastic net (LS) done in M6.2; **sparse-group SCAD end-to-end (LS + 3 GLMs) done**; **bridge `\|β\|^q` (LS, scalar LLA path) done**; **adaptive {Lasso, MCP, SCAD} (LS, two-stage pilot fit) done**; overlapping group + fused + constrained variants pending |
 | M7 — Multi-task | ⏳ partial | M7.1 (lasso + MCP) + M7.2 (SCAD + EN + sparse + standardize) done via `MultiTaskDesign<D>` virtual design wrapper composed with `Augmented` / `Standardized`; multi-response GLMs / multinomial / shared-support pending in M7.3 |
 | M8 — Distribution & DX | ✅ done | CI + cibuildwheel + Read the Docs + Sphinx + Furo site (concepts + porting + extending + examples + API ref) + R numerical regression suite + stable Rust API contract; comparison/timing benches moved to M9; comprehensive subclass docstrings deferred (low value relative to the rest of the milestone) |
-| M9 — Performance & correctness benchmarks | ⏳ partial | M9.1 harness + M9.3 lasso/LS + **M9.3 MCP/LS (deep + sparse, all sizes incl. n=100k, p=10k)** done, all comparators apples-to-apples via warm-started paths; M9.4 `benches/correctness/` framework live (per-λ Jaccard/sign/rel-L2 across skein/skglm/ncvreg). M9.2 criterion expansion + M9.4 at-scale `tests/fixtures/generate.R` parallel suite + M9.5 full docs page pending. Supersedes the deferred M8.6 bullet. |
+| M9 — Performance & correctness benchmarks | ⏳ partial | **M9.3 coverage closed via `benches/v2`** — every penalty × datafit row in the M9.3 table now has at least one direct comparator with five-seed aggregates (Lasso/EN/MCP/SCAD LS small+medium+large; Group lasso/MCP, Sparse-group MCP, Logistic lasso/MCP, Poisson lasso/MCP, Cox lasso/MCP, Graphical lasso, Graphical MCP small+medium). **M14g.1 dispatch fix** routes `glasso_l1`'s `skein` and `sklearn` cells through the graphical-path branch (previous aggregate silently ran `lasso_path` on the n×p data matrix; regenerated 2026-05-18 to skein 35.6 s / sklearn 252.6 s / R `glasso` 21.6 s @ small/deep, ~19,665 edges across packages). M9.1 harness + M9.4 `benches/correctness/` framework + per-λ Jaccard/sign/rel-L2 across skein/skglm/ncvreg also live. **Still pending**: three SCAD-variant scenarios (`ls_group_scad`, `ls_sparse_group_scad`, `logistic_scad`) — runners exist, scenarios need scaffolding; M9.2 criterion expansion; M9.4 at-scale `tests/fixtures/generate.R` parallel suite; M9.5 `docs/benchmarks/speed.md` consolidated docs page. |
 | M10 — Performance improvements | ⏳ partial | M10.1 profile (`col_dot` is the floor without BLAS) + M10.3 five waves: (1) col_axpy + F-order DenseMatrix + path-solver fixes; (2) adaptive inner tol via PGD + KKT-priority WS; (3) `blas-accelerate` feature; (4) (skipped — inner active-set CD didn't pay off); (5) F-series — duality gap + Anderson on residuals + gap-safe sphere screening, all gated and tested. **Skein medium lasso/LS: 7.6 s → 0.78 s sparse / 1.17 s deep — 6.5–10× total. Within 1.5× of glmnet on sparse, 1.9× on deep; ~8–9× behind sklearn's Cython `lasso_path`.** F-series wallclock-neutral on M9.3 scenarios — infrastructure correct but post-pass screening fires only on multi-pass λs (most converge in 1). M10.4 verified across deep + sparse regimes. Pending: G. cross-platform BLAS (OpenBLAS/MKL), H. pre-pass gap-safe screening, I. Cython-grade rewrite (off-roadmap). |
 | M11 — Graphical models | ✅ done | Single-population glasso (L1 / MCP / SCAD) + joint glasso across `K` populations (Danaher–Wang–Witten group form via ADMM) + EBIC tuner; M11.3 bootnet-style bootstrap edge stability shipped. |
 | M12 — Hardening (robustness, test coverage, CI) | ✅ done | Penalty + datafit unit-test coverage closed; Rust integration test directory added; R-fixture gate in CI; PyO3-layer smoke job (`.github/workflows/bench-smoke.yml`); pre-flight tight-tol screening test now a separate fail-fast CI step with 2-min timeout (R3, ci.yml); numerical guards (`W_FLOOR=1e-6`, `ETA_CLAMP=30.0`) centralized in `crates/skein-core/src/numerics.rs` (R4); R1 unwrap audit closed (`block_path_lla.rs` documented; `cd.rs::anderson_extrapolate` documented; dead `Groups::from_csr` call removed from `glasso_admm.rs`; remaining hits are test-only setup invariants); `Groups::has_overlap()` + parallel block-CD overlap detection with serial Gauss-Seidel fallback + `Once`-gated stderr warning + fixture (C5); criterion bench tree expanded with `lla_outer.rs`, `prox_newton_glm.rs`, `glasso.rs` alongside existing `block_cd.rs`, README updated (P2); `skein-py/src/lib.rs` 10,628 → 275 lines, every datafit family in its own module: `glasso.rs`, `glm.rs`, `ls.rs`, `mmap_chunked.rs`, `multinomial.rs`, `multitask.rs` (P4). No new algorithmic surface. |
 | M13 — Performance findings from `benches/v2` | ⏳ partial | M13.1 adaptive screening saturation bypass shipped; M13.2 cross-λ gradient cache shipped (-10.4% wall on medium Lasso); M13.4 Phase 2.3 LLA fixed-point short-circuit shipped; **M13.4b native group-MCP BCD shipped (-3.46× wall on medium ls_group_mcp; flips skein/grpreg from 3.34× slower to 1.20× faster)**; **M13.4c native group-MCP BCD extended to logistic / Poisson / Cox shipped (2.12× wall on logistic medium; new `glm_group_mcp_native_matches_lla` cross-family agreement test)**; M13.6 re-characterized post-M13.2 (memory-bandwidth wall in inner CD past medium scale, not fixed-cost overhead); M13.7 Jacobi-parallel block-CD remains a negative result; **M13.8 celer-style gap-safe screening on the GLM prox-Newton surrogate shipped** (weighted-LS `lasso_dual_obj`, per-GLM closed-form duals for logistic + Poisson, Anderson dual extrapolation on `(β, r)` pairs, weighted strong-convexity correction `r²=2·gap·max(w)/n`, M13.1-style saturation bypass — **3–8× wall on logistic_lasso v2 cells**, 8.2× small-sparse / 3.1× small-deep / 7.2× medium-sparse). Remaining: M13.5 MCP one-outer-iter short-circuit; sparse-group MCP variants for logistic / Poisson / Cox still on LLA. |
-| M14 — Inference & applications closeout | ⏳ partial | **Released as v0.9.0** (commit `ab9bd44`). **M14a.1 polychoric / polyserial preprocessing** (Olsson 1979 two-step ML) for ordinal Likert / mixed data; **M14a.2 edge-level FDR / FWER / MB stability bound** on `GraphicalBootstrap` (no other graphical-models package has this — BH FDR + Bonferroni / Holm + closed-form MB threshold); **M14a.3 debiased Cox lasso** (Van de Geer / Cai-Wang construction reusing the partial-likelihood Fisher diagonal from `CoxPH::surrogate_at` via a 16-line PyO3 binding — closes the inference axis across all four mainstream GLM families); **M14c.1 scalar LLA weight short-circuit** (Phase 2.3 ported to `path_lla.rs` — affects bridge, adaptive lasso, multitask LLA); **M14c.2 native sparse-group MCP penalty + 6 GLM PyO3 swaps** (drops the LLA layer for logistic/Poisson/Cox sparse-group MCP, sibling of M13.4c); **M14c.3 at-scale R-fixture tier** (n=500, p=100) for cross-package regression gating; **R-anchor fixture generators** for polychoric (vs `psych::polychoric`, atol 5e-3) and Cox active-set (vs `glmnet(family='cox')`, Jaccard ≥ 0.6 — no R package has Cox debiasing). Three new sklearn-compatible estimators, four new `docs/concepts/` pages, end-to-end psychometrics example now closes the M11.1 replication exit criterion. M14b (paper headline run + manuscript) pending. |
+| M14 — Inference & applications closeout | ⏳ partial | **Released as v0.9.0** (commit `ab9bd44`), then **v0.10.0** shipped M13.8 (GLM prox-Newton screening). **M14a.1 polychoric / polyserial preprocessing** (Olsson 1979 two-step ML) for ordinal Likert / mixed data; **M14a.2 edge-level FDR / FWER / MB stability bound** on `GraphicalBootstrap` (no other graphical-models package has this — BH FDR + Bonferroni / Holm + closed-form MB threshold); **M14a.3 debiased Cox lasso** (Van de Geer / Cai-Wang construction reusing the partial-likelihood Fisher diagonal from `CoxPH::surrogate_at` via a 16-line PyO3 binding — closes the inference axis across all four mainstream GLM families); **M14c.1 scalar LLA weight short-circuit** (Phase 2.3 ported to `path_lla.rs` — affects bridge, adaptive lasso, multitask LLA); **M14c.2 native sparse-group MCP penalty + 6 GLM PyO3 swaps** (drops the LLA layer for logistic/Poisson/Cox sparse-group MCP, sibling of M13.4c); **M14c.3 at-scale R-fixture tier** (n=500, p=100) for cross-package regression gating; **R-anchor fixture generators** for polychoric (vs `psych::polychoric`, atol 5e-3) and Cox active-set (vs `glmnet(family='cox')`, Jaccard ≥ 0.6 — no R package has Cox debiasing). **M14d GLM W_FLOOR + penalty unimodality trait; M14e ncvreg-equivalent v-scaled MCP/SCAD prox** (closes the nonconvex GLM active-set bloat — `logistic_mcp medium-sparse` 842 → 107 active features, 6× speedup); **M14f fused IRLS+CD GLM solver** mirroring `ncvreg::cdfit_glm`'s lazy per-iter cost structure (`logistic_mcp medium-sparse` 19.7 s → 3.05 s, ~8 % ahead of ncvreg). **M14b: empirical run shipped 2026-05-18**, 909-line manuscript draft compiles to PDF; remaining work is folding post-M14e/f numbers into §Results and JMLR-MLOSS / JOSS formatting pass. **M14g (open):** glasso_l1 benchmark-runner dispatch bug + poisson_lasso convex regression — see §M14g. |
 
 Test count at this snapshot: **358 cargo lib + 8 cargo integration + 455 pytest, all green.**
 
@@ -1210,24 +1210,46 @@ For each (scenario, package) pair, measure wall-clock time-to-fit on a
 shared λ-grid with a uniform convergence tolerance documented in the
 methodology page.
 
-| Penalty / datafit | Comparators | Status |
-|---|---|---|
-| Lasso LS — deep regime | sklearn, skglm, celer, glmnet | ✅ done |
-| Lasso LS — sparse regime | sklearn, skglm, celer, glmnet | ✅ done |
-| ElasticNet LS | sklearn, skglm, glmnet | pending |
-| MCP LS — deep + sparse | skglm, ncvreg | ✅ done |
-| SCAD LS | ncvreg | pending |
-| Group lasso LS | skglm (partial), grpreg | pending |
-| Group MCP / SCAD LS | grpreg | pending |
-| Sparse-group MCP/SCAD LS | (skein only — absolute throughput showcase) | pending |
-| Logistic lasso | sklearn, skglm, celer, glmnet, pyglmnet | pending |
-| Logistic MCP/SCAD | ncvreg | pending |
-| Poisson lasso | glmnet, pyglmnet | pending |
-| Cox lasso | glmnet | pending |
+The original M9.3 table was rewritten when the `benches/v2` Snakemake
+suite landed: it covers the same (penalty × datafit) matrix as
+publication-quality cells (5 seeds × {small, medium, large} ×
+{deep, sparse}) and is the v1 harness's successor. Status now reflects
+v2 aggregate coverage. v1 results in `benches/results/*.json` remain
+the canonical small / medium / large lasso/MCP/SCAD/glasso LS
+snapshots; v2 cells live in `benches/v2/results/scenarios/*.aggregate.json`.
 
-Three problem sizes per scenario (small / medium / large from M9.1's
-grid). Output: per-scenario bar charts (matplotlib, committed PNG +
-underlying JSON) and a markdown summary at `docs/benchmarks/speed.md`.
+| Penalty / datafit | Direct comparators present | Status |
+|---|---|---|
+| Lasso LS — deep + sparse | celer, glmnet, skglm, sklearn | ✅ done — `ls_lasso` (small + medium + large) |
+| ElasticNet LS | glmnet, sklearn | ✅ done — `ls_elasticnet` (small + medium + large) |
+| MCP LS — deep + sparse | ncvreg, skglm | ✅ done — `ls_mcp` (small + medium + large; v1 large is n=100k, p=10k) |
+| SCAD LS | ncvreg | ✅ done — `ls_scad` (small + medium + large) |
+| Group lasso LS | grpreg | ✅ done — `ls_group_lasso` (small + medium) |
+| Group MCP LS | grpreg | ✅ done — `ls_group_mcp` (small + medium) |
+| Group SCAD LS | grpreg | ⏳ pending — `ls_group_scad` scenario not yet scaffolded (skein + grpreg runners both exist) |
+| Sparse-group MCP LS | (skein only — throughput showcase) | ✅ done — `ls_sparse_group_mcp` (small + medium) |
+| Sparse-group SCAD LS | (skein only) | ⏳ pending — `ls_sparse_group_scad` scenario not yet scaffolded |
+| Logistic lasso | glmnet | ✅ done — `logistic_lasso` (small + medium); celer/skglm/sklearn/pyglmnet runners are a separate ladder expansion, not an M9.3 blocker |
+| Logistic MCP | ncvreg | ✅ done — `logistic_mcp` (small + medium) |
+| Logistic SCAD | ncvreg | ⏳ pending — `logistic_scad` scenario not yet scaffolded |
+| Poisson lasso | glmnet | ✅ done — `poisson_lasso` (small + medium); see §M14g.2 for an open perf regression |
+| Poisson MCP | glmnet (surrogate) | ✅ done — `poisson_mcp` (small + medium) |
+| Cox lasso | glmnet, lifelines (via ladder) | ✅ done — `cox_lasso` (small + medium) |
+| Cox MCP | glmnet (surrogate) | ✅ done — `cox_mcp` (small + medium) |
+| Graphical lasso (Σ⁻¹ L1) | R `glasso`, sklearn | ✅ done — `glasso_l1` (small/deep); regenerated 2026-05-18 after M14g.1 dispatch fix |
+| Graphical MCP (Σ⁻¹) | (skein only) | ✅ done — `glasso_mcp` (small/deep) |
+
+**Pending**: three SCAD-variant scenarios above. Each is mechanical
+(`benches/v2/scenarios/<name>.py` mirroring its MCP sibling, plus a
+config.yaml `headline:` entry); the skein runner already exposes
+`Group/SparseGroup/LogisticSCADPathRegressor` and `r_runner.R` already
+maps `penalty == "scad"` and `penalty == "group_scad"` to ncvreg /
+grpreg. They're listed separately to avoid the prior table's bundled
+"MCP/SCAD" rows hiding what actually shipped.
+
+Output: per-scenario bar charts (matplotlib, committed PNG +
+underlying JSON) and a markdown summary at `docs/benchmarks/speed.md`
+(the consolidated docs page is M9.5 — still pending).
 
 #### ✅ Lasso/LS — what shipped
 
@@ -2754,14 +2776,74 @@ in commit `e35536c`).
 skipped) + Sphinx `-W` build green. No new Rust algorithm; one new
 PyO3 binding.
 
-### M14b — Pending (software paper)
+### ⏳ M14b — Mostly done (software paper)
 
-Run the full `benches/v2` headline matrix for the GLM / graphical
-cells (LS cells already done), expand the appendix coverage table,
-and draft the JMLR-MLOSS / JOSS manuscript using the 10 figures + 5
-tables that already auto-generate. The artifact bundle is complete;
-what's missing is the empirical execution on GLMs and the
-manuscript wrapper.
+**Empirical execution shipped 2026-05-18.** Full `benches/v2`
+headline matrix regenerated against the current working tree
+(M13.8 + M14d/e/f); all 339 jobs green except the R-glasso runner,
+which was wired in this run (commit forthcoming) and added a 5th
+package to the `glasso_l1` scenario. Aggregates + 5 figures (F2–F5,
+F7) + 3 tables (T2, T4, T6) refreshed. New skein cells refreshed
+~6× faster than the previously-committed v0.10.0 snapshot on the
+nonconvex GLM scenarios — see the M14g findings block below.
+
+**Manuscript draft.** `paper/manuscript.tex` is a 909-line JMLR-MLOSS
+skeleton with all standard sections (Introduction, Related Work,
+Methods, Software Architecture, Results, Correctness, Recovery,
+Selection & Inference, Applications, Ablation, Reproducibility,
+Conclusion) wired to the auto-generated figures + tables. Builds to
+`manuscript.pdf` cleanly. Remaining for v1.0:
+
+1. Fold post-M14e/f numbers into §Results and §Ablation
+   (currently quotes pre-M13.8 baselines).
+2. Add the `logistic_mcp medium-sparse 123 s → 19.7 s → 3.05 s`
+   M14e/M14f ablation row.
+3. Submission pass for JMLR-MLOSS or JOSS formatting (template
+   swap is a one-liner per the file header).
+
+### ⏳ M14g — Findings from the 2026-05-18 v2 release run
+
+Two correctness / perf items surfaced by the headline regeneration
+against M13.8 + M14d/e/f. Both block a clean v1.0 narrative.
+
+**✅ M14g.1 — `glasso_l1` benchmark dispatch bug (FIXED).** The
+skein and sklearn runners under `benches/v2/runners/` (re-exports
+from `benches/runners/`) dispatched the graphical fit on
+`penalty == "glasso"`, but `benches/v2/scenarios/glasso_l1.py:15`
+sets `penalty = "lasso"`. The result: `glasso_l1__*__skein.*` and
+`glasso_l1__*__sklearn.*` cells silently ran `lasso_path` on the
+n×p data matrix instead of `GraphicalLasso` on the sample
+covariance — skein cells reported `active=0` in ~6 ms, sklearn
+likewise. The R-`glasso` runner (`benches/v2/runners/glasso_runner.py`,
+registered in `benches/v2/report/_run_cell.py:36`) dispatched
+correctly via `problem.meta["simulator"] == "glasso_truth"`.
+**Fix**: both `benches/runners/skein_runner.py:fit` and
+`benches/runners/sklearn_runner.py:fit` now route via the simulator
+label (`sim == "glasso_truth" and penalty == "lasso"` triggers
+`_fit_glasso`; same shape for `"mcp"` → `_fit_glasso_mcp`).
+Regenerated 2026-05-18 across 5 seeds × 2 packages × small/deep:
+skein **35.6 s** / sklearn **252.6 s** / R `glasso` **21.6 s**,
+~19,665 final edges across all three packages (within 2 of each
+other). Paper F2/F3/F4 `glasso_l1` columns now reflect the real
+graphical fit. Aggregate at
+`benches/v2/results/scenarios/glasso_l1.aggregate.json`.
+
+**M14g.2 — `poisson_lasso` regression.** The convex Poisson lasso
+medium-deep cell measured **41.7 s** on this run vs **29.0 s** on
+the committed v0.10.0 snapshot (glmnet 2.5 s — already a known gap).
+M13.8 closed the *logistic* lasso gap via celer-style screening on
+the GLM prox-Newton surrogate; M14e/f closed the *nonconvex* GLM gap
+via the v-scaled prox + fused IRLS+CD. Neither touched the convex
+Poisson path. Bisect against the three post-v0.10.0 commits
+(`474c68a` mFDR, `abf176c` group orthonormalization, `590531d`
+cMCP/gel) is the next step — only one of them should plausibly
+touch the Poisson hot path.
+
+Test count at this snapshot (working tree): per CHANGELOG **397
+cargo lib + 8 integration + 455 pytest** at v0.10.0; M14d/e/f added
+incrementally to reach **386 cargo lib + 5 integration + 455 pytest**
+in the M14f closeout block (count drift is from integration-test
+consolidation, not regressions).
 
 ### ✅ M14c — Perf / correctness closeout (SHIPPED)
 
