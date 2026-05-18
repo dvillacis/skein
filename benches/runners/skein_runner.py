@@ -67,6 +67,12 @@ def _build_estimator(
             return e.GroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
         if penalty == "group_scad":
             return e.GroupSCADPathRegressor(groups=problem.groups, a=gamma, **common)
+        if penalty == "sparse_group_lasso":
+            return e.SparseGroupLassoPathRegressor(groups=problem.groups, **common)
+        if penalty == "sparse_group_mcp":
+            return e.SparseGroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
+        if penalty == "sparse_group_scad":
+            return e.SparseGroupSCADPathRegressor(groups=problem.groups, a=gamma, **common)
     if problem.family == "logistic":
         if penalty == "lasso":
             return e.LogisticLassoPathRegressor(**common)
@@ -80,6 +86,12 @@ def _build_estimator(
             return e.LogisticGroupLassoPathRegressor(groups=problem.groups, **common)
         if penalty == "group_mcp":
             return e.LogisticGroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
+        if penalty == "sparse_group_lasso":
+            return e.LogisticSparseGroupLassoPathRegressor(groups=problem.groups, **common)
+        if penalty == "sparse_group_mcp":
+            return e.LogisticSparseGroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
+        if penalty == "sparse_group_scad":
+            return e.LogisticSparseGroupSCADPathRegressor(groups=problem.groups, a=gamma, **common)
     if problem.family == "poisson":
         if penalty == "lasso":
             return e.PoissonLassoPathRegressor(**common)
@@ -93,6 +105,12 @@ def _build_estimator(
             return e.PoissonGroupLassoPathRegressor(groups=problem.groups, **common)
         if penalty == "group_mcp":
             return e.PoissonGroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
+        if penalty == "sparse_group_lasso":
+            return e.PoissonSparseGroupLassoPathRegressor(groups=problem.groups, **common)
+        if penalty == "sparse_group_mcp":
+            return e.PoissonSparseGroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
+        if penalty == "sparse_group_scad":
+            return e.PoissonSparseGroupSCADPathRegressor(groups=problem.groups, a=gamma, **common)
     if problem.family == "cox":
         # Cox in skein uses (time, status) via fit(X, time, event=status);
         # the lasso path is exposed through CoxMCPPathRegressor(gamma=∞).
@@ -106,7 +124,92 @@ def _build_estimator(
             return e.CoxGroupLassoPathRegressor(groups=problem.groups, **common)
         if penalty == "group_mcp":
             return e.CoxGroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
+        if penalty == "sparse_group_lasso":
+            return e.CoxSparseGroupLassoPathRegressor(groups=problem.groups, **common)
+        if penalty == "sparse_group_mcp":
+            return e.CoxSparseGroupMCPPathRegressor(groups=problem.groups, gamma=gamma, **common)
+        if penalty == "sparse_group_scad":
+            return e.CoxSparseGroupSCADPathRegressor(groups=problem.groups, a=gamma, **common)
     raise NotImplementedError(f"skein runner: ({problem.family}, {penalty}) not yet wired")
+
+
+def _fit_glasso(
+    problem: Problem,
+    lambda_grid: np.ndarray,
+    tol: float,
+) -> RunResult:
+    """Fit a path of single-alpha `GraphicalLasso` solves. The bench
+    treats the whole grid as one cell so wall-clock is comparable to
+    sklearn (which also has no native path solver)."""
+    from skein_glm import GraphicalLasso
+
+    return _fit_graphical_path(
+        problem, lambda_grid, tol,
+        builder=lambda alpha: GraphicalLasso(alpha=float(alpha), tol=tol),
+        kind="glasso",
+    )
+
+
+def _fit_glasso_mcp(
+    problem: Problem,
+    lambda_grid: np.ndarray,
+    tol: float,
+    gamma: float,
+) -> RunResult:
+    """Fit a path of single-alpha `GraphicalMCP` solves. Same loop shape
+    as `_fit_glasso` (no native path solver in the graphical family) but
+    with the nonconvex MCP envelope on the off-diagonal entries of Σ⁻¹.
+    """
+    from skein_glm import GraphicalMCP
+
+    return _fit_graphical_path(
+        problem, lambda_grid, tol,
+        builder=lambda alpha: GraphicalMCP(alpha=float(alpha), gamma=gamma, tol=tol),
+        kind="glasso_mcp",
+    )
+
+
+def _fit_graphical_path(
+    problem: Problem,
+    lambda_grid: np.ndarray,
+    tol: float,
+    *,
+    builder,
+    kind: str,
+) -> RunResult:
+    n_edges: list[int] = []
+    t0 = time.perf_counter()
+    last_precision = None
+    for alpha in np.asarray(lambda_grid, dtype=np.float64):
+        est = builder(alpha).fit(problem.x)
+        precision = est.precision_
+        last_precision = precision
+        # Count off-diagonal edges (undirected, so /2).
+        mask = np.abs(precision) > 1e-10
+        np.fill_diagonal(mask, False)
+        n_edges.append(int(mask.sum() // 2))
+    elapsed = time.perf_counter() - t0
+    final_density = (
+        n_edges[-1] / (last_precision.shape[0] * (last_precision.shape[0] - 1) // 2)
+        if last_precision is not None
+        else 0.0
+    )
+    _ = tol  # tol is forwarded via the builder closure
+    return RunResult(
+        package=name,
+        version=_version(),
+        fit_time_s=elapsed,
+        n_iter=None,
+        final_obj=None,
+        active_set_size=n_edges[-1] if n_edges else 0,
+        coef_path=None,
+        intercept_path=None,
+        extra={
+            "kind": kind,
+            "n_edges_per_lambda": n_edges,
+            "final_density": final_density,
+        },
+    )
 
 
 def fit(
@@ -119,6 +222,16 @@ def fit(
     gamma: float = 3.0,
     **_: object,
 ) -> RunResult:
+    # Graphical scenarios route on the simulator label rather than the
+    # penalty name: v2's `glasso_l1` scenario SPECs penalty="lasso" (the
+    # graphical L1 envelope), so dispatching purely on `penalty == "glasso"`
+    # silently runs `lasso_path` on the n×p data matrix instead of fitting
+    # the precision matrix. See ROADMAP §M14g.1.
+    sim = (problem.meta or {}).get("simulator") if problem.meta else None
+    if penalty == "glasso" or (sim == "glasso_truth" and penalty == "lasso"):
+        return _fit_glasso(problem, lambda_grid, tol)
+    if penalty == "glasso_mcp" or (sim == "glasso_truth" and penalty == "mcp"):
+        return _fit_glasso_mcp(problem, lambda_grid, tol, gamma)
     est = _build_estimator(problem, penalty, lambda_grid, tol, screening, gamma)
     t0 = time.perf_counter()
     if problem.family == "cox":
