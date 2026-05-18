@@ -188,6 +188,7 @@ from skein_glm.cv import (
     SparseGroupSCADPathCV,
 )
 from skein_glm.ic import select_by_ic
+from skein_glm.mfdr import MFDR, estimate_mfdr, select_by_mfdr
 from skein_glm.orthonormalize import (
     BlockBackTransform,
     fit_with_orthonormalization,
@@ -322,7 +323,10 @@ __all__ = [
     "back_transform_coefs",
     "back_transform_coefs_path",
     "BlockBackTransform",
+    "estimate_mfdr",
     "fit_with_orthonormalization",
+    "MFDR",
+    "select_by_mfdr",
     "orthonormalize_groups",
     "orthonormalize_groups_dense",
     "solve_bridge_ls_path",
