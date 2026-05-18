@@ -17,6 +17,7 @@
 // without breaking the signature. Suppress at module level.
 #![allow(clippy::useless_conversion)]
 
+mod convex_region;
 mod glasso;
 mod glm;
 mod ls;
@@ -266,6 +267,11 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
         mmap_chunked::solve_logistic_mcp_path_chunked_f32,
         m
     )?)?;
+    // Post-fit nonconvex convex-region detection (grpreg `convex.min`).
+    m.add_function(wrap_pyfunction!(convex_region::convex_min_idx_scalar, m)?)?;
+    m.add_function(wrap_pyfunction!(convex_region::convex_min_idx_group, m)?)?;
+    m.add_function(wrap_pyfunction!(convex_region::group_lipschitz_dense, m)?)?;
+    m.add_function(wrap_pyfunction!(convex_region::group_lipschitz_sparse, m)?)?;
     // M11 — graphical lasso family.
     m.add_function(wrap_pyfunction!(glasso::solve_glasso_lasso, m)?)?;
     m.add_function(wrap_pyfunction!(glasso::solve_glasso_mcp, m)?)?;

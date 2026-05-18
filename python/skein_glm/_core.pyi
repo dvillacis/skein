@@ -4,6 +4,31 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+def convex_min_idx_scalar(
+    betas: NDArray[np.float64],
+    col_lip: NDArray[np.float64],
+    penalty_concavity: float,
+    zero_tol: float = ...,
+) -> int | None: ...
+def convex_min_idx_group(
+    betas: NDArray[np.float64],
+    group_labels: NDArray[np.int64],
+    group_lip: NDArray[np.float64],
+    penalty_concavity: float,
+    zero_tol: float = ...,
+) -> int | None: ...
+def group_lipschitz_dense(
+    x: NDArray[np.float64],
+    group_labels: NDArray[np.int64],
+) -> NDArray[np.float64]: ...
+def group_lipschitz_sparse(
+    n_rows: int,
+    n_cols: int,
+    data: NDArray[np.float64],
+    indices: NDArray[np.int64],
+    indptr: NDArray[np.int64],
+    group_labels: NDArray[np.int64],
+) -> NDArray[np.float64]: ...
 def solve_mcp_ls(
     x: NDArray[np.float64],
     y: NDArray[np.float64],

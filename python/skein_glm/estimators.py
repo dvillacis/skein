@@ -7,6 +7,7 @@ expose `coef_`, `intercept_`, and `info_` after `fit`.
 """
 from __future__ import annotations
 
+import warnings
 from typing import Any, Callable
 
 import numpy as np
@@ -97,6 +98,114 @@ def _as_csc_arrays(x):
     indptr = np.ascontiguousarray(x.indptr, dtype=np.int64)
     n_rows, n_cols = x.shape
     return data, indices, indptr, int(n_rows), int(n_cols)
+
+
+def _mcp_concavity(gamma: float) -> float:
+    """LLA-surrogate concavity for MCP. Returns `1/γ`, or 0 if γ is
+    infinite / non-positive (i.e. the penalty has degenerated to lasso /
+    is convex)."""
+    if gamma is None or not np.isfinite(gamma) or gamma <= 0.0:
+        return 0.0
+    return 1.0 / float(gamma)
+
+
+def _scad_concavity(a: float) -> float:
+    """LLA-surrogate concavity for SCAD. Returns `1/(a-1)` for a > 1, else 0."""
+    if a is None or not np.isfinite(a) or a <= 1.0:
+        return 0.0
+    return 1.0 / (float(a) - 1.0)
+
+
+def _col_lipschitz_dense_or_sparse(x) -> NDArray[np.float64]:
+    """Per-coordinate Lipschitz cache `L_j = ‖X_{:,j}‖² / n` for the
+    scalar convex-region check. Supports dense ndarrays and scipy sparse."""
+    if _is_sparse(x):
+        from scipy import sparse  # type: ignore[import-untyped]
+        if not sparse.isspmatrix_csc(x):
+            x = x.tocsc()
+        # CSC col j slice — squared sum without densifying.
+        n = x.shape[0]
+        col_sq = np.asarray(x.power(2).sum(axis=0)).ravel()
+        return col_sq / float(n)
+    x_arr = np.ascontiguousarray(x, dtype=np.float64)
+    n = x_arr.shape[0]
+    return (x_arr * x_arr).sum(axis=0) / float(n)
+
+
+def _group_lipschitz_dense_or_sparse(
+    x, group_labels: NDArray[np.int64]
+) -> NDArray[np.float64]:
+    """Per-group operator-norm Lipschitz cache `L_g = ‖X_g‖_op² / n` via
+    the Rust solver helper (faster than numpy.linalg.svd per group)."""
+    if _is_sparse(x):
+        data, indices, indptr, n_rows, n_cols = _as_csc_arrays(x)
+        return _core.group_lipschitz_sparse(
+            n_rows, n_cols, data, indices, indptr, group_labels
+        )
+    x_arr = np.ascontiguousarray(x, dtype=np.float64)
+    return _core.group_lipschitz_dense(x_arr, group_labels)
+
+
+def _set_scalar_convex_min_idx(estimator, x, concavity: float) -> None:
+    """Compute and attach `convex_min_idx_` for a scalar nonconvex path
+    estimator. Warns once if the path enters the non-convex region.
+
+    No-op (sets `convex_min_idx_ = None`) for convex penalties (`concavity
+    <= 0`) or for mmap / chunked backends — per-column Lipschitz on a lazy
+    design needs a dedicated Rust pass that is out of scope here."""
+    if concavity <= 0.0 or _is_mmap(x) or _is_chunked(x):
+        estimator.convex_min_idx_ = None
+        return
+    if not _is_sparse(x) and (
+        not hasattr(x, "shape") or len(getattr(x, "shape", ())) != 2
+    ):
+        estimator.convex_min_idx_ = None
+        return
+    col_lip = _col_lipschitz_dense_or_sparse(x)
+    idx = _core.convex_min_idx_scalar(
+        estimator.coefs_, np.ascontiguousarray(col_lip, dtype=np.float64), concavity
+    )
+    estimator.convex_min_idx_ = idx
+    if idx is not None:
+        warnings.warn(
+            f"{type(estimator).__name__}: path entered non-convex region at "
+            f"lambda index {idx} (λ={estimator.lambdas_[idx]:.4g}). Solutions "
+            f"at and beyond this λ may be local minima only; consider "
+            f"restricting cross-validation / IC selection to indices < {idx}.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+
+def _set_group_convex_min_idx(
+    estimator, x, group_labels: NDArray[np.int64], concavity: float
+) -> None:
+    """Block-level analog of `_set_scalar_convex_min_idx`."""
+    if concavity <= 0.0 or _is_mmap(x) or _is_chunked(x):
+        estimator.convex_min_idx_ = None
+        return
+    if not _is_sparse(x) and (
+        not hasattr(x, "shape") or len(getattr(x, "shape", ())) != 2
+    ):
+        estimator.convex_min_idx_ = None
+        return
+    group_lip = _group_lipschitz_dense_or_sparse(x, group_labels)
+    idx = _core.convex_min_idx_group(
+        estimator.coefs_,
+        np.ascontiguousarray(group_labels, dtype=np.int64),
+        np.ascontiguousarray(group_lip, dtype=np.float64),
+        concavity,
+    )
+    estimator.convex_min_idx_ = idx
+    if idx is not None:
+        warnings.warn(
+            f"{type(estimator).__name__}: path entered non-convex region at "
+            f"lambda index {idx} (λ={estimator.lambdas_[idx]:.4g}). Solutions "
+            f"at and beyond this λ may be local minima only; consider "
+            f"restricting cross-validation / IC selection to indices < {idx}.",
+            UserWarning,
+            stacklevel=3,
+        )
 
 
 class _NonconvexRegressorBase(BaseEstimator, RegressorMixin):
@@ -653,6 +762,8 @@ class MCPPathRegressor(_PathRegressorBase):
         self.screening = screening
         self.acceleration = acceleration
 
+    convex_min_idx_: int | None
+
     def fit(self, x, y: NDArray[np.float64]) -> "MCPPathRegressor":
         y = np.ascontiguousarray(y, dtype=np.float64)
         sw = _validate_sample_weights(self.sample_weights, x)
@@ -761,6 +872,7 @@ class MCPPathRegressor(_PathRegressorBase):
         self.intercepts_ = intercepts
         self.lambdas_ = lambdas_used
         self.info_ = info
+        _set_scalar_convex_min_idx(self, x, _mcp_concavity(self.gamma))
         return self
 
 
@@ -795,6 +907,8 @@ class SCADPathRegressor(_PathRegressorBase):
         self.standardize = standardize
         self.screening = screening
         self.acceleration = acceleration
+
+    convex_min_idx_: int | None
 
     def fit(self, x, y: NDArray[np.float64]) -> "SCADPathRegressor":
         y = np.ascontiguousarray(y, dtype=np.float64)
@@ -854,6 +968,7 @@ class SCADPathRegressor(_PathRegressorBase):
         self.intercepts_ = intercepts
         self.lambdas_ = lambdas_used
         self.info_ = info
+        _set_scalar_convex_min_idx(self, x, _scad_concavity(self.a))
         return self
 
 
@@ -1631,6 +1746,8 @@ class GroupMCPPathRegressor(_GroupPathBase):
         self.max_outer = max_outer
         self.outer_tol = outer_tol
 
+    convex_min_idx_: int | None
+
     def fit(self, x, y: NDArray[np.float64]) -> "GroupMCPPathRegressor":
         common, sparse_payload, n_features = _ls_group_dispatch_inputs(
             self, x, y, self.groups, is_path=True,
@@ -1655,6 +1772,10 @@ class GroupMCPPathRegressor(_GroupPathBase):
         self.lambdas_ = lambdas_used
         self.info_ = info
         self.n_features_in_ = n_features
+        _set_group_convex_min_idx(
+            self, x, np.ascontiguousarray(self.groups, dtype=np.int64),
+            _mcp_concavity(self.gamma),
+        )
         return self
 
 
@@ -1758,6 +1879,8 @@ class GroupSCADPathRegressor(_GroupPathBase):
         self.max_outer = max_outer
         self.outer_tol = outer_tol
 
+    convex_min_idx_: int | None
+
     def fit(self, x, y: NDArray[np.float64]) -> "GroupSCADPathRegressor":
         common, sparse_payload, n_features = _ls_group_dispatch_inputs(
             self, x, y, self.groups, is_path=True,
@@ -1782,6 +1905,10 @@ class GroupSCADPathRegressor(_GroupPathBase):
         self.lambdas_ = lambdas_used
         self.info_ = info
         self.n_features_in_ = n_features
+        _set_group_convex_min_idx(
+            self, x, np.ascontiguousarray(self.groups, dtype=np.int64),
+            _scad_concavity(self.a),
+        )
         return self
 
 
@@ -2210,6 +2337,8 @@ class SparseGroupSCADPathRegressor(_GroupPathBase):
         self.max_outer = max_outer
         self.outer_tol = outer_tol
 
+    convex_min_idx_: int | None
+
     def fit(self, x, y: NDArray[np.float64]) -> "SparseGroupSCADPathRegressor":
         common, sparse_payload, n_features = _ls_group_dispatch_inputs(
             self, x, y, self.groups, is_path=True,
@@ -2241,6 +2370,10 @@ class SparseGroupSCADPathRegressor(_GroupPathBase):
         self.lambdas_ = lambdas_used
         self.info_ = info
         self.n_features_in_ = n_features
+        _set_group_convex_min_idx(
+            self, x, np.ascontiguousarray(self.groups, dtype=np.int64),
+            _scad_concavity(self.a),
+        )
         return self
 
 
@@ -2286,6 +2419,8 @@ class SparseGroupMCPPathRegressor(_GroupPathBase):
         self.max_outer = max_outer
         self.outer_tol = outer_tol
 
+    convex_min_idx_: int | None
+
     def fit(self, x, y: NDArray[np.float64]) -> "SparseGroupMCPPathRegressor":
         common, sparse_payload, n_features = _ls_group_dispatch_inputs(
             self, x, y, self.groups, is_path=True,
@@ -2317,6 +2452,10 @@ class SparseGroupMCPPathRegressor(_GroupPathBase):
         self.lambdas_ = lambdas_used
         self.info_ = info
         self.n_features_in_ = n_features
+        _set_group_convex_min_idx(
+            self, x, np.ascontiguousarray(self.groups, dtype=np.int64),
+            _mcp_concavity(self.gamma),
+        )
         return self
 
 

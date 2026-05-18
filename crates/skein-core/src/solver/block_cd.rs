@@ -56,7 +56,7 @@ pub fn block_cd_solve(
 /// every group. Built once per fit by the path solvers and reused for
 /// both the gap-safe screen and the inner CD; eliminates the M2.4 → M2.6
 /// redundancy where each consumer ran its own power iteration.
-pub(crate) fn group_lipschitz_cache(design: &dyn DesignMatrix, groups: &Groups) -> Vec<f64> {
+pub fn group_lipschitz_cache(design: &dyn DesignMatrix, groups: &Groups) -> Vec<f64> {
     (0..groups.n_groups())
         .map(|g| group_lipschitz(design, groups.group(g)))
         .collect()
@@ -68,7 +68,7 @@ pub(crate) fn group_lipschitz_cache(design: &dyn DesignMatrix, groups: &Groups) 
 ///
 /// Singleton groups short-circuit to `col_sq_norm(j) / n` (operator and
 /// Frobenius norms coincide for one column). Zero-norm blocks return 0.
-pub(crate) fn group_lipschitz(design: &dyn DesignMatrix, cols: &[usize]) -> f64 {
+pub fn group_lipschitz(design: &dyn DesignMatrix, cols: &[usize]) -> f64 {
     let n_f = design.n_samples() as f64;
     if cols.is_empty() {
         return 0.0;

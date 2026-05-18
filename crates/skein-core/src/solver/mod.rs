@@ -9,6 +9,7 @@ mod block_cd;
 mod block_path;
 mod block_path_lla;
 mod cd;
+mod convex_region;
 mod glasso;
 mod glasso_admm;
 mod lla;
@@ -17,13 +18,17 @@ mod path_lla;
 mod prox_newton;
 mod prox_newton_block;
 
-pub use block_cd::{block_cd_solve, block_cd_solve_subset, block_cd_solve_subset_parallel};
+pub use block_cd::{
+    block_cd_solve, block_cd_solve_subset, block_cd_solve_subset_parallel, group_lipschitz,
+    group_lipschitz_cache,
+};
 pub use block_path::{block_lambda_max, solve_block_path, BlockPathConfig, BlockPathReport};
 pub use block_path_lla::{solve_block_path_lla, BlockPathLLAReport};
 pub use cd::{
     cd_solve, cd_solve_subset, cd_solve_subset_weighted_ls, cd_solve_subset_weighted_ls_with_lips,
     cd_solve_warm, cd_solve_warm_with_residual, CdConfig, CdReport,
 };
+pub use convex_region::{group_convex_min_idx, scalar_convex_min_idx, PenaltyConcavity};
 pub use glasso::{glasso_solve, GlassoConfig, GlassoReport};
 pub use glasso_admm::{joint_glasso_solve, JointGlassoConfig, JointGlassoReport};
 pub use lla::{
