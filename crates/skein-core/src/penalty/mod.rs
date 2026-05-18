@@ -12,10 +12,12 @@ mod factories;
 mod group_elastic_net;
 mod group_lasso;
 mod group_mcp;
+mod group_scad;
 mod mcp;
 mod scad;
 mod sparse_group_lasso;
 mod sparse_group_mcp;
+mod sparse_group_scad;
 
 pub use elastic_net::ElasticNet;
 pub use factories::{
@@ -25,10 +27,12 @@ pub use factories::{
 pub use group_elastic_net::GroupElasticNet;
 pub use group_lasso::GroupLasso;
 pub use group_mcp::GroupMcp;
+pub use group_scad::GroupScad;
 pub use mcp::Mcp;
 pub use scad::Scad;
 pub use sparse_group_lasso::SparseGroupLasso;
 pub use sparse_group_mcp::SparseGroupMcp;
+pub use sparse_group_scad::SparseGroupScad;
 
 use crate::groups::Groups;
 use ndarray::{ArrayView1, ArrayViewMut1};

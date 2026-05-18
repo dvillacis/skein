@@ -3,13 +3,20 @@
 //! design backends.
 //!
 //! Extracted from `lib.rs` in the M12 P4 refactor. Carries the shared LS
-//! plumbing (`build_path_outputs`, `build_block_path_outputs`,
-//! `build_block_path_lla_outputs`, plus the `_sparse_ls` siblings) and
-//! the cross-cutting helpers used by every other family
-//! (`parse_screening`, `groups_from_labels`, CSC readers, glmnet scales,
-//! intercept builders, `PathOutput` type alias). Those are exposed
-//! `pub(crate)` so `glm.rs`, `multinomial.rs`, `multitask.rs`,
-//! `mmap_chunked.rs`, and `glasso.rs` can call them as `crate::ls::name`.
+//! plumbing (`build_path_outputs`, `build_block_path_outputs`, plus
+//! the `_sparse_ls` siblings) and the cross-cutting helpers used by
+//! every other family (`parse_screening`, `groups_from_labels`, CSC
+//! readers, glmnet scales, intercept builders, `PathOutput` type
+//! alias). Those are exposed `pub(crate)` so `glm.rs`,
+//! `multinomial.rs`, `multitask.rs`, `mmap_chunked.rs`, and
+//! `glasso.rs` can call them as `crate::ls::name`.
+//!
+//! M14d retired the LLA-routed `build_block_path_lla_outputs[_sparse_ls]`
+//! helpers — the three penalties they served (group_scad,
+//! sparse_group_mcp, sparse_group_scad) now use direct CD on the
+//! nonconvex prox. The Rust core LLA solver (`solve_path_lla`,
+//! `solve_block_path_lla`) is still required by `bridge`, `multinomial`,
+//! `multitask`, and the GLM × sparse-group families.
 
 use ndarray::{Array1, ArrayView1};
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
@@ -23,15 +30,13 @@ use skein_core::{
     design::{DenseMatrix, SparseCSC, Standardized},
     groups::Groups,
     penalty::{
-        ElasticNet, GroupElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad,
-        SparseGroupLasso,
+        ElasticNet, GroupElasticNet, GroupLasso, GroupMcp, GroupPenalty, GroupScad, Mcp, Scad,
+        SparseGroupLasso, SparseGroupMcp, SparseGroupScad,
     },
     solver::{
-        broadcast_group_weights_to_coord, cd_solve, cmcp_lambda_max, lambda_grid,
-        solve_block_path, solve_block_path_lla, solve_path, solve_path_lla,
-        surrogate_sparse_group_mcp, surrogate_sparse_group_scad, surrogate_weights_bridge,
-        surrogate_weights_cmcp, surrogate_weights_gel, surrogate_weights_group_scad,
-        BlockPathConfig, CdConfig, PathConfig, Screening,
+        broadcast_group_weights_to_coord, cd_solve, cmcp_lambda_max, lambda_grid, solve_block_path,
+        solve_path, solve_path_lla, surrogate_weights_bridge, surrogate_weights_cmcp,
+        surrogate_weights_gel, BlockPathConfig, CdConfig, PathConfig, Screening,
     },
     standardize::{
         destandardize_path, rescale_weights_for_standardize, standardize, StandardizeConfig,
@@ -1178,113 +1183,6 @@ where
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_block_path_lla_outputs<'py, F>(
-    py: Python<'py>,
-    x: PyReadonlyArray2<f64>,
-    y: PyReadonlyArray1<f64>,
-    groups_labels: PyReadonlyArray1<i64>,
-    weights: Option<PyReadonlyArray1<f64>>,
-    lambdas: Option<PyReadonlyArray1<f64>>,
-    n_lambdas: usize,
-    lambda_min_ratio: f64,
-    max_iter: usize,
-    tol: f64,
-    acceleration: Option<usize>,
-    screening: &str,
-    parallel: bool,
-    fit_intercept: bool,
-    standardize_x: bool,
-    max_outer: usize,
-    outer_tol: f64,
-    make_inner: F,
-) -> PyResult<PathOutput<'py>>
-where
-    F: Fn(ArrayView1<f64>, &Groups, f64) -> Box<dyn GroupPenalty> + Send,
-{
-    let x_arr = x.as_array().to_owned();
-    let y_arr = y.as_array().to_owned();
-    let p = x_arr.ncols();
-
-    let labels = groups_labels.as_array().to_owned().to_vec();
-    if labels.len() != p {
-        return Err(PyValueError::new_err(format!(
-            "groups length {} does not match n_features {}",
-            labels.len(),
-            p
-        )));
-    }
-    let groups = groups_from_labels(&labels)?;
-    let n_groups = groups.n_groups();
-
-    let base_weights = match weights {
-        Some(w) => {
-            let arr = w.as_array().to_owned();
-            if arr.len() != n_groups {
-                return Err(PyValueError::new_err(format!(
-                    "weights length {} does not match n_groups {}",
-                    arr.len(),
-                    n_groups
-                )));
-            }
-            arr
-        }
-        None => ndarray::Array1::ones(n_groups),
-    };
-
-    let std_cfg = StandardizeConfig {
-        center_x: fit_intercept,
-        scale_x: standardize_x,
-        fit_intercept,
-    };
-    let (xs, ys, stats) = standardize(x_arr.view(), y_arr.view(), &std_cfg);
-
-    let block_cfg = BlockPathConfig {
-        n_lambdas,
-        lambda_min_ratio,
-        lambdas: lambdas.map(|a| a.as_array().to_vec()),
-        cd: CdConfig {
-            max_iter,
-            tol,
-            acceleration,
-        },
-        screening: parse_screening(screening)?,
-        parallel,
-    };
-
-    let design = DenseMatrix::new(xs);
-    let datafit = LeastSquares::new(ys);
-    let (betas_std, report) = py.allow_threads(|| {
-        solve_block_path_lla(
-            &design,
-            &datafit,
-            base_weights,
-            make_inner,
-            &groups,
-            &block_cfg,
-            max_outer,
-            outer_tol,
-        )
-    });
-    let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
-
-    let info = PyDict::new_bound(py);
-    info.set_item("inner_iters", report.inner_iters)?;
-    info.set_item("outer_iters", report.outer_iters)?;
-    info.set_item("outer_converged", report.outer_converged)?;
-    info.set_item("final_objs", report.final_objs)?;
-    info.set_item("working_set_sizes", report.working_set_sizes)?;
-    info.set_item("kkt_passes", report.kkt_passes)?;
-    info.set_item("per_lambda_wall_ns", report.per_lambda_wall_ns)?;
-
-    Ok((
-        coefs.into_pyarray_bound(py),
-        intercepts.into_pyarray_bound(py),
-        ndarray::Array1::from(report.lambdas).into_pyarray_bound(py),
-        info,
-    ))
-}
-
 #[pyfunction]
 #[pyo3(signature = (
     x, y, groups, *,
@@ -1526,20 +1424,16 @@ pub(crate) fn solve_group_scad_ls_path<'py>(
             "SCAD shape parameter `a` must be > 2; got {a}"
         )));
     }
-    let labels_owned = groups.as_array().to_owned();
-    let groups_obj = groups_from_labels(&labels_owned.to_vec())?;
-    let n_groups = groups_obj.n_groups();
-    let _ = groups_obj;
-
-    let base_weights = match &weights {
-        Some(w) => w.as_array().to_owned(),
-        None => ndarray::Array1::ones(n_groups),
-    };
-    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        let w = surrogate_weights_group_scad(beta, g, lam, a, base_weights.view());
-        Box::new(GroupLasso::with_weights(lam, w))
-    };
-    build_block_path_lla_outputs(
+    // M14d — native group-SCAD block-CD (no LLA outer loop). Routes
+    // through `solve_block_path` with `GroupScad::prox_group` (closed-
+    // form three-region SCAD shrinkage on the block norm) instead of
+    // the previous weighted-GroupLasso LLA surrogate. Matches the
+    // GroupMcp migration pattern. `max_outer` / `outer_tol` are kept
+    // in the signature for backward-compat with callers that pass
+    // them by keyword but are now ignored.
+    let _ = max_outer;
+    let _ = outer_tol;
+    build_block_path_outputs(
         py,
         x,
         y,
@@ -1555,9 +1449,7 @@ pub(crate) fn solve_group_scad_ls_path<'py>(
         parallel,
         fit_intercept,
         standardize_x,
-        max_outer,
-        outer_tol,
-        make_inner,
+        move |lam, w| Box::new(GroupScad::with_weights(lam, a, w)),
     )
 }
 
@@ -1602,10 +1494,7 @@ pub(crate) fn solve_sparse_group_mcp_ls_path<'py>(
         Some(w) => w.as_array().to_owned(),
         None => ndarray::Array1::ones(n_groups),
     };
-    let base_coord = match &coord_weights {
-        Some(w) => w.as_array().to_owned(),
-        None => ndarray::Array1::ones(p),
-    };
+    let base_coord = coord_weights.as_ref().map(|w| w.as_array().to_owned());
     if base_group.len() != n_groups {
         return Err(PyValueError::new_err(format!(
             "weights length {} does not match n_groups {}",
@@ -1613,28 +1502,32 @@ pub(crate) fn solve_sparse_group_mcp_ls_path<'py>(
             n_groups
         )));
     }
-    if base_coord.len() != p {
-        return Err(PyValueError::new_err(format!(
-            "coord_weights length {} does not match n_features {}",
-            base_coord.len(),
-            p
-        )));
+    if let Some(bc) = &base_coord {
+        if bc.len() != p {
+            return Err(PyValueError::new_err(format!(
+                "coord_weights length {} does not match n_features {}",
+                bc.len(),
+                p
+            )));
+        }
     }
-    let _ = groups_obj;
-
-    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        let (gw, cw) = surrogate_sparse_group_mcp(
-            beta,
-            g,
-            lam,
-            gamma,
-            alpha,
-            base_group.view(),
-            base_coord.view(),
-        );
-        Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
-    };
-    build_block_path_lla_outputs(
+    // M14d — native sparse-group-MCP block-CD (no LLA outer loop).
+    // Splits the flat `coord_weights` array into per-group sub-vectors
+    // once (same shape `SparseGroupMcp::with_coord_weights` expects) and
+    // routes through `solve_block_path` with the closed-form
+    // `SparseGroupMcp::prox_group` composition (per-coord scalar MCP
+    // then group-MCP block shrinkage, Breheny & Huang 2015 Proposition 1).
+    let coord_w_per_group: Option<Vec<ndarray::Array1<f64>>> = base_coord.map(|bc| {
+        (0..n_groups)
+            .map(|g| {
+                let cols = groups_obj.group(g);
+                ndarray::Array1::from_iter(cols.iter().map(|&j| bc[j]))
+            })
+            .collect()
+    });
+    let _ = max_outer;
+    let _ = outer_tol;
+    build_block_path_outputs(
         py,
         x,
         y,
@@ -1650,9 +1543,16 @@ pub(crate) fn solve_sparse_group_mcp_ls_path<'py>(
         parallel,
         fit_intercept,
         standardize_x,
-        max_outer,
-        outer_tol,
-        make_inner,
+        move |lam, gw| match &coord_w_per_group {
+            Some(cw) => Box::new(SparseGroupMcp::with_coord_weights(
+                lam,
+                alpha,
+                gamma,
+                gw,
+                cw.clone(),
+            )),
+            None => Box::new(SparseGroupMcp::with_weights(lam, alpha, gamma, gw)),
+        },
     )
 }
 
@@ -1702,10 +1602,7 @@ pub(crate) fn solve_sparse_group_scad_ls_path<'py>(
         Some(w) => w.as_array().to_owned(),
         None => ndarray::Array1::ones(n_groups),
     };
-    let base_coord = match &coord_weights {
-        Some(w) => w.as_array().to_owned(),
-        None => ndarray::Array1::ones(p),
-    };
+    let base_coord = coord_weights.as_ref().map(|w| w.as_array().to_owned());
     if base_group.len() != n_groups {
         return Err(PyValueError::new_err(format!(
             "weights length {} does not match n_groups {}",
@@ -1713,28 +1610,29 @@ pub(crate) fn solve_sparse_group_scad_ls_path<'py>(
             n_groups
         )));
     }
-    if base_coord.len() != p {
-        return Err(PyValueError::new_err(format!(
-            "coord_weights length {} does not match n_features {}",
-            base_coord.len(),
-            p
-        )));
+    if let Some(bc) = &base_coord {
+        if bc.len() != p {
+            return Err(PyValueError::new_err(format!(
+                "coord_weights length {} does not match n_features {}",
+                bc.len(),
+                p
+            )));
+        }
     }
-    let _ = groups_obj;
-
-    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        let (gw, cw) = surrogate_sparse_group_scad(
-            beta,
-            g,
-            lam,
-            a,
-            alpha,
-            base_group.view(),
-            base_coord.view(),
-        );
-        Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
-    };
-    build_block_path_lla_outputs(
+    // M14d — native sparse-group-SCAD block-CD (no LLA outer loop).
+    // Same shape as `solve_sparse_group_mcp_ls_path` above; routes
+    // through `SparseGroupScad::prox_group`.
+    let coord_w_per_group: Option<Vec<ndarray::Array1<f64>>> = base_coord.map(|bc| {
+        (0..n_groups)
+            .map(|g| {
+                let cols = groups_obj.group(g);
+                ndarray::Array1::from_iter(cols.iter().map(|&j| bc[j]))
+            })
+            .collect()
+    });
+    let _ = max_outer;
+    let _ = outer_tol;
+    build_block_path_outputs(
         py,
         x,
         y,
@@ -1750,9 +1648,16 @@ pub(crate) fn solve_sparse_group_scad_ls_path<'py>(
         parallel,
         fit_intercept,
         standardize_x,
-        max_outer,
-        outer_tol,
-        make_inner,
+        move |lam, gw| match &coord_w_per_group {
+            Some(cw) => Box::new(SparseGroupScad::with_coord_weights(
+                lam,
+                alpha,
+                a,
+                gw,
+                cw.clone(),
+            )),
+            None => Box::new(SparseGroupScad::with_weights(lam, alpha, a, gw)),
+        },
     )
 }
 
@@ -2398,158 +2303,6 @@ where
     ))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_block_path_lla_outputs_sparse_ls<'py, F>(
-    py: Python<'py>,
-    n_rows: usize,
-    n_cols: usize,
-    data: PyReadonlyArray1<f64>,
-    indices: PyReadonlyArray1<i64>,
-    indptr: PyReadonlyArray1<i64>,
-    y: PyReadonlyArray1<f64>,
-    groups_labels: PyReadonlyArray1<i64>,
-    weights: Option<PyReadonlyArray1<f64>>,
-    lambdas: Option<PyReadonlyArray1<f64>>,
-    n_lambdas: usize,
-    lambda_min_ratio: f64,
-    max_iter: usize,
-    tol: f64,
-    acceleration: Option<usize>,
-    screening: &str,
-    parallel: bool,
-    fit_intercept: bool,
-    standardize_x: bool,
-    max_outer: usize,
-    outer_tol: f64,
-    make_inner: F,
-) -> PyResult<PathOutput<'py>>
-where
-    F: Fn(ArrayView1<'_, f64>, &Groups, f64) -> Box<dyn GroupPenalty> + Send,
-{
-    let y_arr = y.as_array().to_owned();
-    if y_arr.len() != n_rows {
-        return Err(PyValueError::new_err(format!(
-            "y length {} does not match n_rows {}",
-            y_arr.len(),
-            n_rows
-        )));
-    }
-
-    let labels_user = groups_labels.as_array().to_owned().to_vec();
-    if labels_user.len() != n_cols {
-        return Err(PyValueError::new_err(format!(
-            "groups length {} does not match n_features {}",
-            labels_user.len(),
-            n_cols
-        )));
-    }
-    let n_groups_user = groups_from_labels(&labels_user)?.n_groups();
-
-    let user_weights = match weights {
-        Some(w) => {
-            let arr = w.as_array().to_owned();
-            if arr.len() != n_groups_user {
-                return Err(PyValueError::new_err(format!(
-                    "weights length {} does not match n_groups {}",
-                    arr.len(),
-                    n_groups_user
-                )));
-            }
-            Some(arr)
-        }
-        None => None,
-    };
-
-    let csc = read_csc_arrays(n_rows, n_cols, data, indices, indptr)?;
-
-    let scales_user: Option<Array1<f64>> = if standardize_x {
-        Some(compute_csc_glmnet_scales(&csc))
-    } else {
-        None
-    };
-
-    let csc_eff = if fit_intercept {
-        append_intercept_to_csc(csc)
-    } else {
-        csc
-    };
-    let labels_eff = if fit_intercept {
-        crate::glm::append_intercept_group(&labels_user, n_groups_user)
-    } else {
-        labels_user
-    };
-    let groups = groups_from_labels(&labels_eff)?;
-    let group_w_eff = build_sparse_group_weights(&user_weights, n_groups_user, fit_intercept);
-
-    let block_cfg = BlockPathConfig {
-        n_lambdas,
-        lambda_min_ratio,
-        lambdas: lambdas.map(|a| a.as_array().to_vec()),
-        cd: CdConfig {
-            max_iter,
-            tol,
-            acceleration,
-        },
-        screening: parse_screening(screening)?,
-        parallel,
-    };
-
-    let datafit = LeastSquares::new(y_arr);
-    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
-        Some(scales) => {
-            let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
-            for j in 0..n_cols {
-                x_scale_eff[j] = scales[j];
-            }
-            let std_design = Standardized::new(csc_eff, x_scale_eff);
-            solve_block_path_lla(
-                &std_design,
-                &datafit,
-                group_w_eff,
-                make_inner,
-                &groups,
-                &block_cfg,
-                max_outer,
-                outer_tol,
-            )
-        }
-        None => solve_block_path_lla(
-            &csc_eff,
-            &datafit,
-            group_w_eff,
-            make_inner,
-            &groups,
-            &block_cfg,
-            max_outer,
-            outer_tol,
-        ),
-    });
-    let (mut coefs, intercepts) = crate::glm::split_intercept(betas_aug, fit_intercept);
-    if let Some(scales) = scales_user.as_ref() {
-        for k in 0..coefs.nrows() {
-            for j in 0..coefs.ncols() {
-                coefs[[k, j]] /= scales[j];
-            }
-        }
-    }
-
-    let info = PyDict::new_bound(py);
-    info.set_item("inner_iters", report.inner_iters)?;
-    info.set_item("outer_iters", report.outer_iters)?;
-    info.set_item("outer_converged", report.outer_converged)?;
-    info.set_item("final_objs", report.final_objs)?;
-    info.set_item("working_set_sizes", report.working_set_sizes)?;
-    info.set_item("kkt_passes", report.kkt_passes)?;
-    info.set_item("per_lambda_wall_ns", report.per_lambda_wall_ns)?;
-
-    Ok((
-        coefs.into_pyarray_bound(py),
-        intercepts.into_pyarray_bound(py),
-        Array1::from(report.lambdas).into_pyarray_bound(py),
-        info,
-    ))
-}
-
 #[pyfunction]
 #[pyo3(signature = (
     x_data, x_indices, x_indptr, n_rows, n_cols, y, groups, *,
@@ -2817,24 +2570,11 @@ pub(crate) fn solve_group_scad_ls_path_sparse<'py>(
             "SCAD shape parameter `a` must be > 2; got {a}"
         )));
     }
-    let labels_owned = groups.as_array().to_owned();
-    let groups_obj = groups_from_labels(&labels_owned.to_vec())?;
-    let n_groups_user = groups_obj.n_groups();
-    let _ = groups_obj;
-
-    let base_weights_for_lla = match &weights {
-        Some(w) => w.as_array().to_owned(),
-        None => Array1::ones(n_groups_user),
-    };
-    let group_w_eff_for_lla =
-        build_sparse_group_weights(&Some(base_weights_for_lla), n_groups_user, fit_intercept);
-
-    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        let w = surrogate_weights_group_scad(beta, g, lam, a, group_w_eff_for_lla.view());
-        Box::new(GroupLasso::with_weights(lam, w))
-    };
-
-    build_block_path_lla_outputs_sparse_ls(
+    // M14d — see `solve_group_scad_ls_path` for the rationale. Same
+    // closure shape as `solve_group_mcp_ls_path_sparse`.
+    let _ = max_outer;
+    let _ = outer_tol;
+    build_block_path_outputs_sparse_ls(
         py,
         n_rows,
         n_cols,
@@ -2854,9 +2594,7 @@ pub(crate) fn solve_group_scad_ls_path_sparse<'py>(
         parallel,
         fit_intercept,
         standardize_x,
-        max_outer,
-        outer_tol,
-        make_inner,
+        move |lam, w| Box::new(GroupScad::with_weights(lam, a, w)),
     )
 }
 
@@ -2900,12 +2638,7 @@ pub(crate) fn solve_sparse_group_mcp_ls_path_sparse<'py>(
     let labels_owned = groups.as_array().to_owned();
     let groups_obj = groups_from_labels(&labels_owned.to_vec())?;
     let n_groups_user = groups_obj.n_groups();
-    let _ = groups_obj;
 
-    let base_group = match &weights {
-        Some(w) => w.as_array().to_owned(),
-        None => Array1::ones(n_groups_user),
-    };
     let user_coord = match &coord_weights {
         Some(w) => {
             let arr = w.as_array().to_owned();
@@ -2920,23 +2653,26 @@ pub(crate) fn solve_sparse_group_mcp_ls_path_sparse<'py>(
         }
         None => None,
     };
-    let group_w_eff = build_sparse_group_weights(&Some(base_group), n_groups_user, fit_intercept);
-    let coord_w_eff = build_sparse_coord_weights(&user_coord, n_cols, fit_intercept);
-
-    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        let (gw, cw) = surrogate_sparse_group_mcp(
-            beta,
-            g,
-            lam,
-            gamma,
-            alpha,
-            group_w_eff.view(),
-            coord_w_eff.view(),
-        );
-        Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
-    };
-
-    build_block_path_lla_outputs_sparse_ls(
+    // M14d — native sparse-group-MCP block-CD (sparse design). Build the
+    // per-group coord_weights Vec from the flat `coord_weights` input,
+    // appending a singleton intercept group with weight 0 when
+    // `fit_intercept=true` (mirrors the augmented-CSC scheme in
+    // `build_block_path_outputs_sparse_ls`).
+    let coord_w_per_group: Option<Vec<ndarray::Array1<f64>>> = user_coord.map(|bc| {
+        let mut out: Vec<ndarray::Array1<f64>> = (0..n_groups_user)
+            .map(|g| {
+                let cols = groups_obj.group(g);
+                ndarray::Array1::from_iter(cols.iter().map(|&j| bc[j]))
+            })
+            .collect();
+        if fit_intercept {
+            out.push(ndarray::Array1::from_elem(1, 0.0));
+        }
+        out
+    });
+    let _ = max_outer;
+    let _ = outer_tol;
+    build_block_path_outputs_sparse_ls(
         py,
         n_rows,
         n_cols,
@@ -2956,9 +2692,16 @@ pub(crate) fn solve_sparse_group_mcp_ls_path_sparse<'py>(
         parallel,
         fit_intercept,
         standardize_x,
-        max_outer,
-        outer_tol,
-        make_inner,
+        move |lam, gw| match &coord_w_per_group {
+            Some(cw) => Box::new(SparseGroupMcp::with_coord_weights(
+                lam,
+                alpha,
+                gamma,
+                gw,
+                cw.clone(),
+            )),
+            None => Box::new(SparseGroupMcp::with_weights(lam, alpha, gamma, gw)),
+        },
     )
 }
 
@@ -3007,12 +2750,7 @@ pub(crate) fn solve_sparse_group_scad_ls_path_sparse<'py>(
     let labels_owned = groups.as_array().to_owned();
     let groups_obj = groups_from_labels(&labels_owned.to_vec())?;
     let n_groups_user = groups_obj.n_groups();
-    let _ = groups_obj;
 
-    let base_group = match &weights {
-        Some(w) => w.as_array().to_owned(),
-        None => Array1::ones(n_groups_user),
-    };
     let user_coord = match &coord_weights {
         Some(w) => {
             let arr = w.as_array().to_owned();
@@ -3027,23 +2765,23 @@ pub(crate) fn solve_sparse_group_scad_ls_path_sparse<'py>(
         }
         None => None,
     };
-    let group_w_eff = build_sparse_group_weights(&Some(base_group), n_groups_user, fit_intercept);
-    let coord_w_eff = build_sparse_coord_weights(&user_coord, n_cols, fit_intercept);
-
-    let make_inner = move |beta: ArrayView1<f64>, g: &Groups, lam: f64| -> Box<dyn GroupPenalty> {
-        let (gw, cw) = surrogate_sparse_group_scad(
-            beta,
-            g,
-            lam,
-            a,
-            alpha,
-            group_w_eff.view(),
-            coord_w_eff.view(),
-        );
-        Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
-    };
-
-    build_block_path_lla_outputs_sparse_ls(
+    // M14d — native sparse-group-SCAD block-CD (sparse design). Mirrors
+    // the MCP sparse rewire above.
+    let coord_w_per_group: Option<Vec<ndarray::Array1<f64>>> = user_coord.map(|bc| {
+        let mut out: Vec<ndarray::Array1<f64>> = (0..n_groups_user)
+            .map(|g| {
+                let cols = groups_obj.group(g);
+                ndarray::Array1::from_iter(cols.iter().map(|&j| bc[j]))
+            })
+            .collect();
+        if fit_intercept {
+            out.push(ndarray::Array1::from_elem(1, 0.0));
+        }
+        out
+    });
+    let _ = max_outer;
+    let _ = outer_tol;
+    build_block_path_outputs_sparse_ls(
         py,
         n_rows,
         n_cols,
@@ -3063,8 +2801,15 @@ pub(crate) fn solve_sparse_group_scad_ls_path_sparse<'py>(
         parallel,
         fit_intercept,
         standardize_x,
-        max_outer,
-        outer_tol,
-        make_inner,
+        move |lam, gw| match &coord_w_per_group {
+            Some(cw) => Box::new(SparseGroupScad::with_coord_weights(
+                lam,
+                alpha,
+                a,
+                gw,
+                cw.clone(),
+            )),
+            None => Box::new(SparseGroupScad::with_weights(lam, alpha, a, gw)),
+        },
     )
 }
