@@ -36,6 +36,8 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ls::solve_elastic_net_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(ls::solve_bridge_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(ls::solve_bridge_ls_path_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(ls::solve_cmcp_ls_path, m)?)?;
+    m.add_function(wrap_pyfunction!(ls::solve_gel_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(ls::solve_group_lasso_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(ls::solve_group_elastic_net_ls_path, m)?)?;
     m.add_function(wrap_pyfunction!(ls::solve_group_mcp_ls_path, m)?)?;

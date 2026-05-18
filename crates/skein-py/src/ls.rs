@@ -27,9 +27,11 @@ use skein_core::{
         SparseGroupLasso,
     },
     solver::{
-        cd_solve, solve_block_path, solve_block_path_lla, solve_path, solve_path_lla,
+        broadcast_group_weights_to_coord, cd_solve, cmcp_lambda_max, lambda_grid,
+        solve_block_path, solve_block_path_lla, solve_path, solve_path_lla,
         surrogate_sparse_group_mcp, surrogate_sparse_group_scad, surrogate_weights_bridge,
-        surrogate_weights_group_scad, BlockPathConfig, CdConfig, PathConfig, Screening,
+        surrogate_weights_cmcp, surrogate_weights_gel, surrogate_weights_group_scad,
+        BlockPathConfig, CdConfig, PathConfig, Screening,
     },
     standardize::{
         destandardize_path, rescale_weights_for_standardize, standardize, StandardizeConfig,
@@ -709,6 +711,324 @@ pub(crate) fn solve_bridge_ls_path_sparse<'py>(
             }
         }
     }
+
+    let info = PyDict::new_bound(py);
+    info.set_item("outer_iters", report.outer_iters)?;
+    info.set_item("outer_converged", report.outer_converged)?;
+    info.set_item("inner_iters", report.inner_iters)?;
+    info.set_item("final_objs", report.final_objs)?;
+
+    Ok((
+        coefs.into_pyarray_bound(py),
+        intercepts.into_pyarray_bound(py),
+        Array1::from(report.lambdas).into_pyarray_bound(py),
+        info,
+    ))
+}
+
+// ---------------------------------------------------------------------
+// Composite MCP (cMCP) and group exponential lasso (gel) — bilevel
+// nonconvex penalties (Breheny & Huang 2009 / 2015). Both reduce to a
+// weighted-L1 inner via LLA, so they route through `solve_path_lla`
+// just like bridge; the group structure shows up only inside the
+// surrogate-weight closure.
+// ---------------------------------------------------------------------
+
+/// Dense LS path solver for composite MCP. cMCP's gradient at `β = 0`
+/// scales as `λ²` (not `λ`), so the auto-grid is generated via
+/// [`cmcp_lambda_max`] rather than the generic `lambda_max`. Pass an
+/// explicit `lambdas` array to bypass this.
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, groups, *, gamma1=3.0, gamma2=3.0,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
+    weights=None, coord_weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false,
+    max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn solve_cmcp_ls_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    gamma1: f64,
+    gamma2: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    coord_weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if gamma1 <= 1.0 || gamma2 <= 1.0 {
+        return Err(PyValueError::new_err(format!(
+            "cMCP requires gamma1 > 1 and gamma2 > 1; got gamma1={gamma1}, gamma2={gamma2}"
+        )));
+    }
+    let x_arr = x.as_array().to_owned();
+    let y_arr = y.as_array().to_owned();
+    let n = x_arr.nrows();
+    let p = x_arr.ncols();
+    if y_arr.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "y length {} does not match n_samples {}",
+            y_arr.len(),
+            n
+        )));
+    }
+    let labels: Vec<i64> = groups.as_array().iter().copied().collect();
+    if labels.len() != p {
+        return Err(PyValueError::new_err(format!(
+            "groups length {} does not match n_features {}",
+            labels.len(),
+            p
+        )));
+    }
+    let groups_obj = groups_from_labels(&labels)?;
+
+    let base_group = match weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != groups_obj.n_groups() {
+                return Err(PyValueError::new_err(format!(
+                    "weights length {} does not match n_groups {}",
+                    arr.len(),
+                    groups_obj.n_groups()
+                )));
+            }
+            arr
+        }
+        None => Array1::ones(groups_obj.n_groups()),
+    };
+    let base_coord = match coord_weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != p {
+                return Err(PyValueError::new_err(format!(
+                    "coord_weights length {} does not match n_features {}",
+                    arr.len(),
+                    p
+                )));
+            }
+            arr
+        }
+        None => Array1::ones(p),
+    };
+
+    let std_cfg = StandardizeConfig {
+        center_x: fit_intercept,
+        scale_x: standardize_x,
+        fit_intercept,
+    };
+    let (xs, ys, stats) = standardize(x_arr.view(), y_arr.view(), &std_cfg);
+    let base_coord_std = rescale_weights_for_standardize(base_coord.view(), &stats);
+
+    let cd_cfg = CdConfig {
+        max_iter,
+        tol,
+        acceleration,
+    };
+    let design = DenseMatrix::new(xs);
+    let datafit = LeastSquares::new(ys);
+
+    // cMCP-specific λ grid: derived from `cmcp_lambda_max` (sqrt-scaled).
+    let lambdas_vec: Vec<f64> = match lambdas {
+        Some(a) => a.as_array().to_vec(),
+        None => {
+            let lam_max = cmcp_lambda_max(
+                &design,
+                &datafit,
+                &groups_obj,
+                base_group.view(),
+                base_coord_std.view(),
+            );
+            lambda_grid(lam_max, n_lambdas, lambda_min_ratio)
+        }
+    };
+
+    // The inner `solve_path_lla` lambda_max call uses `base` as per-coord
+    // L1-equivalent weights at β=0; cMCP's surrogate at β=0 is
+    // `λ · w^g · w^c`, so we pass `base_coord_std` (the per-coord scaling
+    // is what governs the inner solve's KKT). The explicit `lambdas_vec`
+    // we just built bypasses the auto-grid path anyway.
+    let groups_for_closure = groups_obj.clone();
+    let base_group_for_closure = base_group.clone();
+    let base_coord_for_closure = base_coord_std.clone();
+    let make_inner = move |beta: ArrayView1<'_, f64>,
+                           lam: f64,
+                           _w_base: ArrayView1<'_, f64>|
+          -> Box<dyn Penalty> {
+        let w = surrogate_weights_cmcp(
+            beta,
+            &groups_for_closure,
+            lam,
+            gamma1,
+            gamma2,
+            base_group_for_closure.view(),
+            base_coord_for_closure.view(),
+        );
+        Box::new(ElasticNet::with_weights(lam, 1.0, w))
+    };
+
+    let (betas_std, report) = py.allow_threads(|| {
+        solve_path_lla(
+            &design,
+            &datafit,
+            base_coord_std,
+            make_inner,
+            n_lambdas,
+            lambda_min_ratio,
+            Some(lambdas_vec),
+            &cd_cfg,
+            max_outer,
+            outer_tol,
+        )
+    });
+    let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
+
+    let info = PyDict::new_bound(py);
+    info.set_item("outer_iters", report.outer_iters)?;
+    info.set_item("outer_converged", report.outer_converged)?;
+    info.set_item("inner_iters", report.inner_iters)?;
+    info.set_item("final_objs", report.final_objs)?;
+
+    Ok((
+        coefs.into_pyarray_bound(py),
+        intercepts.into_pyarray_bound(py),
+        Array1::from(report.lambdas).into_pyarray_bound(py),
+        info,
+    ))
+}
+
+/// Dense LS path solver for the group exponential lasso (gel). The
+/// gel boundary at `β = 0` scales linearly in `λ` — so the generic
+/// `lambda_max` works once per-group weights are broadcast to per-coord.
+#[pyfunction]
+#[pyo3(signature = (
+    x, y, groups, *, tau=1.0,
+    lambdas=None, n_lambdas=100, lambda_min_ratio=1e-3,
+    weights=None,
+    max_iter=100, tol=1e-6, acceleration=Some(5),
+    fit_intercept=true, standardize_x=false,
+    max_outer=10, outer_tol=1e-6,
+))]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn solve_gel_ls_path<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray2<f64>,
+    y: PyReadonlyArray1<f64>,
+    groups: PyReadonlyArray1<i64>,
+    tau: f64,
+    lambdas: Option<PyReadonlyArray1<f64>>,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    weights: Option<PyReadonlyArray1<f64>>,
+    max_iter: usize,
+    tol: f64,
+    acceleration: Option<usize>,
+    fit_intercept: bool,
+    standardize_x: bool,
+    max_outer: usize,
+    outer_tol: f64,
+) -> PyResult<PathOutput<'py>> {
+    if tau <= 0.0 {
+        return Err(PyValueError::new_err(format!(
+            "gel tau must be > 0; got {tau}"
+        )));
+    }
+    let x_arr = x.as_array().to_owned();
+    let y_arr = y.as_array().to_owned();
+    let n = x_arr.nrows();
+    let p = x_arr.ncols();
+    if y_arr.len() != n {
+        return Err(PyValueError::new_err(format!(
+            "y length {} does not match n_samples {}",
+            y_arr.len(),
+            n
+        )));
+    }
+    let labels: Vec<i64> = groups.as_array().iter().copied().collect();
+    if labels.len() != p {
+        return Err(PyValueError::new_err(format!(
+            "groups length {} does not match n_features {}",
+            labels.len(),
+            p
+        )));
+    }
+    let groups_obj = groups_from_labels(&labels)?;
+
+    let base_group = match weights {
+        Some(w) => {
+            let arr = w.as_array().to_owned();
+            if arr.len() != groups_obj.n_groups() {
+                return Err(PyValueError::new_err(format!(
+                    "weights length {} does not match n_groups {}",
+                    arr.len(),
+                    groups_obj.n_groups()
+                )));
+            }
+            arr
+        }
+        None => Array1::ones(groups_obj.n_groups()),
+    };
+
+    let std_cfg = StandardizeConfig {
+        center_x: fit_intercept,
+        scale_x: standardize_x,
+        fit_intercept,
+    };
+    let (xs, ys, stats) = standardize(x_arr.view(), y_arr.view(), &std_cfg);
+    let base_coord_raw = broadcast_group_weights_to_coord(base_group.view(), &groups_obj, p);
+    let base_coord_std = rescale_weights_for_standardize(base_coord_raw.view(), &stats);
+
+    let cd_cfg = CdConfig {
+        max_iter,
+        tol,
+        acceleration,
+    };
+    let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
+    let design = DenseMatrix::new(xs);
+    let datafit = LeastSquares::new(ys);
+
+    let groups_for_closure = groups_obj.clone();
+    let base_group_for_closure = base_group.clone();
+    let make_inner = move |beta: ArrayView1<'_, f64>,
+                           lam: f64,
+                           _w_base: ArrayView1<'_, f64>|
+          -> Box<dyn Penalty> {
+        let w = surrogate_weights_gel(
+            beta,
+            &groups_for_closure,
+            lam,
+            tau,
+            base_group_for_closure.view(),
+        );
+        Box::new(ElasticNet::with_weights(lam, 1.0, w))
+    };
+
+    let (betas_std, report) = py.allow_threads(|| {
+        solve_path_lla(
+            &design,
+            &datafit,
+            base_coord_std,
+            make_inner,
+            n_lambdas,
+            lambda_min_ratio,
+            lambdas_vec,
+            &cd_cfg,
+            max_outer,
+            outer_tol,
+        )
+    });
+    let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
 
     let info = PyDict::new_bound(py);
     info.set_item("outer_iters", report.outer_iters)?;

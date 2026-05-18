@@ -331,6 +331,235 @@ pub fn surrogate_weights_group_mcp(
     }))
 }
 
+/// Scalar MCP penalty value `MCP(t; λ, γ)`. Helper for composite-MCP /
+/// gel value functions. Caller is responsible for handling per-coord
+/// weights — this returns the unweighted value at a single nonneg `t`.
+fn mcp_scalar_value(t: f64, lambda: f64, gamma: f64) -> f64 {
+    // ρ_MCP(t; λ, γ) = λt − t²/(2γ)  for t ∈ [0, γλ];  γλ²/2  otherwise.
+    let cutoff = gamma * lambda;
+    if t < cutoff {
+        lambda * t - t * t / (2.0 * gamma)
+    } else {
+        0.5 * gamma * lambda * lambda
+    }
+}
+
+/// MCP's L1-equivalent factor at magnitude `t`: `ρ'_MCP(t; λ, γ) / λ`.
+/// Equals `(1 − t/(γλ))_+`. Reused by the cMCP / gel LLA surrogates.
+fn mcp_l1_factor(t: f64, lambda: f64, gamma: f64) -> f64 {
+    let denom = gamma * lambda;
+    if denom <= 0.0 {
+        return 0.0;
+    }
+    (1.0 - t / denom).max(0.0)
+}
+
+/// LLA surrogate weights for the **composite MCP (cMCP)** penalty
+/// (Breheny & Huang 2009, "bi-level selection"). The outer MCP is applied
+/// to the sum of per-coordinate inner MCPs in each group, producing
+/// hierarchical group / within-group sparsity:
+///
+/// ```text
+/// P(β) = Σ_g w^g_g · MCP_{λ, γ₁}(Σ_k w^c_{g,k} · MCP_{λ, γ₂}(|β_{g,k}|))
+/// ```
+///
+/// At the current iterate `β` the LLA inner weight on `|β_{g,k}|` is the
+/// chain-rule derivative `∂P/∂|β_{g,k}|`, divided by `λ` so that the
+/// inner penalty inside [`solve_path_lla`] (which uses `lam · w` as the
+/// L1 threshold) reproduces the correct first-order condition:
+///
+/// ```text
+/// W^lla_{g,k}(β, λ) = w^g_g · w^c_{g,k} · λ
+///                   · (1 − s_g/(γ₁λ))_+ · (1 − |β_{g,k}|/(γ₂λ))_+
+/// ```
+///
+/// where `s_g = Σ_k w^c_{g,k} · MCP_{λ,γ₂}(|β_{g,k}|)`. At `β = 0` this
+/// reduces to `λ · w^g_g · w^c_{g,k}` — i.e. cMCP's boundary gradient
+/// scales as `λ²`, the well-known wrinkle of the composite parameterization.
+/// Callers should use [`cmcp_lambda_max`] (not the generic `lambda_max`)
+/// to compute the cold-start λ for the auto grid.
+///
+/// Pair with [`crate::penalty::ElasticNet::with_weights`] at `α = 1`
+/// inside `solve_path_lla`'s closure.
+pub fn surrogate_weights_cmcp(
+    beta: ArrayView1<f64>,
+    groups: &Groups,
+    lambda: f64,
+    gamma1: f64,
+    gamma2: f64,
+    base_group: ArrayView1<f64>,
+    base_coord: ArrayView1<f64>,
+) -> Array1<f64> {
+    assert!(gamma1 > 1.0, "cMCP outer γ₁ must be > 1 (got {})", gamma1);
+    assert!(gamma2 > 1.0, "cMCP inner γ₂ must be > 1 (got {})", gamma2);
+    let n_groups = groups.n_groups();
+    debug_assert_eq!(base_group.len(), n_groups);
+    debug_assert_eq!(base_coord.len(), beta.len());
+
+    let mut w = Array1::<f64>::zeros(beta.len());
+    for g in 0..n_groups {
+        let cols = groups.group(g);
+        // Inner aggregate s_g = Σ_k w^c_{g,k} · MCP(|β_{g,k}|; λ, γ₂).
+        let s_g: f64 = cols
+            .iter()
+            .map(|&j| base_coord[j] * mcp_scalar_value(beta[j].abs(), lambda, gamma2))
+            .sum();
+        let outer_factor = mcp_l1_factor(s_g, lambda, gamma1);
+        if outer_factor <= 0.0 {
+            continue; // saturated group → all coords get zero weight
+        }
+        let group_scale = base_group[g] * outer_factor * lambda;
+        for &j in cols {
+            let inner_factor = mcp_l1_factor(beta[j].abs(), lambda, gamma2);
+            w[j] = group_scale * base_coord[j] * inner_factor;
+        }
+    }
+    w
+}
+
+/// Closed-form λ_max for cMCP: the smallest λ at which `β = 0` is optimal
+/// under the composite MCP. Because the cold-start gradient scales as `λ²`,
+/// the formula is `sqrt(max_j |∂L/∂β_j| / (w^g_g(j) · w^c_j))` rather than
+/// the linear `lambda_max` used for L1-equivalent penalties.
+pub fn cmcp_lambda_max(
+    design: &dyn DesignMatrix,
+    datafit: &dyn Datafit,
+    groups: &Groups,
+    base_group: ArrayView1<f64>,
+    base_coord: ArrayView1<f64>,
+) -> f64 {
+    let p = design.n_features();
+    let zero_beta = Array1::<f64>::zeros(p);
+    let r0 = datafit.init_residual(design, zero_beta.view());
+    let mut max_q = 0.0_f64;
+    for g in 0..groups.n_groups() {
+        let wg = base_group[g];
+        if wg <= 0.0 {
+            continue;
+        }
+        for &j in groups.group(g) {
+            let wc = base_coord[j];
+            if wc <= 0.0 {
+                continue;
+            }
+            let coord = datafit.coord_grad(design, j, r0.view()).abs();
+            let q = coord / (wg * wc);
+            if q > max_q {
+                max_q = q;
+            }
+        }
+    }
+    max_q.sqrt()
+}
+
+/// Total cMCP penalty value at the current iterate. Used for objective
+/// reporting; not on the solver hot path.
+pub fn cmcp_value(
+    beta: ArrayView1<f64>,
+    groups: &Groups,
+    lambda: f64,
+    gamma1: f64,
+    gamma2: f64,
+    base_group: ArrayView1<f64>,
+    base_coord: ArrayView1<f64>,
+) -> f64 {
+    let mut total = 0.0;
+    for g in 0..groups.n_groups() {
+        let cols = groups.group(g);
+        let s_g: f64 = cols
+            .iter()
+            .map(|&j| base_coord[j] * mcp_scalar_value(beta[j].abs(), lambda, gamma2))
+            .sum();
+        total += base_group[g] * mcp_scalar_value(s_g, lambda, gamma1);
+    }
+    total
+}
+
+/// LLA surrogate weights for the **group exponential lasso (gel)**
+/// (Breheny 2015). The penalty per group is an exponential decay on the
+/// group's L1 norm:
+///
+/// ```text
+/// P(β) = Σ_g w^g_g · (λ²/τ) · [1 − exp(−τ · ‖β_g‖₁ / λ)]
+/// ```
+///
+/// Its derivative w.r.t. `|β_{g,k}|` at the current iterate is
+/// `w^g_g · λ · exp(−τ · ‖β_g‖₁ / λ)` — uniform across coords within a
+/// group. The LLA per-coord L1 weight (so that `lam · w` reproduces this
+/// in [`solve_path_lla`]'s inner penalty) is therefore the group's
+/// exponential factor multiplied by the per-group base weight:
+///
+/// ```text
+/// W^lla_{g,k}(β, λ) = w^g_g · exp(−τ · ‖β_g‖₁ / λ)
+/// ```
+///
+/// At `β = 0` this reduces to `w^g_g` — the same boundary scaling as
+/// plain weighted lasso, so the generic [`lambda_max`] works for gel
+/// when called with `base_group` broadcast to per-coord weights (each
+/// coord in group `g` takes weight `base_group[g]`).
+pub fn surrogate_weights_gel(
+    beta: ArrayView1<f64>,
+    groups: &Groups,
+    lambda: f64,
+    tau: f64,
+    base_group: ArrayView1<f64>,
+) -> Array1<f64> {
+    assert!(tau > 0.0, "gel τ must be > 0 (got {})", tau);
+    assert!(lambda > 0.0, "gel λ must be > 0 (got {})", lambda);
+    let n_groups = groups.n_groups();
+    debug_assert_eq!(base_group.len(), n_groups);
+
+    let mut w = Array1::<f64>::zeros(beta.len());
+    for g in 0..n_groups {
+        let cols = groups.group(g);
+        let l1_norm: f64 = cols.iter().map(|&j| beta[j].abs()).sum();
+        let factor = (-tau * l1_norm / lambda).exp();
+        let group_scale = base_group[g] * factor;
+        for &j in cols {
+            w[j] = group_scale;
+        }
+    }
+    w
+}
+
+/// Total gel penalty value at the current iterate. Used for objective
+/// reporting; not on the solver hot path.
+pub fn gel_value(
+    beta: ArrayView1<f64>,
+    groups: &Groups,
+    lambda: f64,
+    tau: f64,
+    base_group: ArrayView1<f64>,
+) -> f64 {
+    let coeff = lambda * lambda / tau;
+    let mut total = 0.0;
+    for g in 0..groups.n_groups() {
+        let cols = groups.group(g);
+        let l1_norm: f64 = cols.iter().map(|&j| beta[j].abs()).sum();
+        total += base_group[g] * coeff * (1.0 - (-tau * l1_norm / lambda).exp());
+    }
+    total
+}
+
+/// Broadcast per-group weights to per-coord weights — `w_coord[j] = w_group[g(j)]`.
+/// Useful for routing group-structured penalties (gel) through the scalar
+/// LLA path solver, which expects a flat per-coord weight vector for
+/// `lambda_max` computation and warm-start convergence checks.
+pub fn broadcast_group_weights_to_coord(
+    group_weights: ArrayView1<f64>,
+    groups: &Groups,
+    p: usize,
+) -> Array1<f64> {
+    debug_assert_eq!(group_weights.len(), groups.n_groups());
+    let mut w = Array1::<f64>::zeros(p);
+    for g in 0..groups.n_groups() {
+        for &j in groups.group(g) {
+            w[j] = group_weights[g];
+        }
+    }
+    w
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -399,6 +628,177 @@ mod tests {
             "expected 0.5 < w[1] < 0.9, got {}",
             w[1]
         );
+    }
+
+    // ---- cMCP surrogate -------------------------------------------------
+
+    #[test]
+    fn surrogate_weights_cmcp_at_zero_beta_returns_lambda_times_base() {
+        // At β = 0, both inner and outer MCP derivatives equal λ, so
+        // W^lla_{g,k}(0, λ) = w^g_g · w^c_{g,k} · λ · 1 · 1.
+        let beta = Array1::<f64>::zeros(4);
+        let groups = Groups::contiguous_blocks(4, 2);
+        let base_group = array![1.5, 0.7];
+        let base_coord = array![1.0, 2.0, 0.5, 0.8];
+        let lambda = 0.3;
+        let w = surrogate_weights_cmcp(
+            beta.view(),
+            &groups,
+            lambda,
+            3.0,
+            3.0,
+            base_group.view(),
+            base_coord.view(),
+        );
+        for g in 0..2 {
+            for &j in groups.group(g) {
+                let expected = lambda * base_group[g] * base_coord[j];
+                assert_abs_diff_eq!(w[j], expected, epsilon = 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn surrogate_weights_cmcp_zeros_saturated_outer_block() {
+        // Force the outer MCP into saturation: pick β so that the inner
+        // aggregate s_g exceeds γ₁ · λ.
+        let beta = array![0.5, 0.5, 0.0, 0.0];
+        let groups = Groups::contiguous_blocks(4, 2);
+        let base = Array1::<f64>::ones(2);
+        let base_coord = Array1::<f64>::ones(4);
+        let lambda = 0.05;
+        let w = surrogate_weights_cmcp(
+            beta.view(),
+            &groups,
+            lambda,
+            3.0,
+            3.0,
+            base.view(),
+            base_coord.view(),
+        );
+        // Group 0 saturated → w[0..2] should be 0; group 1 unchanged.
+        assert_abs_diff_eq!(w[0], 0.0, epsilon = 1e-12);
+        assert_abs_diff_eq!(w[1], 0.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn cmcp_lambda_max_returns_finite_positive_value() {
+        let (design, y, groups) = sparse_group_problem(42);
+        let datafit = LeastSquares::new(y);
+        let base_group = Array1::<f64>::ones(groups.n_groups());
+        let base_coord = Array1::<f64>::ones(design.n_features());
+        let lam_max = cmcp_lambda_max(
+            &design,
+            &datafit,
+            &groups,
+            base_group.view(),
+            base_coord.view(),
+        );
+        assert!(lam_max > 0.0 && lam_max.is_finite(), "got {}", lam_max);
+    }
+
+    #[test]
+    fn cmcp_value_is_zero_at_zero_beta_and_positive_at_nonzero() {
+        let groups = Groups::contiguous_blocks(4, 2);
+        let base_group = Array1::<f64>::ones(2);
+        let base_coord = Array1::<f64>::ones(4);
+        let v0 = cmcp_value(
+            Array1::<f64>::zeros(4).view(),
+            &groups,
+            0.1,
+            3.0,
+            3.0,
+            base_group.view(),
+            base_coord.view(),
+        );
+        let v1 = cmcp_value(
+            array![0.3, -0.2, 0.0, 0.0].view(),
+            &groups,
+            0.1,
+            3.0,
+            3.0,
+            base_group.view(),
+            base_coord.view(),
+        );
+        assert_abs_diff_eq!(v0, 0.0, epsilon = 1e-12);
+        assert!(v1 > 0.0);
+    }
+
+    // ---- gel surrogate --------------------------------------------------
+
+    #[test]
+    fn surrogate_weights_gel_at_zero_beta_returns_base_group_per_coord() {
+        // exp(0) = 1 ⇒ each coord gets its group's base weight.
+        let beta = Array1::<f64>::zeros(4);
+        let groups = Groups::contiguous_blocks(4, 2);
+        let base = array![1.5, 0.7];
+        let w = surrogate_weights_gel(beta.view(), &groups, 0.1, 1.0, base.view());
+        for g in 0..2 {
+            for &j in groups.group(g) {
+                assert_abs_diff_eq!(w[j], base[g], epsilon = 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn surrogate_weights_gel_decays_exponentially_with_l1_norm() {
+        let lambda = 0.1;
+        let tau = 2.0;
+        let base = array![1.0, 1.0];
+        let groups = Groups::contiguous_blocks(4, 2);
+        // Group 0 has L1 norm 1.4, group 1 has L1 norm 0.1.
+        let beta = array![0.6, 0.8, 0.05, 0.05];
+        let w = surrogate_weights_gel(beta.view(), &groups, lambda, tau, base.view());
+        // Expected: exp(−τ · ‖β_g‖₁ / λ) per coord in group g.
+        let expected_0 = (-tau * 1.4 / lambda).exp();
+        let expected_1 = (-tau * 0.1 / lambda).exp();
+        for &j in groups.group(0) {
+            assert_abs_diff_eq!(w[j], expected_0, epsilon = 1e-12);
+        }
+        for &j in groups.group(1) {
+            assert_abs_diff_eq!(w[j], expected_1, epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn gel_value_is_zero_at_zero_and_monotone_in_l1_norm() {
+        let groups = Groups::contiguous_blocks(4, 2);
+        let base = Array1::<f64>::ones(2);
+        let v0 = gel_value(
+            Array1::<f64>::zeros(4).view(),
+            &groups,
+            0.1,
+            1.0,
+            base.view(),
+        );
+        let v_small = gel_value(
+            array![0.1, 0.0, 0.0, 0.0].view(),
+            &groups,
+            0.1,
+            1.0,
+            base.view(),
+        );
+        let v_large = gel_value(
+            array![0.5, 0.0, 0.0, 0.0].view(),
+            &groups,
+            0.1,
+            1.0,
+            base.view(),
+        );
+        assert_abs_diff_eq!(v0, 0.0, epsilon = 1e-12);
+        assert!(v_small > 0.0);
+        assert!(v_large > v_small);
+    }
+
+    #[test]
+    fn broadcast_group_weights_to_coord_works() {
+        let groups = Groups::contiguous_blocks(5, 2); // groups: [0,1], [2,3], [4]
+        let wg = array![1.0, 2.0, 3.0];
+        let wc = broadcast_group_weights_to_coord(wg.view(), &groups, 5);
+        let expected = array![1.0, 1.0, 2.0, 2.0, 3.0];
+        for j in 0..5 {
+            assert_abs_diff_eq!(wc[j], expected[j], epsilon = 1e-12);
+        }
     }
 
     // ---- LLA outer loop -------------------------------------------------

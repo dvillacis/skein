@@ -2459,6 +2459,232 @@ class SparseGroupMCPPathRegressor(_GroupPathBase):
         return self
 
 
+# ---- composite MCP (cMCP) and group exponential lasso (gel) ----------
+#
+# Bilevel-selection penalties from Breheny & Huang 2009 / 2015. Both
+# reduce to weighted L1 via LLA and route through the scalar LLA path
+# solver (`solve_path_lla`). Group structure shows up only inside the
+# surrogate-weight closure on the Rust side.
+
+
+class CompositeMCPPathRegressor(_PathRegressorBase):
+    """Composite MCP (cMCP) least squares along a λ-path with warm starts.
+
+    Solves
+
+        min_β (1/2n) ‖y − Xβ − α‖²
+              + Σ_g w^g · MCP_{λ, γ₁}(Σ_k w^c_{g,k} · MCP_{λ, γ₂}(|β_{g,k}|))
+
+    Outer MCP_{λ,γ₁} drives group-level sparsity; inner MCP_{λ,γ₂}
+    drives within-group sparsity ⇒ bilevel selection. Differs from
+    :class:`SparseGroupMCPRegressor` (an additive composite) in that the
+    inner / outer thresholds are *composed*, not summed — qualitatively
+    different sparsity patterns.
+
+    cMCP's boundary gradient at β=0 scales as ``λ²``; the auto λ-grid is
+    computed via skein-core's ``cmcp_lambda_max`` (sqrt-corrected). Pass
+    an explicit ``lambdas`` array to override.
+
+    Parameters mirror :class:`GroupMCPPathRegressor` plus ``gamma2`` for
+    the inner MCP and ``coord_weights`` for per-coordinate base weights.
+
+    References
+    ----------
+    Breheny, P., & Huang, J. (2009). Penalized methods for bi-level
+    variable selection. *Statistics and Its Interface* 2(3), 369–380.
+    """
+
+    convex_min_idx_: int | None
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        gamma1: float = 3.0,
+        gamma2: float = 3.0,
+        *,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        coord_weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.groups = groups
+        self.gamma1 = gamma1
+        self.gamma2 = gamma2
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.coord_weights = coord_weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y: NDArray[np.float64]) -> "CompositeMCPPathRegressor":
+        x = np.ascontiguousarray(x, dtype=np.float64)
+        y = np.ascontiguousarray(y, dtype=np.float64)
+        groups_arr = np.ascontiguousarray(self.groups, dtype=np.int64)
+        if groups_arr.shape[0] != x.shape[1]:
+            raise ValueError(
+                f"groups length {groups_arr.shape[0]} does not match "
+                f"n_features {x.shape[1]}"
+            )
+        lams = (
+            np.ascontiguousarray(self.lambdas, dtype=np.float64)
+            if self.lambdas is not None
+            else None
+        )
+        w = (
+            np.ascontiguousarray(self.weights, dtype=np.float64)
+            if self.weights is not None
+            else None
+        )
+        cw = (
+            np.ascontiguousarray(self.coord_weights, dtype=np.float64)
+            if self.coord_weights is not None
+            else None
+        )
+        coefs, intercepts, lambdas_used, info = _core.solve_cmcp_ls_path(
+            x, y, groups_arr,
+            gamma1=self.gamma1,
+            gamma2=self.gamma2,
+            lambdas=lams,
+            n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio,
+            weights=w,
+            coord_weights=cw,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            acceleration=self.acceleration,
+            fit_intercept=self.fit_intercept,
+            standardize_x=self.standardize,
+            max_outer=self.max_outer,
+            outer_tol=self.outer_tol,
+        )
+        self.coefs_ = coefs
+        self.intercepts_ = intercepts
+        self.lambdas_ = lambdas_used
+        self.info_ = info
+        self.n_features_in_ = x.shape[1]
+        # cMCP's effective per-coord concavity bound is 1/(γ₁·γ₂) (Breheny-Huang).
+        concavity = (
+            1.0 / (float(self.gamma1) * float(self.gamma2))
+            if (np.isfinite(self.gamma1) and np.isfinite(self.gamma2)
+                and self.gamma1 > 0.0 and self.gamma2 > 0.0)
+            else 0.0
+        )
+        _set_group_convex_min_idx(self, x, groups_arr, concavity)
+        return self
+
+
+class GroupExponentialPathRegressor(_PathRegressorBase):
+    """Group exponential lasso (gel) least squares along a λ-path.
+
+    Solves
+
+        min_β (1/2n) ‖y − Xβ − α‖² + Σ_g w^g · (λ²/τ) · [1 − exp(−τ ‖β_g‖₁ / λ)]
+
+    Penalty applied to each group's L1 norm — produces bilevel
+    selection (group-level AND within-group sparsity) without the
+    quadratic-λ scaling that cMCP introduces. ``tau`` (> 0) controls
+    how aggressively the penalty saturates: large ``tau`` ⇒ aggressive
+    bilevel sparsity; ``tau → 0`` ⇒ approaches plain weighted lasso.
+
+    References
+    ----------
+    Breheny, P. (2015). The group exponential lasso for bi-level
+    variable selection. *Biometrics* 71(3), 731–740.
+    """
+
+    convex_min_idx_: int | None
+
+    def __init__(
+        self,
+        groups: NDArray[np.int64],
+        tau: float = 1.0,
+        *,
+        lambdas: NDArray[np.float64] | None = None,
+        n_lambdas: int = 100,
+        lambda_min_ratio: float = 1e-3,
+        weights: NDArray[np.float64] | None = None,
+        max_iter: int = 100,
+        tol: float = 1e-6,
+        fit_intercept: bool = True,
+        standardize: bool = False,
+        acceleration: int | None = 5,
+        max_outer: int = 10,
+        outer_tol: float = 1e-6,
+    ) -> None:
+        self.groups = groups
+        self.tau = tau
+        self.lambdas = lambdas
+        self.n_lambdas = n_lambdas
+        self.lambda_min_ratio = lambda_min_ratio
+        self.weights = weights
+        self.max_iter = max_iter
+        self.tol = tol
+        self.fit_intercept = fit_intercept
+        self.standardize = standardize
+        self.acceleration = acceleration
+        self.max_outer = max_outer
+        self.outer_tol = outer_tol
+
+    def fit(self, x, y: NDArray[np.float64]) -> "GroupExponentialPathRegressor":
+        x = np.ascontiguousarray(x, dtype=np.float64)
+        y = np.ascontiguousarray(y, dtype=np.float64)
+        groups_arr = np.ascontiguousarray(self.groups, dtype=np.int64)
+        if groups_arr.shape[0] != x.shape[1]:
+            raise ValueError(
+                f"groups length {groups_arr.shape[0]} does not match "
+                f"n_features {x.shape[1]}"
+            )
+        lams = (
+            np.ascontiguousarray(self.lambdas, dtype=np.float64)
+            if self.lambdas is not None
+            else None
+        )
+        w = (
+            np.ascontiguousarray(self.weights, dtype=np.float64)
+            if self.weights is not None
+            else None
+        )
+        coefs, intercepts, lambdas_used, info = _core.solve_gel_ls_path(
+            x, y, groups_arr,
+            tau=self.tau,
+            lambdas=lams,
+            n_lambdas=self.n_lambdas,
+            lambda_min_ratio=self.lambda_min_ratio,
+            weights=w,
+            max_iter=self.max_iter,
+            tol=self.tol,
+            acceleration=self.acceleration,
+            fit_intercept=self.fit_intercept,
+            standardize_x=self.standardize,
+            max_outer=self.max_outer,
+            outer_tol=self.outer_tol,
+        )
+        self.coefs_ = coefs
+        self.intercepts_ = intercepts
+        self.lambdas_ = lambdas_used
+        self.info_ = info
+        self.n_features_in_ = x.shape[1]
+        # gel concavity bound per-coord: f''(0) = -τ ⇒ concavity = τ.
+        concavity = float(self.tau) if (np.isfinite(self.tau) and self.tau > 0.0) else 0.0
+        _set_group_convex_min_idx(self, x, groups_arr, concavity)
+        return self
+
+
 # =====================================================================
 # Logistic regression (binomial logit) via prox-Newton
 # =====================================================================

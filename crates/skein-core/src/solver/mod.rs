@@ -32,8 +32,10 @@ pub use convex_region::{group_convex_min_idx, scalar_convex_min_idx, PenaltyConc
 pub use glasso::{glasso_solve, GlassoConfig, GlassoReport};
 pub use glasso_admm::{joint_glasso_solve, JointGlassoConfig, JointGlassoReport};
 pub use lla::{
-    lla_solve, surrogate_sparse_group_mcp, surrogate_sparse_group_scad, surrogate_weights_bridge,
-    surrogate_weights_group_mcp, surrogate_weights_group_scad, LLAReport,
+    broadcast_group_weights_to_coord, cmcp_lambda_max, cmcp_value, gel_value, lla_solve,
+    surrogate_sparse_group_mcp, surrogate_sparse_group_scad, surrogate_weights_bridge,
+    surrogate_weights_cmcp, surrogate_weights_gel, surrogate_weights_group_mcp,
+    surrogate_weights_group_scad, LLAReport,
 };
 pub use path::{lambda_grid, lambda_max, solve_path, PathConfig, PathReport, Screening};
 pub use path_lla::{solve_path_lla, PathLLAReport};
