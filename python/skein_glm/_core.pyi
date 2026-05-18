@@ -29,6 +29,18 @@ def group_lipschitz_sparse(
     indptr: NDArray[np.int64],
     group_labels: NDArray[np.int64],
 ) -> NDArray[np.float64]: ...
+def orthonormalize_groups_dense(
+    x: NDArray[np.float64],
+    group_labels: NDArray[np.int64],
+) -> tuple[NDArray[np.float64], list[tuple[NDArray[np.int64], NDArray[np.float64]]]]: ...
+def back_transform_coefs_path(
+    coefs_orth: NDArray[np.float64],
+    packed_back_transform: list[tuple[NDArray[np.int64], NDArray[np.float64]]],
+) -> NDArray[np.float64]: ...
+def back_transform_coefs(
+    beta_orth: NDArray[np.float64],
+    packed_back_transform: list[tuple[NDArray[np.int64], NDArray[np.float64]]],
+) -> NDArray[np.float64]: ...
 def solve_cmcp_ls_path(
     x: NDArray[np.float64],
     y: NDArray[np.float64],

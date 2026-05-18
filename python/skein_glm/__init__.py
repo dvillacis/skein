@@ -1,6 +1,9 @@
 """skein_glm: weighted structured nonconvex sparse models."""
 
 from skein_glm._core import (
+    back_transform_coefs,
+    back_transform_coefs_path,
+    orthonormalize_groups_dense,
     solve_bridge_ls_path,
     solve_bridge_ls_path_sparse,
     solve_cmcp_ls_path,
@@ -185,6 +188,11 @@ from skein_glm.cv import (
     SparseGroupSCADPathCV,
 )
 from skein_glm.ic import select_by_ic
+from skein_glm.orthonormalize import (
+    BlockBackTransform,
+    fit_with_orthonormalization,
+    orthonormalize_groups,
+)
 from skein_glm.stability import StabilitySelection
 from skein_glm.estimators import (
     GraphicalLasso,
@@ -311,6 +319,12 @@ __all__ = [
     "solve_scad_ls_path",
     "solve_elastic_net_ls_path",
     "solve_elastic_net_ls_path_sparse",
+    "back_transform_coefs",
+    "back_transform_coefs_path",
+    "BlockBackTransform",
+    "fit_with_orthonormalization",
+    "orthonormalize_groups",
+    "orthonormalize_groups_dense",
     "solve_bridge_ls_path",
     "solve_bridge_ls_path_sparse",
     "solve_cmcp_ls_path",

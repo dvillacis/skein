@@ -11,6 +11,7 @@ pub mod gram;
 mod mmap;
 mod mmap_f32;
 mod multitask;
+mod orthonormalize;
 mod sparse_csc;
 mod standardized;
 
@@ -21,6 +22,7 @@ pub use gram::GramDesign;
 pub use mmap::MmapMatrix;
 pub use mmap_f32::MmapMatrixF32;
 pub use multitask::MultiTaskDesign;
+pub use orthonormalize::{orthonormalize_groups_dense, BlockBackTransform};
 pub use sparse_csc::SparseCSC;
 pub use standardized::Standardized;
 
