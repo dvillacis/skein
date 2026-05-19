@@ -50,6 +50,14 @@ if (isTRUE(has_groups)) {
   groups <- as.integer(read_feather(file.path(workdir, "groups.feather"))$group)
 }
 
+# Cox event status (0/1) is shipped as a sibling payload when family == "cox".
+# Built into Surv(time, status) inside fit_glmnet.
+has_status <- isTRUE(as.logical(config$has_status))
+status <- NULL
+if (has_status) {
+  status <- as.integer(read_feather(file.path(workdir, "status.feather"))$status)
+}
+
 # --- dispatch ---------------------------------------------------------
 
 map_family <- function(family, pkg) {
@@ -65,23 +73,28 @@ map_family <- function(family, pkg) {
 
 fit_glmnet <- function() {
   library(glmnet)
+  library(survival)
   glm_family <- map_family(family, "glmnet")
   alpha <- switch(penalty,
                   lasso = 1.0,
                   elastic_net = 0.5,
                   ridge = 0.0,
                   stop(sprintf("glmnet: unsupported penalty %s", penalty)))
-  # Cox in glmnet needs y as Surv(time, status). The Python side packs
-  # this in y as time and the status in a side column "status" — but we
-  # don't have that yet. For now, raise a clear error.
+  # Cox: build the Surv(time, status) response from y + the sibling
+  # status payload (written by _r_io.write_request when family=="cox").
   if (family == "cox") {
-    stop("Cox via glmnet requires a (time, status) y; feather request needs the 'status' table — not yet wired.")
+    if (is.null(status)) {
+      stop("Cox via glmnet requires a status payload; status.feather not written")
+    }
+    y_arg <- Surv(time = y, event = status)
+  } else {
+    y_arg <- y
   }
   t0 <- proc.time()
-  fit <- glmnet(X, y, family = glm_family, alpha = alpha, lambda = lambdas,
+  fit <- glmnet(X, y_arg, family = glm_family, alpha = alpha, lambda = lambdas,
                 thresh = tol, standardize = FALSE)
   elapsed <- (proc.time() - t0)[["elapsed"]]
-  # fit$beta is a sparse p × n_lambdas dgCMatrix.
+  # fit$beta is a sparse p × n_lambdas dgCMatrix (no intercept row for Cox).
   coef_mat <- as.matrix(fit$beta)
   list(coef_path = t(coef_mat),
        fit_time_s = elapsed,

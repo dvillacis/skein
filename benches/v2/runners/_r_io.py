@@ -74,6 +74,7 @@ def write_request(
     tol: float,
     groups: np.ndarray | None = None,
     gamma: float | None = None,
+    status: np.ndarray | None = None,
     extra: dict[str, Any] | None = None,
 ) -> None:
     pa, feather = _import_pyarrow()
@@ -86,6 +87,7 @@ def write_request(
         "gamma": None if gamma is None else float(gamma),
         "n": int(x.shape[0]), "p": int(x.shape[1]),
         "has_groups": groups is not None,
+        "has_status": status is not None,
         **(extra or {}),
     })
     feather.write_feather(cfg, workdir / "config.feather", compression="uncompressed")
@@ -105,6 +107,15 @@ def write_request(
         grp_tbl = pa.table({"group": pa.array(
             np.ascontiguousarray(groups, dtype=np.int64))})
         feather.write_feather(grp_tbl, workdir / "groups.feather",
+                              compression="uncompressed")
+
+    if status is not None:
+        # Cox uses y for survival times and `status` (0/1 event indicator)
+        # to build Surv(time, status) on the R side. Written as int32 so
+        # arrow→feather→R round-trips through `integer` (not `logical`).
+        status_tbl = pa.table({"status": pa.array(
+            np.ascontiguousarray(status, dtype=np.int32))})
+        feather.write_feather(status_tbl, workdir / "status.feather",
                               compression="uncompressed")
 
 
@@ -145,6 +156,7 @@ def run_r(
     tol: float,
     groups: np.ndarray | None = None,
     gamma: float | None = None,
+    status: np.ndarray | None = None,
     extra: dict[str, Any] | None = None,
     timeout_s: int = 1800,
     keep_workdir: Path | None = None,
@@ -161,7 +173,7 @@ def run_r(
     try:
         write_request(workdir, package=package, penalty=penalty, family=family,
                       x=x, y=y, lambdas=lambdas, tol=tol, groups=groups,
-                      gamma=gamma, extra=extra)
+                      gamma=gamma, status=status, extra=extra)
         try:
             subprocess.run(
                 ["Rscript", str(R_RUNNER), str(workdir)],

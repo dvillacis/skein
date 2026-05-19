@@ -42,6 +42,19 @@ def fit(
     tol: float,
     **_: object,
 ) -> RunResult:
+    # Cox in glmnet wants y = Surv(time, status). The Python side passes
+    # the times in `y` and the 0/1 event indicator in problem.meta["event"];
+    # _r_io packages it as a separate `status.feather` payload that the R
+    # runner reads back when family == "cox".
+    status = None
+    if problem.family == "cox":
+        meta_event = problem.meta.get("event") if problem.meta else None
+        if meta_event is None:
+            raise ValueError(
+                "glmnet runner: Cox cell needs problem.meta['event'] "
+                "(the simulator must emit a 0/1 status vector alongside y)"
+            )
+        status = np.asarray(meta_event, dtype=np.int32)
     res = run_r(
         package="glmnet",
         penalty=penalty,
@@ -49,6 +62,7 @@ def fit(
         x=problem.x, y=problem.y,
         lambdas=np.asarray(lambda_grid),
         tol=tol,
+        status=status,
     )
     coef_path = np.asarray(res["coef_path"])  # (n_lambdas, p)
     final_active = int(np.count_nonzero(coef_path[-1]))
