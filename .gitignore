@@ -46,5 +46,10 @@ paper/manuscript.fls
 paper/manuscript.log
 paper/manuscript.out
 paper/manuscript.pdf
+paper/manuscript.synctex.gz
+
+# Snakemake run logs (benches/v2)
+benches/v2/snakemake.log
+benches/v2/snakemake-resume.log
 
 ideas/
