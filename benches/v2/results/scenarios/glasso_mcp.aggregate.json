@@ -1,0 +1,21 @@
+{
+  "cells": [
+    {
+      "size": "small",
+      "regime": "deep",
+      "package": "skein",
+      "n_seeds": 5,
+      "n": 1000,
+      "p": 200,
+      "fit_time_s_median": 77.04350437500398,
+      "fit_time_s_min": 58.254509708000114,
+      "fit_time_s_max": 109.32164074998582,
+      "fit_time_s_iqr": 47.81431245850399,
+      "active_set_size_median": 19656,
+      "version": "0.9.0",
+      "ladder_level": "direct",
+      "host_id": "3c43bb844695"
+    }
+  ],
+  "scenario": "glasso_mcp"
+}

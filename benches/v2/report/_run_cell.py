@@ -33,6 +33,7 @@ RUNNER_ALIASES = {
     "glmnet":      "glmnet_runner",
     "ncvreg":      "ncvreg_runner",
     "grpreg":      "grpreg_runner",
+    "glasso":      "glasso_runner",
     "lifelines":   "lifelines_runner",
     "statsmodels": "statsmodels_runner",
 }
@@ -70,9 +71,24 @@ def size_name_for(n: int, p: int) -> str:
     raise KeyError((n, p))
 
 
-def _lambda_grid(x: np.ndarray, y: np.ndarray, regime_cfg: dict) -> np.ndarray:
+def _lambda_grid(
+    x: np.ndarray, y: np.ndarray, regime_cfg: dict, datafit: str = "gaussian"
+) -> np.ndarray:
+    """Geometric λ-grid descending from a datafit-appropriate `λ_max`.
+
+    For regression-style datafits (gaussian / logistic / poisson / cox)
+    we use the KKT-at-zero bound `max |X^T y| / n`. For graphical
+    models (`gaussian_inv_cov`) the simulator returns a placeholder
+    y = 0 vector — the relevant KKT bound is on the off-diagonal of
+    the sample covariance `S = X^T X / n` instead.
+    """
     n = x.shape[0]
-    lambda_max = float(np.max(np.abs(x.T @ y)) / n)
+    if datafit == "gaussian_inv_cov":
+        s = (x.T @ x) / n
+        s_off = s - np.diag(np.diag(s))
+        lambda_max = float(np.max(np.abs(s_off)))
+    else:
+        lambda_max = float(np.max(np.abs(x.T @ y)) / n)
     return np.geomspace(lambda_max,
                         lambda_max * regime_cfg["lambda_min_ratio"],
                         regime_cfg["n_lambdas"])
@@ -95,7 +111,10 @@ def run_cell(*, scenario: str, size: str, regime: str, seed: int,
     })
 
     scenario_mod, problem = _make_problem(scenario, n, p, seed)
-    grid = _lambda_grid(problem.x, problem.y, regime_cfg)
+    grid = _lambda_grid(
+        problem.x, problem.y, regime_cfg,
+        datafit=scenario_mod.SPEC.get("datafit", "gaussian"),
+    )
     runner = _load_runner(package)
 
     if not runner.is_available():
