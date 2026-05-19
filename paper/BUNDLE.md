@@ -1,7 +1,7 @@
 # Paper artifact bundle
 
-Generated at 2026-05-13 22:17:14 UTC.
-Git rev: `d7bd7270c6b69e99245fd23ad938dd04bc292ad3` (dirty working tree)
+Generated at 2026-05-16 21:05:35 UTC.
+Git rev: `6d65987e93e90e769105c68dc7b3a8d4cb9e5eb0` (dirty working tree)
 
 Each artifact under `figures/` and `tables/` is the build output of a deterministic driver — never edit them by hand. Re-run the relevant Snakemake rule or driver script to regenerate.
 

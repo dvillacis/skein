@@ -33,30 +33,30 @@
     },
     "figures/F2_headline_timing.pdf": {
       "driver": "report/figures.py headline_timing",
-      "mtime": 1778710631.1111612,
+      "mtime": 1778965467.90826,
       "paper_section": "\u00a7Results",
-      "size_bytes": 12962,
+      "size_bytes": 18268,
       "source": "results/scenarios/*.aggregate.json (size=medium, regime=deep)"
     },
     "figures/F3_scaling_curves.pdf": {
       "driver": "report/figures.py scaling_curves",
-      "mtime": 1778710632.1829348,
+      "mtime": 1778965473.2950583,
       "paper_section": "\u00a7Results",
-      "size_bytes": 18768,
+      "size_bytes": 27264,
       "source": "results/scenarios/*.aggregate.json (all sizes, regime=deep)"
     },
     "figures/F4_agreement.pdf": {
       "driver": "report/figures.py agreement",
-      "mtime": 1778710633.7561102,
+      "mtime": 1778965478.6929817,
       "paper_section": "\u00a7Correctness",
-      "size_bytes": 31728,
+      "size_bytes": 46170,
       "source": "results/scenarios/*.aggregate.json (cells with agreement_vs_skein_mean)"
     },
     "figures/F5_recovery_curves.pdf": {
       "driver": "report/figures.py recovery_curves",
-      "mtime": 1778708213.0458658,
+      "mtime": 1778965485.4212868,
       "paper_section": "\u00a7Recovery",
-      "size_bytes": 47703,
+      "size_bytes": 99563,
       "source": "results/scenarios/*.aggregate.json (recovery_per_lambda_mean)"
     },
     "figures/F6_realdata_boxplots.pdf": {
@@ -68,9 +68,9 @@
     },
     "figures/F7_ic_selection_accuracy.pdf": {
       "driver": "report/figures.py ic_selection",
-      "mtime": 1778708213.8079636,
+      "mtime": 1778965491.3197181,
       "paper_section": "\u00a7Selection",
-      "size_bytes": 16266,
+      "size_bytes": 22729,
       "source": "results/scenarios/*.aggregate.json (selection_mean)"
     },
     "figures/F8_stability_fdr_power.pdf": {
@@ -96,16 +96,16 @@
     },
     "tables/T2_headline_timings.tex": {
       "driver": "report/tables.py headline_timings",
-      "mtime": 1778710634.4587367,
+      "mtime": 1778965503.9738114,
       "paper_section": "\u00a7Results",
-      "size_bytes": 1286,
+      "size_bytes": 2621,
       "source": "results/scenarios/*.aggregate.json (size=medium, regime=deep)"
     },
     "tables/T4_recovery.tex": {
       "driver": "report/tables.py recovery",
-      "mtime": 1778708581.9633749,
+      "mtime": 1778965509.2881303,
       "paper_section": "\u00a7Recovery",
-      "size_bytes": 4784,
+      "size_bytes": 15830,
       "source": "results/scenarios/*.aggregate.json (selection_mean, regime=deep)"
     },
     "tables/T5_realdata.tex": {
@@ -123,8 +123,8 @@
       "source": "results/cells/*.env.json (host_id, BLAS, package versions)"
     }
   },
-  "generated_at": 1778710634,
+  "generated_at": 1778965535,
   "git_dirty": true,
-  "git_rev": "d7bd7270c6b69e99245fd23ad938dd04bc292ad3",
+  "git_rev": "6d65987e93e90e769105c68dc7b3a8d4cb9e5eb0",
   "missing": []
 }
