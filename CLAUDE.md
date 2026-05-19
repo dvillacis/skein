@@ -17,6 +17,15 @@ narrative. Don't restate any of those here.
 
 ## Build & test
 
+The Python environment is managed by **uv**. The project venv lives at
+`.venv/` at the repo root; `uv run --no-sync <cmd>` invokes commands in
+it without re-resolving (resolution currently fails against the `bench`
+extra because `snakemake >=8` needs Python ≥3.11 while the project's
+`requires-python` is `>=3.10` — `--no-sync` sidesteps that). Use `uv
+run --no-sync python …`, `uv run --no-sync pytest`, `uv run --no-sync
+snakemake …`, etc. `maturin develop` auto-detects the `.venv` and
+installs there; no activation needed.
+
 ```bash
 # Rust-only loop (fastest for algorithm work; no Python rebuild)
 cargo test -p skein-core --lib

@@ -18,20 +18,21 @@ per-group.
 
 ## Status
 
-v0.9 — the research-grade release. Closes the inference axis across
-all four mainstream GLM families (debiased Cox lasso joins LS /
-logistic / Poisson), adds edge-level FDR / FWER / MB stability
-control on graphical models, ships polychoric / polyserial
-preprocessing for ordinal Likert data, and finishes the M13 / M14c
-perf work — every GLM × group penalty (plain + sparse-group) now
-runs native, no LLA wrappers underneath any prox-Newton outer.
-M13.8 (post-v0.9) ports celer's gap-safe screening + Anderson dual
-extrapolation to the GLM prox-Newton surrogate, closing the
-F-series gap that M10 left LS-only — 3–8× wall-clock on
-`logistic_lasso` v2 cells. M5 model selection + inference +
-threaded CV folds + M11 graphical lasso (single + joint) + M12
-hardening all carried over from v0.8. See [ROADMAP.md](ROADMAP.md)
-for the full plan and the open M14b software-paper milestone.
+v0.10.0 — performance milestone shipping celer-style gap-safe
+screening on the GLM prox-Newton surrogate (3–8× wall-clock on
+`logistic_lasso` v2 cells). Post-v0.10.0 the working tree adds
+**M14d/e/f** (untagged): the ncvreg-equivalent v-scaled MCP/SCAD
+prox closes the GLM nonconvex active-set bloat (M14e — `logistic_mcp
+medium-sparse` 842 → 107 active features, matching ncvreg exactly,
+6× speedup); a fused IRLS+CD GLM solver mirroring `ncvreg::cdfit_glm`'s
+lazy per-iter cost structure (M14f) closes the remaining wall-clock
+gap — **`logistic_mcp medium-sparse` 19.7 s → 3.05 s, ~8 % ahead of
+ncvreg** on the same shape. M14b (software paper) ships an empirical
+run + a 909-line manuscript draft; remaining 1.0 work is a stable-API
+audit, two small dispatch / regression fixes, and the manuscript
+wrapper. M5 model selection + inference + threaded CV folds + M11
+graphical lasso (single + joint) + M12 hardening all carried over
+from v0.8. See [ROADMAP.md](ROADMAP.md) for the full plan.
 
 **Done so far:**
 
@@ -97,13 +98,26 @@ for the full plan and the open M14b software-paper milestone.
   datafit unit-test coverage, an integration test directory, a CI
   smoke job for the PyO3 layer, and an R-fixture gate.
 
-**Coming next:** **M14b (software paper)** — run the full
-`benches/v2` GLM + graphical headline matrix and draft the
-JMLR-MLOSS / JOSS manuscript from the figures + tables that already
-auto-generate. M14c shipped: scalar LLA weight short-circuit
-(bridge / adaptive / multitask), native sparse-group MCP BCD for
-logistic / Poisson / Cox, and an at-scale R-fixture tier (n=500,
-p=100) for cross-package regression gating.
+**Coming next — the v1.0 punch-list:**
+
+1. **Fix the `glasso_l1` benchmark-runner dispatch bug** — both the
+   skein and sklearn runners in `benches/v2/runners/*` key the
+   graphical-family fit on `penalty == "glasso"`, but the scenario
+   passes `penalty = "lasso"`, so those cells silently ran the regular
+   `lasso_path` on the n×p data matrix. Cells that were committed
+   pre-fix should be regenerated; the R-glasso runner shipped this
+   release does dispatch correctly.
+2. **Investigate the `poisson_lasso` regression** — `medium / dense`
+   moved from 29.0 s (pre-M14e baseline) to 41.7 s post-M14f
+   (glmnet 2.5 s on the same cell). Convex Poisson is the standout
+   weakness now that M14e/f closed the nonconvex GLM gap.
+3. **Stable-Rust-API audit** — per `docs/extending/rust-api.md`, 1.0
+   freezes the documented surface and forces every other `pub` item to
+   either promote or move to `pub(crate)`. Mechanical: `cargo doc -p
+   skein-core --no-deps` diff against the contract page.
+4. **M14b manuscript wrapper** — empirical run + 909-line LaTeX draft
+   landed; remaining work is folding the post-M14e/f numbers into
+   §Results / §Ablation and the JMLR-MLOSS / JOSS submission pass.
 
 ## Layout
 
@@ -157,46 +171,68 @@ naming scheme. The path variants warm-start across λ; their `coefs_` /
 
 ## Performance
 
-skein is benchmarked against sklearn / skglm / celer / glmnet / ncvreg
-on shared λ-grids via the harness under `benches/`. Headline numbers
-(Apple M1, 16 GB; median of N timed trials after a warm-up):
+Numbers below are the median of 5 timed trials (single warm-up) from
+the [`benches/v2`](benches/v2/README.md) headline matrix on Apple M1
+16 GB, `--features=blas-accelerate`, `tol=1e-7`, regenerated 2026-05-18
+against the current working tree (M13.8 + M14d/e/f). Two regimes per
+scenario, named by what the *solution* does at the tail of the
+λ-path:
 
-Each scenario is run in two regimes that name what the *solution* does
-at the tail of the λ-path, not the path geometry:
-
-- **dense** — `λ_min/λ_max = 1e-3`; the active set saturates near the
-  smallest λ (typical "I want the full path including the over-fit
-  tail" usage).
-- **sparse** — `λ_min/λ_max = 5e-2`; the path stops near support
+- **dense** — `λ_min/λ_max = 1e-3`, 100 λs; active set saturates at
+  the small-λ end (typical "I want the full path including the
+  over-fit tail" usage). Internal config key: `deep`.
+- **sparse** — `λ_min/λ_max = 5e-2`, 50 λs; path stops near support
   recovery, support stays small throughout.
 
-| scenario | size | skein | next-fastest comparator |
-|---|---|---|---|
-| Lasso LS — dense  | medium (n=10k, p=1k)  | 1.17 s     | sklearn 0.125 s |
-| Lasso LS — sparse | medium                | 0.78 s     | sklearn 0.099 s |
-| MCP   LS — dense  | medium                | **1.37 s** | skglm 3.35 s    |
-| MCP   LS — sparse | medium                | **0.75 s** | ncvreg 1.17 s   |
-| MCP   LS — dense  | large (n=100k, p=10k) | **510 s**  | skglm 666 s     |
-| MCP   LS — sparse | large                 | **497 s**  | skglm 702 s     |
-| SCAD  LS — dense  | medium                | **1.78 s** | ncvreg 7.99 s   |
-| SCAD  LS — sparse | medium                | **0.90 s** | ncvreg 1.86 s   |
+### Nonconvex penalties (skein leads)
 
-skein is the fastest on every nonconvex row across every size; on
-convex lasso/LS the sklearn Cython `lasso_path` remains the floor at
-~8–9× faster on the medium bench. See
-[`docs/benchmarks/mcp_ls.md`](docs/benchmarks/mcp_ls.md) and
+| scenario | size | regime | skein | next-fastest | ratio |
+|---|---|---|---:|---|---:|
+| MCP LS  | medium (n=10k, p=1k)   | dense  | **1.70 s** | skglm 4.61 s    | 2.7× |
+| MCP LS  | medium                 | sparse | **0.46 s** | ncvreg 1.32 s   | 2.9× |
+| MCP LS  | large (n=50k, p=5k)    | dense  | **31.3 s** | skglm 73.5 s    | 2.3× |
+| MCP LS  | large                  | sparse | **13.6 s** | ncvreg 24.9 s   | 1.8× |
+| SCAD LS | medium                 | dense  | **1.57 s** | ncvreg 7.82 s   | 5.0× |
+| SCAD LS | medium                 | sparse | **0.37 s** | ncvreg 1.33 s   | 3.6× |
+| SCAD LS | large                  | dense  | **30.6 s** | ncvreg 186 s    | 6.1× |
+| Group lasso     | medium (n=10k, J=100) | dense  | **5.33 s** | grpreg 11.4 s  | 2.1× |
+| Group MCP       | medium                | dense  | **6.57 s** | grpreg 12.6 s  | 1.9× |
+| Logistic MCP    | medium (n=10k, p=1k)  | dense  | **19.6 s** | ncvreg 95.1 s  | 4.9× |
+| Logistic MCP    | medium                | sparse | **1.77 s** | ncvreg 3.29 s  | 1.9× |
+
+### Convex penalties (mixed)
+
+| scenario | size | regime | skein | leader | notes |
+|---|---|---|---:|---|---|
+| Lasso LS         | medium | dense  | **1.13 s** | sklearn 0.20 s | beats celer 3.05 s / glmnet 1.64 s / skglm 4.80 s |
+| Lasso LS         | medium | sparse | 0.37 s | celer 0.17 s   | beats glmnet 1.36 s, sklearn 0.12 s wins |
+| Lasso LS         | large  | dense  | 25.5 s | sklearn 10.0 s | beats celer 36.4 s / skglm 76.8 s; glmnet 20.3 s |
+| ElasticNet LS    | medium | dense  | **1.40 s** | glmnet 1.71 s  | beats glmnet; sklearn 0.28 s wins overall |
+| Cox lasso        | medium | dense  | 3.82 s | glmnet 2.24 s  | within 1.7× of glmnet |
+| Logistic lasso   | medium | dense  | 108 s  | glmnet 7.9 s   | **14× behind glmnet** — convex GLM is the open gap |
+| Poisson lasso    | medium | dense  | 41.7 s | glmnet 2.5 s   | **17× behind glmnet** — regressed from v0.10.0 (M14d/e/f untouched the convex Poisson path) |
+
+skein is now the fastest public option for nonconvex penalties (MCP /
+SCAD / their group + sparse-group variants) across every size, and
+competitive-to-leading on convex group penalties. The two standing
+weaknesses are convex Lasso vs sklearn's Cython `lasso_path` at small
+scales (sklearn's coordinate descent kernel is hard to beat), and the
+convex GLM lasso paths (logistic / Poisson) where glmnet's specialized
+weighted-LS path stays well ahead. The nonconvex GLM gap that M13.8
+left open closed in M14e (v-scaled prox) + M14f (fused IRLS+CD): both
+already merged in the working tree.
+
+See [`docs/benchmarks/mcp_ls.md`](docs/benchmarks/mcp_ls.md) and
 [`docs/benchmarks/scad_ls.md`](docs/benchmarks/scad_ls.md) for the
-full nonconvex write-ups (correctness matrices + methodology +
-per-size tables) and
+detailed nonconvex write-ups,
 [`docs/perf/lasso_ls_profile.md`](docs/perf/lasso_ls_profile.md) for
-the lasso/LS profiling work that drove M10.
+the lasso/LS profiling work that drove M10, and
+[`paper/tables/T2_headline_timings.md`](paper/tables/T2_headline_timings.md)
+for the complete v2 table this section is condensed from.
 
-Reproduce with `python benches/run.py --scenarios mcp_ls
-mcp_ls_sparse --sizes small,medium`. The publication-quality
-benchmark suite under [`benches/v2/`](benches/v2/README.md) drives the
-paper figures and tables; see
-[`docs/benchmarks/index.md`](docs/benchmarks/index.md) for the layered
-overview.
+Reproduce with `pip install -e '.[bench]' && cd benches/v2 &&
+snakemake --profile profiles/m1-headline`. The full matrix is ~12 h
+on M1; for a fast LS-only shakedown use the `ls_headline` target.
 
 ## Build
 
