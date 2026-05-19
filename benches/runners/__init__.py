@@ -23,8 +23,11 @@ PenaltyName = Literal[
     "group_lasso",
     "group_mcp",
     "group_scad",
+    "sparse_group_lasso",
     "sparse_group_mcp",
     "sparse_group_scad",
+    "glasso",
+    "glasso_mcp",
 ]
 
 

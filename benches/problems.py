@@ -13,7 +13,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-SizeName = Literal["small", "medium", "large"]
+SizeName = Literal["small", "medium", "large", "xlarge", "xxlarge"]
 
 
 @dataclass(frozen=True)
@@ -23,10 +23,20 @@ class Size:
     p: int
 
 
+# Sizes are tuned for the v1 single-process bench harness on a 16 GB
+# Apple Silicon host (the canonical bench host for committed snapshots).
+# `large` is 4× medium and stays within RAM headroom for skein at deep-
+# tail paths; `xlarge` matches v2's headline `large` (n=50k, p=5k → X ≈
+# 2 GB) and is opt-in because comparator memory copies push past 16 GB
+# in a single Python process. `xxlarge` is aspirational — needs a 32+ GB
+# host and the legacy `r_runner.R` JSON transport OOMs there (v2 ships
+# an Arrow-IPC variant).
 SIZES: dict[SizeName, Size] = {
     "small": Size("small", n=1_000, p=100),
     "medium": Size("medium", n=10_000, p=1_000),
-    "large": Size("large", n=100_000, p=10_000),
+    "large": Size("large", n=20_000, p=2_000),
+    "xlarge": Size("xlarge", n=50_000, p=5_000),
+    "xxlarge": Size("xxlarge", n=100_000, p=10_000),
 }
 
 

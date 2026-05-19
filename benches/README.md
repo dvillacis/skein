@@ -59,8 +59,17 @@ python benches/run.py --scenarios all --packages all --sizes small,medium,large
   ways.
 - **Wall-clock fit time only** (not predict, not setup). Path solves
   measure the whole path, not single-λ.
-- **Three sizes** per scenario: small (n=1k, p=100), medium (n=10k,
-  p=1k), large (n=100k, p=10k). Skipped if a runner errors or OOMs.
+- **Five sizes** per scenario:
+  - small (n=1k, p=100)
+  - medium (n=10k, p=1k)
+  - large (n=20k, p=2k) — 4× medium, fits on a 16 GB host single-process
+  - xlarge (n=50k, p=5k) — matches v2's headline `large`; opt-in,
+    single-process at this size pushes past 16 GB once comparator
+    copies stack
+  - xxlarge (n=100k, p=10k) — opt-in, requires 32+ GB; the legacy R
+    runner (JSON transport) OOMs here (v2 ships an Arrow-IPC variant)
+
+  Skipped if a runner errors or OOMs.
 
 ## Result schema
 
@@ -104,20 +113,30 @@ Live numbers committed for: `lasso_ls`, `lasso_ls_sparse`, `mcp_ls`,
 
 ## Open gaps (ROADMAP M12-P1)
 
-- **No `large` (n=100k, p=10k) snapshots committed.** The scenario
-  drivers and `Size("large")` already exist; the gap is that nobody
-  has run them on a snapshot-eligible host. To fill, on the host
-  whose `host_id` should be canonical:
+- **`large` snapshots are skein-only.** On the canonical 16 GB Apple
+  Silicon bench host, running all comparators at `large` in a single
+  Python process pushes the OS into swap-thrashing because comparators
+  retain internal X copies across calls. The v2 paper bundle uses
+  per-cell subprocess isolation precisely to avoid this; v2 also has
+  zero `large` cells committed at its larger `large = (50k, 5k)`. v1's
+  contract is therefore narrower: commit **skein-only large snapshots**
+  as a regression gate against future M13 perf changes. Cross-package
+  comparison at scale lives in v2:
 
   ```bash
   python benches/run.py \
       --scenarios lasso_ls lasso_ls_sparse mcp_ls mcp_ls_sparse scad_ls scad_ls_sparse \
-      --packages all \
+      --packages skein \
       --sizes large
   ```
 
-  Expect multi-hour runtime; each comparator may OOM on `large` and
-  that's fine (the runner records the failure and skips).
+- **`xlarge` / `xxlarge` are opt-in only.** xlarge (n=50k, p=5k) needs
+  ~12 GB headroom for skein at deep-tail paths and was tried + rolled
+  back during M12-P1 — pin it to a 32+ GB host. xxlarge (n=100k, p=10k)
+  needs ~32 GB headroom and the legacy r_runner.R JSON transport OOMs
+  on it; v2 ships an Arrow-IPC variant. Do **not** mix xlarge/xxlarge
+  snapshots from a different host into the same `results/*.json` (file
+  is `host_id`-tagged at the top level).
 
 - **No glasso scenarios.** M11 (graphical models) shipped without
   bench coverage — `sklearn.covariance.GraphicalLasso` and R
