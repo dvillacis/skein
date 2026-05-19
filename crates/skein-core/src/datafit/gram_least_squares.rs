@@ -23,7 +23,7 @@ use super::Datafit;
 use crate::design::DesignMatrix;
 use ndarray::{Array1, ArrayView1};
 
-pub struct GramLeastSquares {
+pub(crate) struct GramLeastSquares {
     rhs: Array1<f64>,
     diag: Array1<f64>,
 }

@@ -490,7 +490,7 @@ fn find_kkt_violators_batched(
 /// `PoissonLog`, `CoxPH` provide it; other datafits do not and must
 /// route through [`prox_newton_solve`] instead.
 #[allow(clippy::too_many_arguments)]
-pub fn prox_newton_fused_solve(
+pub(crate) fn prox_newton_fused_solve(
     design: &dyn DesignMatrix,
     glm: &dyn GlmDatafit,
     penalty: &dyn Penalty,

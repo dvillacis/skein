@@ -15,7 +15,7 @@
 use super::DesignMatrix;
 use ndarray::{Array1, Array2, ArrayView1, ArrayViewMut1};
 
-pub struct GramDesign {
+pub(crate) struct GramDesign {
     gram: Array2<f64>,
 }
 
@@ -29,6 +29,7 @@ impl GramDesign {
         Self { gram }
     }
 
+    #[allow(dead_code)] // test-only since v1.0 demoted GramDesign to pub(crate)
     pub fn gram(&self) -> &Array2<f64> {
         &self.gram
     }

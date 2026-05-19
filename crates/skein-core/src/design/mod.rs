@@ -7,7 +7,7 @@
 mod augmented;
 mod chunked;
 mod dense;
-pub mod gram;
+pub(crate) mod gram;
 mod mmap;
 mod mmap_f32;
 mod multitask;
@@ -18,7 +18,7 @@ mod standardized;
 pub use augmented::Augmented;
 pub use chunked::Chunked;
 pub use dense::DenseMatrix;
-pub use gram::GramDesign;
+pub(crate) use gram::GramDesign;
 pub use mmap::MmapMatrix;
 pub use mmap_f32::MmapMatrixF32;
 pub use multitask::MultiTaskDesign;

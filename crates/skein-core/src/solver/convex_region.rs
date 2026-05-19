@@ -33,7 +33,8 @@ use ndarray::ArrayView2;
 /// convex-region checks compare against per-feature / per-group Lipschitz
 /// bounds.
 #[derive(Debug, Clone, Copy)]
-pub enum PenaltyConcavity {
+#[allow(dead_code)] // test-only since v1.0 demotion
+pub(crate) enum PenaltyConcavity {
     /// MCP-like, with `gamma > 0`. Concavity = `1 / gamma`.
     Mcp { gamma: f64 },
     /// SCAD-like, with `a > 2`. Concavity = `1 / (a − 1)`.
@@ -48,6 +49,7 @@ impl PenaltyConcavity {
     /// The scalar bound that per-feature / per-group Lipschitz must equal
     /// or exceed for local convexity. Returns `0.0` (always convex) for
     /// degenerate inputs (`gamma = ∞`, `a` very large).
+    #[allow(dead_code)] // test-only since v1.0 demoted PenaltyConcavity to pub(crate)
     pub fn as_value(&self) -> f64 {
         match *self {
             PenaltyConcavity::Mcp { gamma } => {

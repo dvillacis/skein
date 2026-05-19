@@ -128,7 +128,8 @@ where
 ///     (the L1 part vanishes; weights are irrelevant).
 ///   - `α = 1` (pure scalar MCP per coord): per-group weights are zeros
 ///     (the L2 part vanishes).
-pub fn surrogate_sparse_group_mcp(
+#[allow(dead_code)] // test-only since v1.0 demotion
+pub(crate) fn surrogate_sparse_group_mcp(
     beta: ArrayView1<f64>,
     groups: &Groups,
     lambda: f64,
@@ -454,7 +455,8 @@ pub fn cmcp_lambda_max(
 
 /// Total cMCP penalty value at the current iterate. Used for objective
 /// reporting; not on the solver hot path.
-pub fn cmcp_value(
+#[allow(dead_code)] // test-only since v1.0 demotion
+pub(crate) fn cmcp_value(
     beta: ArrayView1<f64>,
     groups: &Groups,
     lambda: f64,
@@ -524,7 +526,8 @@ pub fn surrogate_weights_gel(
 
 /// Total gel penalty value at the current iterate. Used for objective
 /// reporting; not on the solver hot path.
-pub fn gel_value(
+#[allow(dead_code)] // test-only since v1.0 demotion
+pub(crate) fn gel_value(
     beta: ArrayView1<f64>,
     groups: &Groups,
     lambda: f64,

@@ -58,7 +58,7 @@ pub fn cd_solve(
 /// CD with a caller-supplied initial β. Used by the path solver to warm-start
 /// down a λ-grid. Thin wrapper over [`cd_solve_subset`] with the full feature
 /// set.
-pub fn cd_solve_warm(
+pub(crate) fn cd_solve_warm(
     beta_init: Array1<f64>,
     design: &dyn DesignMatrix,
     datafit: &dyn Datafit,
@@ -75,7 +75,7 @@ pub fn cd_solve_warm(
 /// already maintains (via incremental `r += δ · X[:, j]` updates), instead of
 /// recomputing `r = Xβ − y` from scratch after every call — that recompute
 /// was an `O(np)` matvec per λ that the caller already had the answer to.
-pub fn cd_solve_warm_with_residual(
+pub(crate) fn cd_solve_warm_with_residual(
     beta_init: Array1<f64>,
     design: &dyn DesignMatrix,
     datafit: &dyn Datafit,
@@ -97,7 +97,7 @@ pub fn cd_solve_warm_with_residual(
 /// than recomputing it via a fresh matvec.
 ///
 /// Empty `features` returns immediately (no work to do, considered converged).
-pub fn cd_solve_subset(
+pub(crate) fn cd_solve_subset(
     beta_init: Array1<f64>,
     features: &[usize],
     design: &dyn DesignMatrix,
@@ -219,7 +219,8 @@ pub fn cd_solve_subset(
 /// weights — the unweighted LS path is already at memory bandwidth via
 /// `col_sq_norm`'s lookup cache, and the generic loop is the single
 /// source of truth for that case.
-pub fn cd_solve_subset_weighted_ls(
+#[allow(dead_code)] // test-only since v1.0 demotion
+pub(crate) fn cd_solve_subset_weighted_ls(
     beta_init: Array1<f64>,
     features: &[usize],
     design: &dyn DesignMatrix,
@@ -255,7 +256,7 @@ pub fn cd_solve_subset_weighted_ls(
 ///
 /// `lips.len()` must equal `p`. The CD loop reads `lips[j]` for `j ∈ features`;
 /// out-of-WS entries are ignored.
-pub fn cd_solve_subset_weighted_ls_with_lips(
+pub(crate) fn cd_solve_subset_weighted_ls_with_lips(
     beta_init: Array1<f64>,
     features: &[usize],
     design: &dyn DesignMatrix,

@@ -32,7 +32,8 @@ static OVERLAP_FALLBACK_WARNED: Once = Once::new();
 
 /// Group block-CD with cold start at β = 0. Thin wrapper over
 /// [`block_cd_solve_subset`] with the full group set.
-pub fn block_cd_solve(
+#[allow(dead_code)] // test-only since v1.0 demotion
+pub(crate) fn block_cd_solve(
     design: &dyn DesignMatrix,
     datafit: &dyn Datafit,
     penalty: &dyn GroupPenalty,
