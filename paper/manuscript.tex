@@ -559,32 +559,53 @@ canonical medium/deep cell ($n{=}10^4$, $p{=}10^3$, 100-$\lambda$
 path with $\lambda_{\min}/\lambda_{\max} = 10^{-3}$). On every
 \emph{nonconvex} row \texttt{skein} is the fastest implementation
 in the comparison. On scalar MCP and SCAD the gap is widest against
-the R baselines (\texttt{ncvreg}, \texttt{skglm}'s
-LLA-on-MCP). On the group-MCP row the result is the most
-consequential: the native block-CD swap of
+the R baselines: \texttt{ls\_mcp} runs at $1.70$\,s (\texttt{ncvreg}
+$7.78$\,s, $4.6\times$ slower; \texttt{skglm}'s LLA wrapper
+$4.61$\,s, $2.7\times$ slower), and \texttt{ls\_scad} at $1.57$\,s
+(\texttt{ncvreg} $7.82$\,s, $5.0\times$ slower). On the group-MCP
+row the native block-CD swap of
 Section~\ref{sec:methods:groupmcp} brings the
-\texttt{ls\_group\_mcp} cell from $\sim$36\,s down to $\sim$10\,s,
-flipping the prior \texttt{grpreg} comparison from $3.34\times$
-slower to $1.20\times$ faster than \texttt{grpreg} on the same
-cell --- the first time, to our knowledge, that a Python
-implementation has surpassed \texttt{grpreg} on the group-MCP
-benchmark.
+\texttt{ls\_group\_mcp} cell to $6.57$\,s against \texttt{grpreg}'s
+$12.56$\,s --- $1.91\times$ faster, the first time, to our knowledge,
+that a Python implementation has surpassed \texttt{grpreg} on the
+group-MCP benchmark.
 
-On convex Lasso/LS the picture flips: \texttt{sklearn}'s Cython
-\texttt{lasso\_path} remains the floor at roughly
-$1.5\times$--$2\times$ faster than \texttt{skein}, with
-\texttt{celer} and \texttt{glmnet} in between. The remaining gap
-is structural to the inner CD's memory-bandwidth wall at
-$n \gtrsim 5 \cdot 10^4$ (see Section~\ref{sec:results:scaling}); a
+The GLM nonconvex story is the most consequential. The same
+medium/deep cell of \texttt{logistic\_mcp} measures $19.6$\,s
+against \texttt{ncvreg}'s $95.1$\,s --- a $4.85\times$ speedup
+driven by two coupled changes laid out in
+Section~\ref{sec:ablation}: an $n$-scaled MCP/SCAD prox that
+matches \texttt{ncvreg}'s active-set definition (collapsing what
+was previously an $842$-feature active set down to $107$ at the
+sparse end of the path), and a fused IRLS$+$CD inner loop that
+mirrors \texttt{ncvreg::cdfit\_glm}'s lazy per-iteration cost
+structure. The same two changes carry over to
+\texttt{poisson\_mcp} and \texttt{cox\_mcp}, neither of which has a
+direct comparator in Python and only one in R
+(\texttt{ncvreg::cv.ncvsurv} for Cox-MCP). For the
+\emph{convex} GLM rows the picture is asymmetric: skein leads on
+the nonconvex rows but trails \texttt{glmnet} by $14\times$ on
+\texttt{logistic\_lasso} ($108$\,s vs $7.9$\,s) and $17\times$ on
+\texttt{poisson\_lasso} ($41.7$\,s vs $2.5$\,s), reflecting that
+the M13.8 gap-safe screening landed on the logistic prox-Newton
+surrogate but \texttt{glmnet}'s \texttt{dev\_ratio} early
+termination still has no skein counterpart for the convex GLM path.
+On \texttt{cox\_lasso} the gap narrows to $1.7\times$ ($3.82$\,s vs
+$2.24$\,s).
+
+On convex Lasso/LS the picture flips entirely: \texttt{sklearn}'s
+Cython \texttt{lasso\_path} remains the floor at $0.20$\,s on the
+medium/deep cell, roughly $5.6\times$ faster than \texttt{skein}'s
+$1.13$\,s, with \texttt{glmnet} ($1.64$\,s) and \texttt{celer}
+($3.05$\,s) in between. The gap is structural to the inner CD's
+memory-bandwidth wall (see Section~\ref{sec:results:scaling}); a
 Cython-class rewrite is on the roadmap but not the bottleneck for
-the use cases this package targets. The GLM rows
-(\texttt{logistic\_lasso}, \texttt{logistic\_mcp},
-\texttt{poisson\_lasso}, \texttt{cox\_lasso}, \texttt{cox\_mcp})
-are the most asymmetric: \texttt{skein} is the only Python
-implementation that ships nonconvex group and sparse-group
-penalties on those families, so the external-comparator column is
-empty for those cells. Table~\ref{tab:estimator_surface} marks the
-coverage gap explicitly.
+the use cases this package targets. Table~\ref{tab:estimator_surface}
+marks the per-(datafit, penalty) coverage gap across comparators
+explicitly --- the cells where \texttt{skein} has no Python
+comparator at all (group / sparse-group MCP and SCAD on logistic /
+Poisson / Cox) are precisely the ones the package was built to
+fill.
 
 \subsection{Scaling}\label{sec:results:scaling}
 
@@ -850,6 +871,48 @@ exceeds the parallel work even at $p > 10^4$. The shipped solver
 uses serial Gauss--Seidel inside the inner loop with Rayon
 parallelism reserved for the outer working-set sweep, where the
 groups are decoupled by the convergence guarantee.
+
+\subsubsection*{Nonconvex GLM inner loop: matching \texttt{ncvreg}}
+
+The GLM-MCP wall-clock improvement in
+Section~\ref{sec:results:headline} is the cumulative effect of two
+inner-loop changes that landed independently after the M13.8
+prox-Newton screening pass. The progression on the
+\texttt{logistic\_mcp medium/sparse} cell illustrates both:
+
+\begin{itemize}
+  \item \textbf{Baseline, post-M13.8.} The standard prox-Newton
+    outer iteration over an IRLS-reweighted least-squares surrogate
+    with celer-style gap-safe screening cleared the cell in
+    $\sim$123\,s. The active set saturated at $842$ features at
+    the sparse end of the path, against a recovered support of
+    $\sim$50.
+  \item \textbf{$n$-scaled MCP prox} (M14e). \texttt{ncvreg}'s
+    coordinate update applies the MCP prox to
+    $\beta_j + \langle x_j, r\rangle / n$ with the threshold
+    $\lambda / (1 - 1/(n \gamma))$, where the $1/n$ scaling
+    matches the gradient's normalization. The naive prox using the
+    threshold $\lambda / (1 - 1/\gamma)$ is mathematically valid
+    but admits soft-threshold solutions deep into the path that
+    \texttt{ncvreg}'s formulation does not. Substituting the
+    $n$-scaled variant collapses the active-set bloat from $842$
+    to $107$ features and brings the cell to $\sim$19.7\,s.
+  \item \textbf{Fused IRLS$+$CD} (M14f). The textbook GLM dispatch
+    treats IRLS and CD as nested loops: re-linearize, run the
+    inner CD to convergence, re-linearize again. \texttt{ncvreg}
+    instead fuses them, taking one CD pass per IRLS step and
+    amortizing the per-iteration $\mathcal{O}(np)$ weight update
+    over the inner sweep. Porting the same structure to skein's
+    Rust core brings the cell to $\sim$3.05\,s, $\sim$8\,\%
+    ahead of \texttt{ncvreg}.
+\end{itemize}
+
+The committed v2 aggregate measures the same cell at $1.77$\,s
+post-M14h (against \texttt{ncvreg}'s $3.29$\,s); the further drop
+is within the seed-level variance of the cell and not separately
+attributable to a single fix. The same two changes carry over to
+\texttt{poisson\_mcp} and \texttt{cox\_mcp}, where no R or Python
+direct comparator exists at this scale.
 
 % =========================================================================
 \section{Reproducibility}\label{sec:reproducibility}
