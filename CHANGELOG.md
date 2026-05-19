@@ -1,8 +1,210 @@
 # Changelog
 
-All notable changes to `skein-glm` are recorded here. The project follows
-semantic versioning, with the pre-1.0 minor-bump-on-feature policy
-documented in `docs/extending/rust-api.md`.
+All notable changes to `skein-glm` are recorded here. The project
+follows semantic versioning. The stable Rust API surface is frozen as
+of v1.0.0; see `docs/extending/rust-api.md` for the contract.
+
+## [1.0.0] — 2026-05-19
+
+The v1.0 release. Closes the **stable Rust API audit** (M8.5) — the
+crate's public surface freezes per semver from this release onward.
+Also folds in the post-v0.10.0 M14 work: native group SCAD,
+graphical-bench dispatch fix, marginal-FDR selection, per-block
+orthonormalization, two new bilevel penalties, a `convex.min`
+diagnostic for nonconvex paths, and the v2 benchmark expansion that
+adds direct-comparator coverage for the full GLM × {lasso, MCP}
+matrix. The manuscript supporting `benches/v2`
+(`paper/manuscript.tex`) ships against the JMLR class file with
+post-M14e/f numbers folded into §Results and §Ablation.
+
+Test count: **418 cargo lib + 506 pytest, all green** (up from 397 +
+455 at 0.10.0).
+
+### M8.5 — Stable Rust API freeze
+
+The audit walked the ~170-item `skein-core` public surface and drew
+the v1.0 freeze line. From v1.0 onward, items listed in
+`docs/extending/rust-api.md` follow semver — minor releases add only,
+breaking changes wait for a major bump and ship with at least one
+minor release of deprecation warnings.
+
+Demoted to `pub(crate)` (no skein-py consumer, no external bug report
+on the v0.x window):
+
+- `solver::cd::{cd_solve_warm, cd_solve_warm_with_residual,
+  cd_solve_subset, cd_solve_subset_weighted_ls,
+  cd_solve_subset_weighted_ls_with_lips}` — internal CD variants
+  consumed by the path solvers.
+- `solver::block_cd::block_cd_solve` — internal block-CD wrapper.
+- `solver::prox_newton::prox_newton_fused_solve` — single-λ primitive
+  of the path variant (which stays public).
+- `solver::lla::{cmcp_value, gel_value, surrogate_sparse_group_mcp}` —
+  penalty value-eval helpers retained for test fixtures.
+- `solver::convex_region::PenaltyConcavity` — internal enum; the
+  public detection functions take `f64` concavity directly.
+- `design::GramDesign`, `datafit::GramLeastSquares` — internal
+  precomputed-Gram path not exposed via the Python facade.
+
+The contract page is rewritten end-to-end to enumerate the post-audit
+surface: 5 extension traits + 2 factory traits, 9 concrete designs
+including the orthonormalization wrapper, 7 datafits, 10 penalties +
+5 factories, 12 algorithm entry points, the broadened solver-helper
+list, 8 prox primitives, the `W_FLOOR` / `ETA_CLAMP` numerical
+guards, and a reference list of the demoted items.
+
+### M14h — Native block-CD for LS group-SCAD and sparse-group {MCP, SCAD}
+
+Drops the LLA outer loop from three more group nonconvex paths:
+
+- `GroupScad`: native per-iteration shrinkage applying the SCAD
+  threshold to each group's block-soft-thresholded vector. Mirrors
+  M13.4b's `GroupMcp` treatment with the SCAD `(1 − step·λ/a)`
+  envelope.
+- `SparseGroupMcp` and `SparseGroupScad`: the within-group L1 layer
+  composes with the between-group nonconvex shrinkage in a single
+  closed-form prox per block, matching grpreg's
+  `gdfit_{sparse_,}{mcp,scad}` C kernels.
+
+`block_path` (LS family) dispatches the three new penalties directly;
+the LLA wrappers stay reachable for paths that still need them
+(currently none on the LS side).
+
+### M14g — Findings from the 2026-05-18 v2 release run
+
+- **M14g.1 (fixed).** The `glasso_l1` benchmark cells silently routed
+  through `lasso_path` on the n × p data matrix because both the
+  skein and sklearn runners keyed dispatch on `penalty == "glasso"`
+  but the scenario passes `penalty = "lasso"`. Both runners now
+  dispatch via `problem.meta["simulator"] == "glasso_truth"`; the
+  R-glasso runner already did. Aggregate regenerated 2026-05-18:
+  skein 35.6 s / sklearn 252.6 s / R `glasso` 21.6 s on small/deep,
+  ~19,665 edges across all three packages.
+- **M14g.2 (closed as noise).** The 41.7 s `poisson_lasso medium/deep`
+  median looked like a regression from a quoted 29 s v0.10.0
+  baseline. Investigation: zero post-v0.10.0 commits touch the convex
+  Poisson lasso execution path (`datafit/poisson_log.rs`,
+  `solver/{prox_newton,cd,path}.rs`, `penalty/{lasso,elastic_net}.rs`,
+  `skein-py/src/glm.rs` are byte-identical), and a re-run at HEAD
+  with the v2 methodology gives 42.1 s median with a 34.9–94.7 s
+  per-seed spread. The 1.4× claimed effect lives inside that 2.7×
+  variance band. The absolute 17× Poisson-vs-glmnet wall-clock gap
+  is real and pre-existing — tracked in §M9.3, not on the v1.0
+  critical path.
+
+### Marginal FDR (mFDR) for path estimators
+
+New Python module `skein_glm.mfdr` providing the same formula
+shared across GLM families (decoupled from the Rust core; no PyO3
+bindings, no `_core.abi3.so` changes):
+
+- `estimate_mfdr(path_model, x, y, *, family=None) -> ndarray` — the
+  per-λ marginal FDR estimate over a fitted path estimator.
+- `select_by_mfdr(path_model, x, y, *, target=0.1, family=None)` —
+  returns the smallest λ-index whose mFDR estimate stays below
+  `target`.
+- `MFDR(path_estimator).fit(x, y).select(target=0.1)` — stateful
+  drop-in companion to the existing selectors.
+
+### Per-block group orthonormalization (Breheny–Huang)
+
+New `skein_core::design::orthonormalize` module exposing
+`orthonormalize_groups_dense(x, groups) -> (x_orth, BlockBackTransform)`
+(Cholesky-based per-group Gram factorization, `T_g = √n · L_g^{-T}`).
+The returned `BlockBackTransform` carries the per-group transform
+and exposes `apply_to_coefs` / `apply_to_coefs_path` for mapping
+fitted coefficients back to original-feature space.
+
+Python wrapper `skein_glm.orthonormalize` ships
+`orthonormalize_groups`, `BlockBackTransform`, and the high-level
+`fit_with_orthonormalization` pipeline (center → orthonormalize →
+fit with intercept disabled → back-transform → reconstruct
+intercept). Solvers operating on the orthonormalized design see a
+clean per-block Lipschitz of exactly 1 and a closed-form block
+soft-threshold prox — matching grpreg's `gdfit_*` C kernels.
+
+### Composite MCP and group exponential lasso
+
+Two bilevel-selection penalties from the grpreg / ncvreg family
+that skein did not previously expose. Both reduce to weighted L1 via
+LLA and route through the existing scalar LLA path solver
+(`solve_path_lla`).
+
+- **Composite MCP** (Breheny–Huang 2009): outer MCP applied to the
+  sum of per-coord inner MCPs in each group. Outer γ₁ drives group
+  selection; inner γ₂ drives within-group selection — a true bilevel
+  sparsity pattern that the additive `SparseGroupMcp` does not
+  produce.
+- **Group exponential lasso** (Breheny 2015): exponential decay on
+  each group's L1 norm. Same bilevel structure with a single τ
+  hyperparameter.
+
+`CompositeMCPPathRegressor` and `GroupExponentialPathRegressor`
+mirror the existing group-path API, including the `convex_min_idx_`
+attribute (penalty concavity is `1/(γ₁γ₂)` for cMCP, `τ` for gel).
+
+### Post-fit `convex.min` diagnostic for nonconvex paths
+
+Adds grpreg-style `convex.min` detection: the smallest λ-index at
+which the local objective ceases to be locally convex on the active
+set (penalty curvature exceeds data-fit curvature). New
+`skein_core::solver::{scalar_convex_min_idx, group_convex_min_idx}`
+plus `convex_min_idx_` attribute and a one-shot `UserWarning` on the
+six nonconvex LS path regressors (MCP / SCAD, group / sparse-group
+MCP / SCAD). Mmap and chunked backends safely no-op.
+
+### v2 benchmark suite expansion
+
+Five new v2 scenarios cover the full GLM × {lasso, MCP} matrix plus
+a sparse-group LS row:
+
+- `cox_mcp`, `logistic_mcp`, `poisson_mcp`, `glasso_mcp`,
+  `ls_sparse_group_mcp` scenarios; new `glasso_runner.py` wraps R
+  `glasso` over Arrow IPC.
+- Cox event status is now threaded through `glmnet_runner` via a
+  sibling `status.feather` payload — Cox v2 cells can use glmnet as
+  a direct comparator.
+- `benches/v2/report/_run_cell._lambda_grid` is datafit-aware:
+  graphical scenarios (`gaussian_inv_cov`) take
+  `λ_max = max|off-diag(S)|` instead of `max|Xᵀy| / n`.
+- v1 side: `benches/scenarios/glasso_ls.py` ships with a
+  glasso-specific `(p=20/100/200, n=200/1k/2k)` size table because
+  the canonical ladder is infeasible for an O(p³) solver. The
+  `benches/problems.SIZES` ladder grows to five entries —
+  `small / medium / large / xlarge / xxlarge` — with the headroom
+  rationale documented in `benches/README.md`.
+
+### Software paper (`paper/manuscript.tex`)
+
+Manuscript template swap: `\documentclass[11pt]{article}` →
+`\documentclass[twoside,11pt]{jmlr}` (the locally installed Talbot
+2022 v1.30 class, not the legacy `jmlr2e.cls` referenced in older
+guides). The class auto-loads `natbib`, `graphicx`, `amsmath`,
+`amssymb`, `url`, and `hyperref`; the preamble drops manual
+`\usepackage{…}` lines for those and the manual
+`\bibliographystyle{plainnat}` that was producing a duplicate
+`\bibstyle` in `manuscript.aux`. The header comment is rewritten to
+describe what targeting MLOSS (page condensation, not a class swap)
+or JOSS (pandoc markdown rewrite) would actually require.
+
+Content refresh: §Results and §Ablation are rewritten against the
+2026-05-18 v2 aggregates. The headline narrative cites the actual
+post-M14h ratios (`ls_group_mcp` skein 6.57 s vs grpreg 12.56 s =
+1.91× faster; `logistic_mcp` skein 19.6 s vs ncvreg 95.1 s = 4.85×
+faster), the convex-Lasso-vs-sklearn gap is corrected to its real
+~5.6×, and a new §Ablation subsection walks the GLM-MCP inner-loop
+progression (123 → 19.7 → 3.05 s on the `logistic_mcp medium/sparse`
+cell as M14e and M14f land).
+
+### Preprocessing: bounded threshold sentinels for polychoric
+
+The polychoric / polyserial preprocessor used `±np.inf` as sentinel
+endpoints for the cumulative-probability brackets. scipy ≤ 1.15
+(Python 3.10's pinned wheel) returns `NaN` from
+`multivariate_normal.cdf(±inf)` — fixed upstream in scipy 1.16 but
+present in the CI's 3.10 matrix. Replaced the sentinels with
+`±8.0`, which is well past the Gaussian tail's numerical zero
+(`Φ(−8) ≈ 6.6 × 10⁻¹⁶`) and produces identical bracket integrals to
+the `±inf` form at our floating-point precision.
 
 ## [0.10.0] — 2026-05-17
 

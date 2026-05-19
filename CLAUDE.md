@@ -10,7 +10,7 @@ nonconvex, graphical lasso family, etc. The Rust crates do all the
 numerics; the Python package is a sklearn-compatible facade over PyO3
 bindings.
 
-Current shipping version: **v0.10.0**. `ROADMAP.md` is the authoritative
+Current shipping version: **v1.0.0**. `ROADMAP.md` is the authoritative
 milestone plan and status table; `README.md` is the public-facing pitch
 and headline benchmark numbers; `CHANGELOG.md` is the per-release
 narrative. Don't restate any of those here.

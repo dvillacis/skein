@@ -588,4 +588,4 @@ __all__ = [
     "mb_stability_threshold",
 ]
 
-__version__ = "0.9.0"
+__version__ = "1.0.0"

@@ -18,21 +18,25 @@ per-group.
 
 ## Status
 
-v0.10.0 — performance milestone shipping celer-style gap-safe
-screening on the GLM prox-Newton surrogate (3–8× wall-clock on
-`logistic_lasso` v2 cells). Post-v0.10.0 the working tree adds
-**M14d/e/f** (untagged): the ncvreg-equivalent v-scaled MCP/SCAD
-prox closes the GLM nonconvex active-set bloat (M14e — `logistic_mcp
-medium-sparse` 842 → 107 active features, matching ncvreg exactly,
-6× speedup); a fused IRLS+CD GLM solver mirroring `ncvreg::cdfit_glm`'s
-lazy per-iter cost structure (M14f) closes the remaining wall-clock
-gap — **`logistic_mcp medium-sparse` 19.7 s → 3.05 s, ~8 % ahead of
-ncvreg** on the same shape. M14b (software paper) ships an empirical
-run + a 909-line manuscript draft; remaining 1.0 work is a stable-API
-audit, two small dispatch / regression fixes, and the manuscript
-wrapper. M5 model selection + inference + threaded CV folds + M11
-graphical lasso (single + joint) + M12 hardening all carried over
-from v0.8. See [ROADMAP.md](ROADMAP.md) for the full plan.
+**v1.0.0** — the stable-API release. The `skein-core` public surface
+is now frozen per semver: items listed in
+[`docs/extending/rust-api.md`](docs/extending/rust-api.md) follow the
+v1.x stability contract, and ~16 incidental `pub` items moved to
+`pub(crate)` during the M8.5 audit. Carries over v0.10.0's celer-style
+gap-safe screening on the GLM prox-Newton surrogate (3–8× wall-clock
+on `logistic_lasso` v2 cells), adds **M14h** native block-CD for LS
+group SCAD and sparse-group MCP / SCAD, ships the **marginal-FDR**
+selection layer, the **per-block group orthonormalization** (Breheny–
+Huang) preprocess, the **composite-MCP** and **group-exponential-lasso**
+bilevel penalties, a post-fit **`convex.min`** diagnostic on nonconvex
+paths, and the **v2 benchmark expansion** that adds direct-comparator
+coverage across the full GLM × {lasso, MCP} matrix. The supporting
+manuscript at [`paper/manuscript.tex`](paper/manuscript.tex) compiles
+against the JMLR class file with post-M14e/f numbers folded into
+§Results and §Ablation. M5 model selection + inference + threaded
+CV folds + M11 graphical lasso (single + joint) + M12 hardening all
+carried over from v0.8. See [ROADMAP.md](ROADMAP.md) for the full
+plan.
 
 **Done so far:**
 
@@ -207,7 +211,7 @@ scenario, named by what the *solution* does at the tail of the
 | ElasticNet LS    | medium | dense  | **1.40 s** | glmnet 1.71 s  | beats glmnet; sklearn 0.28 s wins overall |
 | Cox lasso        | medium | dense  | 3.82 s | glmnet 2.24 s  | within 1.7× of glmnet |
 | Logistic lasso   | medium | dense  | 108 s  | glmnet 7.9 s   | **14× behind glmnet** — convex GLM is the open gap |
-| Poisson lasso    | medium | dense  | 41.7 s | glmnet 2.5 s   | **17× behind glmnet** — regressed from v0.10.0 (M14d/e/f untouched the convex Poisson path) |
+| Poisson lasso    | medium | dense  | 41.7 s | glmnet 2.5 s   | **17× behind glmnet** — pre-existing convex-GLM gap; M13.8 closed the logistic side but the Poisson screening dual is much looser. Seed variance is 25.6 – 60.3 s within a single state |
 
 skein is now the fastest public option for nonconvex penalties (MCP /
 SCAD / their group + sparse-group variants) across every size, and
