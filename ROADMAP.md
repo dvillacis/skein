@@ -27,7 +27,7 @@ load-bearing piece; everything after stacks on top of it.
 | M11 — Graphical models | ✅ done | Single-population glasso (L1 / MCP / SCAD) + joint glasso across `K` populations (Danaher–Wang–Witten group form via ADMM) + EBIC tuner; M11.3 bootnet-style bootstrap edge stability shipped. |
 | M12 — Hardening (robustness, test coverage, CI) | ✅ done | Penalty + datafit unit-test coverage closed; Rust integration test directory added; R-fixture gate in CI; PyO3-layer smoke job (`.github/workflows/bench-smoke.yml`); pre-flight tight-tol screening test now a separate fail-fast CI step with 2-min timeout (R3, ci.yml); numerical guards (`W_FLOOR=1e-6`, `ETA_CLAMP=30.0`) centralized in `crates/skein-core/src/numerics.rs` (R4); R1 unwrap audit closed (`block_path_lla.rs` documented; `cd.rs::anderson_extrapolate` documented; dead `Groups::from_csr` call removed from `glasso_admm.rs`; remaining hits are test-only setup invariants); `Groups::has_overlap()` + parallel block-CD overlap detection with serial Gauss-Seidel fallback + `Once`-gated stderr warning + fixture (C5); criterion bench tree expanded with `lla_outer.rs`, `prox_newton_glm.rs`, `glasso.rs` alongside existing `block_cd.rs`, README updated (P2); `skein-py/src/lib.rs` 10,628 → 275 lines, every datafit family in its own module: `glasso.rs`, `glm.rs`, `ls.rs`, `mmap_chunked.rs`, `multinomial.rs`, `multitask.rs` (P4). No new algorithmic surface. |
 | M13 — Performance findings from `benches/v2` | ⏳ partial | M13.1 adaptive screening saturation bypass shipped; M13.2 cross-λ gradient cache shipped (-10.4% wall on medium Lasso); M13.4 Phase 2.3 LLA fixed-point short-circuit shipped; **M13.4b native group-MCP BCD shipped (-3.46× wall on medium ls_group_mcp; flips skein/grpreg from 3.34× slower to 1.20× faster)**; **M13.4c native group-MCP BCD extended to logistic / Poisson / Cox shipped (2.12× wall on logistic medium; new `glm_group_mcp_native_matches_lla` cross-family agreement test)**; M13.6 re-characterized post-M13.2 (memory-bandwidth wall in inner CD past medium scale, not fixed-cost overhead); M13.7 Jacobi-parallel block-CD remains a negative result; **M13.8 celer-style gap-safe screening on the GLM prox-Newton surrogate shipped** (weighted-LS `lasso_dual_obj`, per-GLM closed-form duals for logistic + Poisson, Anderson dual extrapolation on `(β, r)` pairs, weighted strong-convexity correction `r²=2·gap·max(w)/n`, M13.1-style saturation bypass — **3–8× wall on logistic_lasso v2 cells**, 8.2× small-sparse / 3.1× small-deep / 7.2× medium-sparse). Remaining: M13.5 MCP one-outer-iter short-circuit; sparse-group MCP variants for logistic / Poisson / Cox still on LLA. |
-| M14 — Inference & applications closeout | ⏳ partial | **Released as v0.9.0** (commit `ab9bd44`), then **v0.10.0** shipped M13.8 (GLM prox-Newton screening). **M14a.1 polychoric / polyserial preprocessing** (Olsson 1979 two-step ML) for ordinal Likert / mixed data; **M14a.2 edge-level FDR / FWER / MB stability bound** on `GraphicalBootstrap` (no other graphical-models package has this — BH FDR + Bonferroni / Holm + closed-form MB threshold); **M14a.3 debiased Cox lasso** (Van de Geer / Cai-Wang construction reusing the partial-likelihood Fisher diagonal from `CoxPH::surrogate_at` via a 16-line PyO3 binding — closes the inference axis across all four mainstream GLM families); **M14c.1 scalar LLA weight short-circuit** (Phase 2.3 ported to `path_lla.rs` — affects bridge, adaptive lasso, multitask LLA); **M14c.2 native sparse-group MCP penalty + 6 GLM PyO3 swaps** (drops the LLA layer for logistic/Poisson/Cox sparse-group MCP, sibling of M13.4c); **M14c.3 at-scale R-fixture tier** (n=500, p=100) for cross-package regression gating; **R-anchor fixture generators** for polychoric (vs `psych::polychoric`, atol 5e-3) and Cox active-set (vs `glmnet(family='cox')`, Jaccard ≥ 0.6 — no R package has Cox debiasing). **M14d GLM W_FLOOR + penalty unimodality trait; M14e ncvreg-equivalent v-scaled MCP/SCAD prox** (closes the nonconvex GLM active-set bloat — `logistic_mcp medium-sparse` 842 → 107 active features, 6× speedup); **M14f fused IRLS+CD GLM solver** mirroring `ncvreg::cdfit_glm`'s lazy per-iter cost structure (`logistic_mcp medium-sparse` 19.7 s → 3.05 s, ~8 % ahead of ncvreg). **M14b: empirical run shipped 2026-05-18**, 909-line manuscript draft compiles to PDF; remaining work is folding post-M14e/f numbers into §Results and JMLR-MLOSS / JOSS formatting pass. **M14g (open):** glasso_l1 benchmark-runner dispatch bug + poisson_lasso convex regression — see §M14g. |
+| M14 — Inference & applications closeout | ⏳ partial | **Released as v0.9.0** (commit `ab9bd44`), then **v0.10.0** shipped M13.8 (GLM prox-Newton screening). **M14a.1 polychoric / polyserial preprocessing** (Olsson 1979 two-step ML) for ordinal Likert / mixed data; **M14a.2 edge-level FDR / FWER / MB stability bound** on `GraphicalBootstrap` (no other graphical-models package has this — BH FDR + Bonferroni / Holm + closed-form MB threshold); **M14a.3 debiased Cox lasso** (Van de Geer / Cai-Wang construction reusing the partial-likelihood Fisher diagonal from `CoxPH::surrogate_at` via a 16-line PyO3 binding — closes the inference axis across all four mainstream GLM families); **M14c.1 scalar LLA weight short-circuit** (Phase 2.3 ported to `path_lla.rs` — affects bridge, adaptive lasso, multitask LLA); **M14c.2 native sparse-group MCP penalty + 6 GLM PyO3 swaps** (drops the LLA layer for logistic/Poisson/Cox sparse-group MCP, sibling of M13.4c); **M14c.3 at-scale R-fixture tier** (n=500, p=100) for cross-package regression gating; **R-anchor fixture generators** for polychoric (vs `psych::polychoric`, atol 5e-3) and Cox active-set (vs `glmnet(family='cox')`, Jaccard ≥ 0.6 — no R package has Cox debiasing). **M14d GLM W_FLOOR + penalty unimodality trait; M14e ncvreg-equivalent v-scaled MCP/SCAD prox** (closes the nonconvex GLM active-set bloat — `logistic_mcp medium-sparse` 842 → 107 active features, 6× speedup); **M14f fused IRLS+CD GLM solver** mirroring `ncvreg::cdfit_glm`'s lazy per-iter cost structure (`logistic_mcp medium-sparse` 19.7 s → 3.05 s, ~8 % ahead of ncvreg). **M14b: empirical run shipped 2026-05-18**, 909-line manuscript draft compiles to PDF; remaining work is folding post-M14e/f numbers into §Results and JMLR-MLOSS / JOSS formatting pass. **M14g closeout (2026-05-19):** §M14g.1 glasso_l1 benchmark-runner dispatch bug fixed in `637ae7e`; §M14g.2 `poisson_lasso` "regression" investigated and closed as measurement noise (no Rust commit between v0.10.0 and HEAD touches the convex Poisson path; per-seed cell variance is ≈2.5× — larger than the 1.4× claimed effect). The absolute 17× Poisson-vs-glmnet gap is real but pre-existing, tracked in §M9.3. |
 
 Test count at this snapshot: **358 cargo lib + 8 cargo integration + 455 pytest, all green.**
 
@@ -1232,7 +1232,7 @@ snapshots; v2 cells live in `benches/v2/results/scenarios/*.aggregate.json`.
 | Logistic lasso | glmnet | ✅ done — `logistic_lasso` (small + medium); celer/skglm/sklearn/pyglmnet runners are a separate ladder expansion, not an M9.3 blocker |
 | Logistic MCP | ncvreg | ✅ done — `logistic_mcp` (small + medium) |
 | Logistic SCAD | ncvreg | ⏳ pending — `logistic_scad` scenario not yet scaffolded |
-| Poisson lasso | glmnet | ✅ done — `poisson_lasso` (small + medium); see §M14g.2 for an open perf regression |
+| Poisson lasso | glmnet | ✅ done — `poisson_lasso` (small + medium); absolute 17× wall-clock gap vs glmnet is real and pre-existing (driven by glmnet's `dev_ratio` early termination); the M14g.2 apparent regression was closed as measurement noise |
 | Poisson MCP | glmnet (surrogate) | ✅ done — `poisson_mcp` (small + medium) |
 | Cox lasso | glmnet, lifelines (via ladder) | ✅ done — `cox_lasso` (small + medium) |
 | Cox MCP | glmnet (surrogate) | ✅ done — `cox_mcp` (small + medium) |
@@ -2801,10 +2801,17 @@ Conclusion) wired to the auto-generated figures + tables. Builds to
 3. Submission pass for JMLR-MLOSS or JOSS formatting (template
    swap is a one-liner per the file header).
 
-### ⏳ M14g — Findings from the 2026-05-18 v2 release run
+### ✅ M14g — Findings from the 2026-05-18 v2 release run (CLOSED 2026-05-19)
 
-Two correctness / perf items surfaced by the headline regeneration
-against M13.8 + M14d/e/f. Both block a clean v1.0 narrative.
+Two items surfaced by the headline regeneration against M13.8 +
+M14d/e/f. Both resolved:
+
+- **M14g.1 glasso_l1 dispatch bug** — fixed in `637ae7e`; aggregate
+  regenerated.
+- **M14g.2 poisson_lasso "regression"** — investigated and closed as
+  measurement noise (no Rust commit between v0.10.0 and HEAD touches
+  the convex Poisson path; seed variance ≈ 2.5× swamps the claimed
+  1.4× effect).
 
 **✅ M14g.1 — `glasso_l1` benchmark dispatch bug (FIXED).** The
 skein and sklearn runners under `benches/v2/runners/` (re-exports
@@ -2828,16 +2835,47 @@ other). Paper F2/F3/F4 `glasso_l1` columns now reflect the real
 graphical fit. Aggregate at
 `benches/v2/results/scenarios/glasso_l1.aggregate.json`.
 
-**M14g.2 — `poisson_lasso` regression.** The convex Poisson lasso
-medium-deep cell measured **41.7 s** on this run vs **29.0 s** on
-the committed v0.10.0 snapshot (glmnet 2.5 s — already a known gap).
-M13.8 closed the *logistic* lasso gap via celer-style screening on
-the GLM prox-Newton surrogate; M14e/f closed the *nonconvex* GLM gap
-via the v-scaled prox + fused IRLS+CD. Neither touched the convex
-Poisson path. Bisect against the three post-v0.10.0 commits
-(`474c68a` mFDR, `abf176c` group orthonormalization, `590531d`
-cMCP/gel) is the next step — only one of them should plausibly
-touch the Poisson hot path.
+**✅ M14g.2 — `poisson_lasso` "regression" was measurement noise
+(CLOSED 2026-05-19).** The 41.7 s median on the 2026-05-18 run
+looked like a regression from a quoted 29 s v0.10.0 baseline, but
+two converging checks ruled it out:
+
+1. **No code path could cause it.** The four post-v0.10.0 Rust
+   commits — `b036c00` (group SCAD), `abf176c` (orthonormalization),
+   `590531d` (cMCP/gel), `f36726f` (`convex.min` diagnostic) — do
+   not touch any file in the convex Poisson lasso execution path.
+   `datafit/poisson_log.rs`, `solver/prox_newton.rs`,
+   `solver/cd.rs`, `solver/path.rs`, `penalty/{lasso,elastic_net}.rs`,
+   and `skein-py/src/glm.rs` are byte-identical between the two
+   states (`git log v0.10.0..HEAD --oneline -- <files>` is empty).
+2. **Seed variance dominates the claimed effect.** Re-running
+   `poisson_lasso medium/deep` at HEAD (5 seeds, 1 warmup + 1
+   timed per seed — the v2 aggregate methodology): median **42.1 s**,
+   min 34.9 s, max 94.7 s. The committed aggregate at the same
+   state: median 41.7 s, min 25.6 s, max 60.3 s. The seed-to-seed
+   spread is ≈2.5× *within a single state*, swallowing the 1.4×
+   claimed regression. The 29 s "baseline" was a lucky single-seed
+   read from an earlier ad-hoc run; it is not traceable to any
+   committed `*.aggregate.json`.
+
+The *absolute* gap vs glmnet (42 s vs 2.5 s ≈ 17×) is real and
+longstanding — see §M9.3 row "Poisson lasso". M13.8's celer-style
+screening is logistic-only because Poisson's per-λ μ-bound makes the
+dual much looser; closing this gap is a separate, larger workstream
+than what M14g would absorb. Two follow-ups worth doing before the
+v1.0 paper run, neither of which blocks v1.0:
+
+- **Reduce cell variance** so the next release run doesn't surface
+  another phantom regression. Options: bump seeds to 10, drop the
+  per-seed warmup overhead (currently ~50 % of cell time at this
+  size), or take a trimmed mean rather than the full-range median.
+  `benches/v2/config.yaml::defaults.trials` (currently 5) is applied
+  per-cell, not per-seed, so it does not address inter-seed variance
+  directly.
+- **Investigate the 17× absolute Poisson gap vs glmnet.** glmnet's
+  Poisson path uses a `dev_ratio` early-termination heuristic that
+  skein doesn't; that alone may account for several × of the gap.
+  Not on the v1.0 critical path.
 
 Test count at this snapshot (working tree): per CHANGELOG **397
 cargo lib + 8 integration + 455 pytest** at v0.10.0; M14d/e/f added

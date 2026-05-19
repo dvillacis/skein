@@ -100,24 +100,21 @@ from v0.8. See [ROADMAP.md](ROADMAP.md) for the full plan.
 
 **Coming next — the v1.0 punch-list:**
 
-1. **Fix the `glasso_l1` benchmark-runner dispatch bug** — both the
-   skein and sklearn runners in `benches/v2/runners/*` key the
-   graphical-family fit on `penalty == "glasso"`, but the scenario
-   passes `penalty = "lasso"`, so those cells silently ran the regular
-   `lasso_path` on the n×p data matrix. Cells that were committed
-   pre-fix should be regenerated; the R-glasso runner shipped this
-   release does dispatch correctly.
-2. **Investigate the `poisson_lasso` regression** — `medium / dense`
-   moved from 29.0 s (pre-M14e baseline) to 41.7 s post-M14f
-   (glmnet 2.5 s on the same cell). Convex Poisson is the standout
-   weakness now that M14e/f closed the nonconvex GLM gap.
-3. **Stable-Rust-API audit** — per `docs/extending/rust-api.md`, 1.0
+1. **Stable-Rust-API audit** — per `docs/extending/rust-api.md`, 1.0
    freezes the documented surface and forces every other `pub` item to
    either promote or move to `pub(crate)`. Mechanical: `cargo doc -p
    skein-core --no-deps` diff against the contract page.
-4. **M14b manuscript wrapper** — empirical run + 909-line LaTeX draft
+2. **M14b manuscript wrapper** — empirical run + 909-line LaTeX draft
    landed; remaining work is folding the post-M14e/f numbers into
    §Results / §Ablation and the JMLR-MLOSS / JOSS submission pass.
+
+The two M14g items that were on this list — the `glasso_l1` runner
+dispatch bug (fixed in `637ae7e`) and the `poisson_lasso` "regression"
+(closed as measurement noise — no commit between v0.10.0 and HEAD
+touches the convex Poisson path, and per-seed variance is ≈ 2.5×) —
+are resolved. The standing 17× absolute Poisson-vs-glmnet gap is real
+but pre-existing and tracked in `ROADMAP.md` §M9.3, not on the v1.0
+critical path.
 
 ## Layout
 
