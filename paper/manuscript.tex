@@ -1,19 +1,28 @@
 % =========================================================================
 %  skein: Weighted Structured Nonconvex Sparse Models in Rust and Python
-%  Software paper draft — JMLR-MLOSS submission
+%  Software paper draft — JMLR submission (uses jmlr.cls from TeX Live)
 %
-%  To compile against the JMLR-MLOSS template, replace the first line
-%  with `\documentclass[twoside,11pt]{article}` and `\usepackage{jmlr2e}`
-%  per https://www.jmlr.org/format/ . The skeleton below is portable —
-%  any `article` class will compile, including the figures + tables that
-%  auto-generate under paper/figures/ and paper/tables/.
+%  Active target: JMLR proper (long-form software paper). The locally
+%  installed class is `jmlr.cls` (Talbot 2022, v1.30); legacy `jmlr2e.cls`
+%  referenced in older guides is not present in TeX Live 2023+.
+%
+%  Other potential targets and what they would require:
+%    - JMLR-MLOSS (4-page short track): same class file, but content
+%      would need to be condensed to a 4-page abstract. The current
+%      21-page narrative does not fit; that is a separate workstream.
+%    - JOSS (Journal of Open Source Software): markdown source + a YAML
+%      header through pandoc, not LaTeX. Would require a parallel
+%      rewrite, kept as a future export rather than a swap.
+%    - arXiv: works as-is; `jmlr.cls` is permitted.
 %
 %  Build:
 %      cd paper && pdflatex manuscript.tex && bibtex manuscript && \
 %          pdflatex manuscript.tex && pdflatex manuscript.tex
 % =========================================================================
-\documentclass[11pt]{article}
+\documentclass[twoside,11pt]{jmlr}
 
+% jmlr.cls automatically loads: amsmath, amssymb, natbib, graphicx, url.
+% We still need to add the unicode + font + table helpers below.
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern}
@@ -39,26 +48,15 @@
 \DeclareUnicodeCharacter{00D7}{\ensuremath{\times}}
 \DeclareUnicodeCharacter{2192}{\ensuremath{\rightarrow}}
 \DeclareUnicodeCharacter{2228}{\ensuremath{\vee}}
-\usepackage{amsmath, amssymb, amsthm}
-\usepackage{graphicx}
+% amsmath / amssymb come from jmlr.cls; amsthm is omitted because jmlr
+% already defines \proof and the manuscript uses no theorem-environments.
 \usepackage{booktabs}
 % Auto-generated tables (paper/tables/*.tex) emit raw scenario names
 % like `ls_lasso` with literal underscores; the `underscore` package
 % makes `_` a printable character in both text and math mode so the
 % \input{} calls below compile without escaping.
 \usepackage{underscore}
-\usepackage{hyperref}
-\usepackage{natbib}
 \usepackage{xcolor}
-\usepackage{geometry}
-\geometry{margin=1in}
-
-\hypersetup{
-  colorlinks=true,
-  linkcolor=blue!50!black,
-  citecolor=blue!50!black,
-  urlcolor=blue!50!black,
-}
 
 % --- author note marker for the maintainer (long-form so the
 %     placeholder bodies can span multiple paragraphs; uses
@@ -66,13 +64,25 @@
 %     because the latter is short-arg and would choke on \par). ---
 \long\def\todo#1{{\color{red}\textbf{[TODO:]} #1}}
 
-\title{\texttt{skein}: Weighted Structured Nonconvex Sparse Models\\
+% --- JMLR metadata. Placeholders until an editor / volume is assigned.
+%     `jmlr.cls` (Talbot 2022, v1.30) replaced the older `\jmlrheading`
+%     macro with one command per field; the short title in `\title[…]{…}`
+%     supplies the running header.
+\jmlryear{2026}
+\jmlrvolume{}
+\jmlrpages{}
+\jmlrsubmitted{}
+\jmlrpublished{}
+\firstpageno{1}
+
+\title[\texttt{skein}: nonconvex sparse models]%
+      {\texttt{skein}: Weighted Structured Nonconvex Sparse Models
        in Rust and Python}
 
-\author{David Villacis \\
-        \texttt{david@villacis.net}}
+\editor{}
 
-\date{\today}
+\author{\Name{David Villacis} \Email{david@villacis.net}\\
+        \addr Independent researcher}
 
 \begin{document}
 
@@ -965,7 +975,9 @@ intend to maintain \texttt{skein} as the long-run methodology
 reference for this niche and welcome contributions.
 
 % =========================================================================
-\bibliographystyle{plainnat}
+% Bibliography style — jmlr.cls already sets `\bibliographystyle{plainnat}`
+% during its preamble, so a manual `\bibliographystyle{...}` here would
+% emit a duplicate `\bibstyle` entry in the .aux file and trip bibtex.
 \bibliography{references}
 % =========================================================================
 
