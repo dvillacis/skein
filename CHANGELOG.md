@@ -12,6 +12,21 @@ new wall-clock instrumentation).
 
 ### Hardening
 
+- **H4 — Reproducibility audit.** New `tests/test_reproducibility.py`
+  pins every public RNG-consuming estimator with paired same-seed +
+  different-seed fits (8 tests). Same seed asserts `np.array_equal`
+  bit-identity on `coef_` / `cv_scores_` / `selection_probabilities_`
+  / `edge_selection_probabilities_` / CI bounds; different seed
+  asserts measurable divergence so a silent dropped-`random_state`
+  regression fails immediately. Coverage: `MCPPathCV`,
+  `GroupLassoPathCV`, `LogisticLassoPathCV` (representatives of the
+  `_PathCVMixin` KFold-shuffle path); `StabilitySelection`;
+  `GraphicalStabilitySelection`; `GraphicalBootstrap`;
+  `AdaptiveLassoPathCV`; `MultinomialLassoPathCV`. The Rust path
+  solver itself is deterministic (no RNG in coordinate descent), so
+  the assertion lives entirely in Python-side fold / bootstrap
+  construction — BLAS-thread-independent at the problem sizes used.
+
 - **H3 — Property-based & fuzz tests on prox / surrogate.** 30 new
   Rust `proptest`s in `crates/skein-core` (dev-only dep) + 4 Python
   `hypothesis` tests close the randomized-coverage gap M12's C1/C2

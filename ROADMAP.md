@@ -24,7 +24,7 @@ open v0.x lever.
 | H1 — At-scale bench + fixture tier (n ≥ 100k) | Hardening | ✅ infra | infrastructure shipped 2026-05-20: `xlarge` (100k × 10k) in headline matrix for ls_lasso / ls_mcp / logistic_lasso / ls_group_lasso, comparator gap captured in `paper/manifest.json` under `at_scale_comparator_gap`, per-PR `large` canary in bench-smoke, `*_large` R-anchor fixtures (n=5k/p=500 default, env-tunable to 50k/p=2k), `docs/benchmarks/at_scale.md`. Rendered `xlarge` snapshots are maintainer-overnight, not part of this closeout. |
 | H2 — Numerical-stability sweep | Hardening | ✅ done | 84 new pytests across four files (`tests/test_numerics_design_pathologies.py`, `test_numerics_extreme_weights.py`, `test_numerics_glm_saturation.py`, `test_numerics_glasso_singular.py`) covering collinear / zero-variance designs, 12-decade sample-weight spreads, zero per-feature and per-group weights, Poisson η near `ETA_CLAMP`, separable & class-imbalanced logistic, heavy-ties Cox under both Breslow and Efron, and rank-deficient single / joint glasso. Surfaced one finding: nonconvex glasso (MCP / SCAD) does not preserve SPD in extreme `n ≪ p` (n=5, p=40 produced min eigvalue −8.8e-3) — documented as an algorithmic property; finiteness + symmetry remain the asserted contract. All tests run under a 30 s wall-clock budget to catch infinite-loop fallback. |
 | H3 — Property-based & fuzz tests | Hardening | ✅ done | 30 Rust `proptest`s + 4 Python `hypothesis` tests covering randomized invariants the hand-picked unit fixtures don't reach: sign / antisymmetry / monotonicity / magnitude-non-increase on `soft_threshold` / `elastic_net_prox` / `mcp_prox` / `scad_prox`, large-γ / large-a limit collapse to soft-threshold, group-prox rotation invariance for ℓ₂ group lasso / EN, BinomialLogit / PoissonLog / CoxPH surrogate gradient match against FD-of-loss (with both tie-handlers for Cox), Binomial / Poisson Hessian-diagonal match against the analytical Fisher diagonal, full `destandardize(standardize_β(β)) = β` bijection across every flag combo (center × scale × intercept) including `destandardize_path` and `rescale_weights_for_standardize` penalty preservation, and Python-side `weights = None ↔ ones` bit-equality through the PyO3 boundary plus per-feature permutation equivariance and a positive `sample_weights` no-op detector. Surfaced one architectural quirk (documented in `tests/test_weight_composition.py`): `sample_weights=None` and `sample_weights=ones(n)` take structurally different code paths in `crates/skein-py/src/ls.rs` (centered destandardize vs. augmented intercept column) and converge to the same optimum but along different iterate trajectories, so the identity holds approximately, not bit-exactly. |
-| H4 — Reproducibility audit | Hardening | ⏳ planned | RNG-seed coverage across stability selection, CV, bootstrap, multinomial init |
+| H4 — Reproducibility audit | Hardening | ✅ done | `tests/test_reproducibility.py` pins every public RNG-consuming estimator with paired same-seed + different-seed fits: MCPPathCV / GroupLassoPathCV / LogisticLassoPathCV / AdaptiveLassoPathCV / MultinomialLassoPathCV (KFold-shuffle path), StabilitySelection (bootstrap subsampling), GraphicalStabilitySelection (graph stability), GraphicalBootstrap (CI bounds). Same seed → `np.array_equal` on `coef_` / `cv_scores_` / `selection_probabilities_` / `edge_selection_probabilities_` / `ci_lower_` / `ci_upper_`; different seed → measurable divergence (catches a silent dropped-RNG regression). BLAS-thread caveat documented inline: the Rust path solver itself is deterministic — the reproducibility we assert lives entirely in Python-side fold construction + bootstrap resampling, which is BLAS-thread-independent at the small problem sizes used. |
 | P1 — Native sparse-group MCP block-CD for GLMs | Performance | ⏳ planned | drops the LLA layer for logistic / Poisson / Cox sparse-group MCP (sibling of M13.4c) |
 | P2 — Scalar MCP/SCAD path overhead investigation | Performance | ⏳ planned | M13.5 carryover, re-scoped — scalar MCP/SCAD route through `solve_path` directly (closed-form prox), not `path_lla`; the M14c.1 short-circuit already covers the LLA-side users (bridge/adaptive/multitask). Current `medium/deep` gap is 1.50× MCP vs Lasso (was 1.32× pre-M14e); EN-vs-Lasso is 1.24× so most of MCP's gap is generic non-trivial-prox cost, ~1.21× excess is genuinely MCP-specific. Profile-then-fix; smaller upper bound than originally claimed. |
 | P3 — Cross-platform BLAS in distributed wheels | Performance | ⏳ planned | M10.G carryover — Linux/manylinux2014 already wires OpenBLAS; Windows wheels still ship without BLAS; MKL feature unwired |
@@ -41,7 +41,7 @@ open v0.x lever.
 Test count at v1.0.0: **358 cargo lib + 8 cargo integration + 455
 pytest, all green.** Each milestone below either keeps this number
 flat (perf work) or grows it (hardening). Current HEAD: **448 cargo
-lib + 597 pytest** (post-H3).
+lib + 605 pytest** (post-H4).
 
 ---
 
@@ -229,23 +229,40 @@ target the same penalised LS objective and converge to the same
 optimum, but their iterate trajectories and λ-grids differ, so this is
 *not* a bit-equality invariance and we don't test it as one.
 
-### H4 — Reproducibility audit
+### ✅ H4 — Reproducibility audit
 
-Stability selection, CV fold construction, multinomial init, and
-bootstrap edge stability all consume `rng` somewhere. Audit:
+Every public estimator that consumes an RNG is pinned in
+`tests/test_reproducibility.py` with paired same-seed + different-seed
+fits — same seed asserts `np.array_equal` bit-identity on the natural
+state-vector (CV coefs + scores, stability probabilities, bootstrap CI
+bounds); different seed asserts a measurable divergence so a silent
+"`random_state` parsed but never reaches the RNG consumer" regression
+fails immediately.
 
-- Every `rng` consumer accepts a `random_state` parameter and
-  documents the exact semantics.
-- Two fits with the same `random_state` produce bit-identical β
-  (modulo BLAS-thread nondeterminism, which we document and gate
-  with `OMP_NUM_THREADS=1` in the reproducibility test).
-- The `joblib`/Rayon path doesn't reorder work in a way that
-  depends on scheduling — current `allow_threads` + Rayon pattern is
-  deterministic per fold but verify.
+Coverage by RNG-consumer family (8 tests):
 
-Deliverable: one `tests/test_reproducibility.py` pinning every
-randomized estimator with two seeds and asserting equality / fold
-consistency.
+- **CV KFold-shuffle path** — `MCPPathCV`, `GroupLassoPathCV`,
+  `LogisticLassoPathCV` (parametrized representatives of the
+  `_PathCVMixin` family, which all dispatch through the same
+  `KFold(shuffle=True, random_state=…)` call site).
+- **Stability selection** — `StabilitySelection` with `MCPPathRegressor`
+  base, exercising the bootstrap-subsampling RNG.
+- **Graphical stability + bootstrap** — `GraphicalStabilitySelection`
+  and `GraphicalBootstrap` with `GraphicalLasso` base, covering the
+  graph-side analogues.
+- **Nested CV** — `AdaptiveLassoPathCV` (pilot + refit each consume
+  the same `random_state`).
+- **Multinomial CV** — `MultinomialLassoPathCV`'s separate
+  `_MultinomialPathCVBase` code path.
+
+BLAS-thread caveat documented inline in the test docstring: the Rust
+path solver itself has no RNG (coordinate descent is deterministic
+from `β=0`), so all reproducibility-relevant randomness is in
+Python-side fold / bootstrap construction, which is unaffected by
+hardware-BLAS thread scheduling. At the small problem sizes used
+(n=40, p=8) BLAS stays single-threaded anyway; if future tests scale
+beyond that regime they should gate with `OMP_NUM_THREADS=1` /
+`OPENBLAS_NUM_THREADS=1`.
 
 ---
 
