@@ -31,8 +31,8 @@ use skein_core::{
         ElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad, SparseGroupLasso, SparseGroupMcp,
     },
     solver::{
-        prox_newton_block_solve_path, prox_newton_fused_solve_path, prox_newton_solve_path,
-        surrogate_sparse_group_scad, CdConfig,
+        prox_newton_block_solve_path_timed, prox_newton_fused_solve_path_timed,
+        prox_newton_solve_path_timed, surrogate_sparse_group_scad, CdConfig,
     },
     Penalty,
 };
@@ -327,15 +327,46 @@ where
     // Branch on `use_fused`: GLM × MCP/SCAD routes through the M14f
     // fused IRLS+CD solver (`prox_newton_fused_solve_path`); GLM ×
     // ElasticNet / Huber × {MCP, SCAD} stay on the classic solver.
-    let (betas_aug, report) = py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
-        (Some(scales), true) => {
-            let mut x_scale_eff = Array1::<f64>::ones(design.n_features());
-            for j in 0..p_user {
-                x_scale_eff[j] = scales[j];
+    let (betas_aug, report, times_ns) =
+        py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
+            (Some(scales), true) => {
+                let mut x_scale_eff = Array1::<f64>::ones(design.n_features());
+                for j in 0..p_user {
+                    x_scale_eff[j] = scales[j];
+                }
+                let std_design = Standardized::new(design, x_scale_eff);
+                prox_newton_fused_solve_path_timed(
+                    &std_design,
+                    &*glm,
+                    make_pen,
+                    n_lambdas,
+                    lambda_min_ratio,
+                    lambdas_vec,
+                    &cd_cfg,
+                    max_outer,
+                    outer_tol,
+                )
             }
-            let std_design = Standardized::new(design, x_scale_eff);
-            prox_newton_fused_solve_path(
-                &std_design,
+            (Some(scales), false) => {
+                let mut x_scale_eff = Array1::<f64>::ones(design.n_features());
+                for j in 0..p_user {
+                    x_scale_eff[j] = scales[j];
+                }
+                let std_design = Standardized::new(design, x_scale_eff);
+                prox_newton_solve_path_timed(
+                    &std_design,
+                    &*glm,
+                    make_pen,
+                    n_lambdas,
+                    lambda_min_ratio,
+                    lambdas_vec,
+                    &cd_cfg,
+                    max_outer,
+                    outer_tol,
+                )
+            }
+            (None, true) => prox_newton_fused_solve_path_timed(
+                &design,
                 &*glm,
                 make_pen,
                 n_lambdas,
@@ -344,16 +375,9 @@ where
                 &cd_cfg,
                 max_outer,
                 outer_tol,
-            )
-        }
-        (Some(scales), false) => {
-            let mut x_scale_eff = Array1::<f64>::ones(design.n_features());
-            for j in 0..p_user {
-                x_scale_eff[j] = scales[j];
-            }
-            let std_design = Standardized::new(design, x_scale_eff);
-            prox_newton_solve_path(
-                &std_design,
+            ),
+            (None, false) => prox_newton_solve_path_timed(
+                &design,
                 &*glm,
                 make_pen,
                 n_lambdas,
@@ -362,31 +386,8 @@ where
                 &cd_cfg,
                 max_outer,
                 outer_tol,
-            )
-        }
-        (None, true) => prox_newton_fused_solve_path(
-            &design,
-            &*glm,
-            make_pen,
-            n_lambdas,
-            lambda_min_ratio,
-            lambdas_vec,
-            &cd_cfg,
-            max_outer,
-            outer_tol,
-        ),
-        (None, false) => prox_newton_solve_path(
-            &design,
-            &*glm,
-            make_pen,
-            n_lambdas,
-            lambda_min_ratio,
-            lambdas_vec,
-            &cd_cfg,
-            max_outer,
-            outer_tol,
-        ),
-    });
+            ),
+        });
 
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -403,6 +404,7 @@ where
     info.set_item("outer_converged", report.outer_converged)?;
     info.set_item("inner_iters", report.inner_iters)?;
     info.set_item("final_losses", report.final_losses)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),
@@ -878,14 +880,14 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
+    let (betas_aug, report, times_ns) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(design.n_features());
             for j in 0..p_user {
                 x_scale_eff[j] = scales[j];
             }
             let std_design = Standardized::new(design, x_scale_eff);
-            prox_newton_block_solve_path(
+            prox_newton_block_solve_path_timed(
                 &std_design,
                 &*glm,
                 group_w_eff,
@@ -899,7 +901,7 @@ where
                 outer_tol,
             )
         }
-        None => prox_newton_block_solve_path(
+        None => prox_newton_block_solve_path_timed(
             &design,
             &*glm,
             group_w_eff,
@@ -928,6 +930,7 @@ where
     info.set_item("outer_converged", report.outer_converged)?;
     info.set_item("inner_iters", report.inner_iters)?;
     info.set_item("final_losses", report.final_losses)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),
@@ -1955,11 +1958,38 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (mut betas, report) = py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
-        (Some(scales), true) => {
-            let std_design = Standardized::new(design, scales.clone());
-            prox_newton_fused_solve_path(
-                &std_design,
+    let (mut betas, report, times_ns) =
+        py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
+            (Some(scales), true) => {
+                let std_design = Standardized::new(design, scales.clone());
+                prox_newton_fused_solve_path_timed(
+                    &std_design,
+                    &glm,
+                    make_pen,
+                    n_lambdas,
+                    lambda_min_ratio,
+                    lambdas_vec,
+                    &cd_cfg,
+                    max_outer,
+                    outer_tol,
+                )
+            }
+            (Some(scales), false) => {
+                let std_design = Standardized::new(design, scales.clone());
+                prox_newton_solve_path_timed(
+                    &std_design,
+                    &glm,
+                    make_pen,
+                    n_lambdas,
+                    lambda_min_ratio,
+                    lambdas_vec,
+                    &cd_cfg,
+                    max_outer,
+                    outer_tol,
+                )
+            }
+            (None, true) => prox_newton_fused_solve_path_timed(
+                &design,
                 &glm,
                 make_pen,
                 n_lambdas,
@@ -1968,12 +1998,9 @@ where
                 &cd_cfg,
                 max_outer,
                 outer_tol,
-            )
-        }
-        (Some(scales), false) => {
-            let std_design = Standardized::new(design, scales.clone());
-            prox_newton_solve_path(
-                &std_design,
+            ),
+            (None, false) => prox_newton_solve_path_timed(
+                &design,
                 &glm,
                 make_pen,
                 n_lambdas,
@@ -1982,31 +2009,8 @@ where
                 &cd_cfg,
                 max_outer,
                 outer_tol,
-            )
-        }
-        (None, true) => prox_newton_fused_solve_path(
-            &design,
-            &glm,
-            make_pen,
-            n_lambdas,
-            lambda_min_ratio,
-            lambdas_vec,
-            &cd_cfg,
-            max_outer,
-            outer_tol,
-        ),
-        (None, false) => prox_newton_solve_path(
-            &design,
-            &glm,
-            make_pen,
-            n_lambdas,
-            lambda_min_ratio,
-            lambdas_vec,
-            &cd_cfg,
-            max_outer,
-            outer_tol,
-        ),
-    });
+            ),
+        });
 
     if let Some(scales) = scales_user.as_ref() {
         for k in 0..betas.nrows() {
@@ -2024,6 +2028,7 @@ where
     info.set_item("outer_converged", report.outer_converged)?;
     info.set_item("inner_iters", report.inner_iters)?;
     info.set_item("final_losses", report.final_losses)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         betas.into_pyarray_bound(py),
@@ -2125,10 +2130,10 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (mut betas, report) = py.allow_threads(|| match scales_user.as_ref() {
+    let (mut betas, report, times_ns) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let std_design = Standardized::new(design, scales.clone());
-            prox_newton_block_solve_path(
+            prox_newton_block_solve_path_timed(
                 &std_design,
                 &glm,
                 group_w,
@@ -2142,7 +2147,7 @@ where
                 outer_tol,
             )
         }
-        None => prox_newton_block_solve_path(
+        None => prox_newton_block_solve_path_timed(
             &design,
             &glm,
             group_w,
@@ -2173,6 +2178,7 @@ where
     info.set_item("outer_converged", report.outer_converged)?;
     info.set_item("inner_iters", report.inner_iters)?;
     info.set_item("final_losses", report.final_losses)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         betas.into_pyarray_bound(py),
@@ -2684,15 +2690,46 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (betas_aug, report) = py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
-        (Some(scales), true) => {
-            let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
-            for j in 0..n_cols {
-                x_scale_eff[j] = scales[j];
+    let (betas_aug, report, times_ns) =
+        py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
+            (Some(scales), true) => {
+                let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
+                for j in 0..n_cols {
+                    x_scale_eff[j] = scales[j];
+                }
+                let std_design = Standardized::new(csc_eff, x_scale_eff);
+                prox_newton_fused_solve_path_timed(
+                    &std_design,
+                    &*glm,
+                    make_pen,
+                    n_lambdas,
+                    lambda_min_ratio,
+                    lambdas_vec,
+                    &cd_cfg,
+                    max_outer,
+                    outer_tol,
+                )
             }
-            let std_design = Standardized::new(csc_eff, x_scale_eff);
-            prox_newton_fused_solve_path(
-                &std_design,
+            (Some(scales), false) => {
+                let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
+                for j in 0..n_cols {
+                    x_scale_eff[j] = scales[j];
+                }
+                let std_design = Standardized::new(csc_eff, x_scale_eff);
+                prox_newton_solve_path_timed(
+                    &std_design,
+                    &*glm,
+                    make_pen,
+                    n_lambdas,
+                    lambda_min_ratio,
+                    lambdas_vec,
+                    &cd_cfg,
+                    max_outer,
+                    outer_tol,
+                )
+            }
+            (None, true) => prox_newton_fused_solve_path_timed(
+                &csc_eff,
                 &*glm,
                 make_pen,
                 n_lambdas,
@@ -2701,16 +2738,9 @@ where
                 &cd_cfg,
                 max_outer,
                 outer_tol,
-            )
-        }
-        (Some(scales), false) => {
-            let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
-            for j in 0..n_cols {
-                x_scale_eff[j] = scales[j];
-            }
-            let std_design = Standardized::new(csc_eff, x_scale_eff);
-            prox_newton_solve_path(
-                &std_design,
+            ),
+            (None, false) => prox_newton_solve_path_timed(
+                &csc_eff,
                 &*glm,
                 make_pen,
                 n_lambdas,
@@ -2719,31 +2749,8 @@ where
                 &cd_cfg,
                 max_outer,
                 outer_tol,
-            )
-        }
-        (None, true) => prox_newton_fused_solve_path(
-            &csc_eff,
-            &*glm,
-            make_pen,
-            n_lambdas,
-            lambda_min_ratio,
-            lambdas_vec,
-            &cd_cfg,
-            max_outer,
-            outer_tol,
-        ),
-        (None, false) => prox_newton_solve_path(
-            &csc_eff,
-            &*glm,
-            make_pen,
-            n_lambdas,
-            lambda_min_ratio,
-            lambdas_vec,
-            &cd_cfg,
-            max_outer,
-            outer_tol,
-        ),
-    });
+            ),
+        });
 
     let (mut coefs, intercepts) = split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -2759,6 +2766,7 @@ where
     info.set_item("outer_converged", report.outer_converged)?;
     info.set_item("inner_iters", report.inner_iters)?;
     info.set_item("final_losses", report.final_losses)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),
@@ -2871,14 +2879,14 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
+    let (betas_aug, report, times_ns) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
             for j in 0..n_cols {
                 x_scale_eff[j] = scales[j];
             }
             let std_design = Standardized::new(csc_eff, x_scale_eff);
-            prox_newton_block_solve_path(
+            prox_newton_block_solve_path_timed(
                 &std_design,
                 &*glm,
                 group_w_eff,
@@ -2892,7 +2900,7 @@ where
                 outer_tol,
             )
         }
-        None => prox_newton_block_solve_path(
+        None => prox_newton_block_solve_path_timed(
             &csc_eff,
             &*glm,
             group_w_eff,
@@ -2921,6 +2929,7 @@ where
     info.set_item("outer_converged", report.outer_converged)?;
     info.set_item("inner_iters", report.inner_iters)?;
     info.set_item("final_losses", report.final_losses)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),
@@ -3015,11 +3024,38 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (mut betas, report) = py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
-        (Some(scales), true) => {
-            let std_design = Standardized::new(csc, scales.clone());
-            prox_newton_fused_solve_path(
-                &std_design,
+    let (mut betas, report, times_ns) =
+        py.allow_threads(|| match (scales_user.as_ref(), use_fused) {
+            (Some(scales), true) => {
+                let std_design = Standardized::new(csc, scales.clone());
+                prox_newton_fused_solve_path_timed(
+                    &std_design,
+                    &glm,
+                    make_pen,
+                    n_lambdas,
+                    lambda_min_ratio,
+                    lambdas_vec,
+                    &cd_cfg,
+                    max_outer,
+                    outer_tol,
+                )
+            }
+            (Some(scales), false) => {
+                let std_design = Standardized::new(csc, scales.clone());
+                prox_newton_solve_path_timed(
+                    &std_design,
+                    &glm,
+                    make_pen,
+                    n_lambdas,
+                    lambda_min_ratio,
+                    lambdas_vec,
+                    &cd_cfg,
+                    max_outer,
+                    outer_tol,
+                )
+            }
+            (None, true) => prox_newton_fused_solve_path_timed(
+                &csc,
                 &glm,
                 make_pen,
                 n_lambdas,
@@ -3028,12 +3064,9 @@ where
                 &cd_cfg,
                 max_outer,
                 outer_tol,
-            )
-        }
-        (Some(scales), false) => {
-            let std_design = Standardized::new(csc, scales.clone());
-            prox_newton_solve_path(
-                &std_design,
+            ),
+            (None, false) => prox_newton_solve_path_timed(
+                &csc,
                 &glm,
                 make_pen,
                 n_lambdas,
@@ -3042,31 +3075,8 @@ where
                 &cd_cfg,
                 max_outer,
                 outer_tol,
-            )
-        }
-        (None, true) => prox_newton_fused_solve_path(
-            &csc,
-            &glm,
-            make_pen,
-            n_lambdas,
-            lambda_min_ratio,
-            lambdas_vec,
-            &cd_cfg,
-            max_outer,
-            outer_tol,
-        ),
-        (None, false) => prox_newton_solve_path(
-            &csc,
-            &glm,
-            make_pen,
-            n_lambdas,
-            lambda_min_ratio,
-            lambdas_vec,
-            &cd_cfg,
-            max_outer,
-            outer_tol,
-        ),
-    });
+            ),
+        });
 
     if let Some(scales) = scales_user.as_ref() {
         for k in 0..betas.nrows() {
@@ -3084,6 +3094,7 @@ where
     info.set_item("outer_converged", report.outer_converged)?;
     info.set_item("inner_iters", report.inner_iters)?;
     info.set_item("final_losses", report.final_losses)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         betas.into_pyarray_bound(py),
@@ -3187,10 +3198,10 @@ where
     };
     let lambdas_vec: Option<Vec<f64>> = lambdas.map(|a| a.as_array().to_vec());
 
-    let (mut betas, report) = py.allow_threads(|| match scales_user.as_ref() {
+    let (mut betas, report, times_ns) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let std_design = Standardized::new(csc, scales.clone());
-            prox_newton_block_solve_path(
+            prox_newton_block_solve_path_timed(
                 &std_design,
                 &glm,
                 group_w,
@@ -3204,7 +3215,7 @@ where
                 outer_tol,
             )
         }
-        None => prox_newton_block_solve_path(
+        None => prox_newton_block_solve_path_timed(
             &csc,
             &glm,
             group_w,
@@ -3235,6 +3246,7 @@ where
     info.set_item("outer_converged", report.outer_converged)?;
     info.set_item("inner_iters", report.inner_iters)?;
     info.set_item("final_losses", report.final_losses)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         betas.into_pyarray_bound(py),

@@ -34,7 +34,7 @@ use skein_core::{
     groups::Groups,
     penalty::{GroupElasticNet, GroupLasso, GroupPenalty},
     solver::{
-        solve_block_path, solve_block_path_lla, surrogate_weights_group_mcp,
+        solve_block_path_lla, solve_block_path_timed, surrogate_weights_group_mcp,
         surrogate_weights_group_scad, BlockPathConfig, CdConfig,
     },
 };
@@ -258,8 +258,8 @@ where
     let groups = MultiTaskDesign::<DenseMatrix>::auto_groups(p, k);
     let make_pen =
         move |lam: f64| -> Box<dyn GroupPenalty> { make_inner(lam, weights_eff.clone()) };
-    let (mut betas, report) =
-        py.allow_threads(|| solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg));
+    let (mut betas, report, times_ns) = py
+        .allow_threads(|| solve_block_path_timed(&design, &datafit, make_pen, &groups, &block_cfg));
     if standardize_x {
         multitask_descale_inplace(&mut betas, &x_scales, p, k);
     }
@@ -271,6 +271,7 @@ where
     info.set_item("final_objs", report.final_objs)?;
     info.set_item("working_set_sizes", report.working_set_sizes)?;
     info.set_item("kkt_passes", report.kkt_passes)?;
+    info.set_item("times_ns", times_ns)?;
     info.set_item("n_tasks", k)?;
     info.set_item("n_features", p)?;
 
@@ -735,25 +736,25 @@ where
         v
     });
 
-    let (betas, report) = py.allow_threads(|| match (fit_intercept, scale_vec) {
+    let (betas, report, times_ns) = py.allow_threads(|| match (fit_intercept, scale_vec) {
         (true, Some(scales)) => {
             let std_design = Standardized::new(Augmented::new(csc), scales);
             let design = MultiTaskDesign::new(std_design, k_tasks);
-            solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg)
+            solve_block_path_timed(&design, &datafit, make_pen, &groups, &block_cfg)
         }
         (true, None) => {
             let augmented = Augmented::new(csc);
             let design = MultiTaskDesign::new(augmented, k_tasks);
-            solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg)
+            solve_block_path_timed(&design, &datafit, make_pen, &groups, &block_cfg)
         }
         (false, Some(scales)) => {
             let std_design = Standardized::new(csc, scales);
             let design = MultiTaskDesign::new(std_design, k_tasks);
-            solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg)
+            solve_block_path_timed(&design, &datafit, make_pen, &groups, &block_cfg)
         }
         (false, None) => {
             let design = MultiTaskDesign::new(csc, k_tasks);
-            solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg)
+            solve_block_path_timed(&design, &datafit, make_pen, &groups, &block_cfg)
         }
     });
 
@@ -781,6 +782,7 @@ where
     info.set_item("final_objs", report.final_objs)?;
     info.set_item("working_set_sizes", report.working_set_sizes)?;
     info.set_item("kkt_passes", report.kkt_passes)?;
+    info.set_item("times_ns", times_ns)?;
     info.set_item("n_tasks", k_tasks)?;
     info.set_item("n_features", p)?;
 

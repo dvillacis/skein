@@ -26,7 +26,7 @@ use skein_core::{
     datafit::{BinomialLogit, LeastSquares},
     design::{Augmented, Chunked, DesignMatrix, MmapMatrix, MmapMatrixF32, Standardized},
     penalty::Mcp,
-    solver::{prox_newton_solve_path, solve_path, CdConfig, PathConfig},
+    solver::{prox_newton_solve_path_timed, solve_path_timed, CdConfig, PathConfig},
     Penalty,
 };
 
@@ -121,26 +121,27 @@ where
     };
 
     let p_eff = if fit_intercept { n_cols + 1 } else { n_cols };
-    let (betas_aug, report) = py.allow_threads(|| match (fit_intercept, scales_user.as_ref()) {
-        (false, None) => solve_path(&design, &datafit, make_pen, &path_cfg),
-        (false, Some(scales)) => {
-            let std_design = Standardized::new(design, scales.clone());
-            solve_path(&std_design, &datafit, make_pen, &path_cfg)
-        }
-        (true, None) => {
-            let aug = Augmented::new(design);
-            solve_path(&aug, &datafit, make_pen, &path_cfg)
-        }
-        (true, Some(scales)) => {
-            let aug = Augmented::new(design);
-            let mut x_scale_eff = Array1::<f64>::ones(p_eff);
-            for j in 0..n_cols {
-                x_scale_eff[j] = scales[j];
+    let (betas_aug, report, times_ns) =
+        py.allow_threads(|| match (fit_intercept, scales_user.as_ref()) {
+            (false, None) => solve_path_timed(&design, &datafit, make_pen, &path_cfg),
+            (false, Some(scales)) => {
+                let std_design = Standardized::new(design, scales.clone());
+                solve_path_timed(&std_design, &datafit, make_pen, &path_cfg)
             }
-            let std_design = Standardized::new(aug, x_scale_eff);
-            solve_path(&std_design, &datafit, make_pen, &path_cfg)
-        }
-    });
+            (true, None) => {
+                let aug = Augmented::new(design);
+                solve_path_timed(&aug, &datafit, make_pen, &path_cfg)
+            }
+            (true, Some(scales)) => {
+                let aug = Augmented::new(design);
+                let mut x_scale_eff = Array1::<f64>::ones(p_eff);
+                for j in 0..n_cols {
+                    x_scale_eff[j] = scales[j];
+                }
+                let std_design = Standardized::new(aug, x_scale_eff);
+                solve_path_timed(&std_design, &datafit, make_pen, &path_cfg)
+            }
+        });
 
     let (mut coefs, intercepts) = crate::glm::split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -157,6 +158,7 @@ where
     info.set_item("final_objs", report.final_objs)?;
     info.set_item("working_set_sizes", report.working_set_sizes)?;
     info.set_item("kkt_passes", report.kkt_passes)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),
@@ -358,22 +360,10 @@ where
     };
 
     let p_eff = if fit_intercept { n_cols + 1 } else { n_cols };
-    let (betas_aug, report) = py.allow_threads(|| match (fit_intercept, scales_user.as_ref()) {
-        (false, None) => prox_newton_solve_path(
-            &design,
-            &glm,
-            make_pen,
-            n_lambdas,
-            lambda_min_ratio,
-            lambdas_vec,
-            &cd_cfg,
-            max_outer,
-            outer_tol,
-        ),
-        (false, Some(scales)) => {
-            let std_design = Standardized::new(design, scales.clone());
-            prox_newton_solve_path(
-                &std_design,
+    let (betas_aug, report, times_ns) =
+        py.allow_threads(|| match (fit_intercept, scales_user.as_ref()) {
+            (false, None) => prox_newton_solve_path_timed(
+                &design,
                 &glm,
                 make_pen,
                 n_lambdas,
@@ -382,42 +372,55 @@ where
                 &cd_cfg,
                 max_outer,
                 outer_tol,
-            )
-        }
-        (true, None) => {
-            let aug = Augmented::new(design);
-            prox_newton_solve_path(
-                &aug,
-                &glm,
-                make_pen,
-                n_lambdas,
-                lambda_min_ratio,
-                lambdas_vec,
-                &cd_cfg,
-                max_outer,
-                outer_tol,
-            )
-        }
-        (true, Some(scales)) => {
-            let aug = Augmented::new(design);
-            let mut x_scale_eff = Array1::<f64>::ones(p_eff);
-            for j in 0..n_cols {
-                x_scale_eff[j] = scales[j];
+            ),
+            (false, Some(scales)) => {
+                let std_design = Standardized::new(design, scales.clone());
+                prox_newton_solve_path_timed(
+                    &std_design,
+                    &glm,
+                    make_pen,
+                    n_lambdas,
+                    lambda_min_ratio,
+                    lambdas_vec,
+                    &cd_cfg,
+                    max_outer,
+                    outer_tol,
+                )
             }
-            let std_design = Standardized::new(aug, x_scale_eff);
-            prox_newton_solve_path(
-                &std_design,
-                &glm,
-                make_pen,
-                n_lambdas,
-                lambda_min_ratio,
-                lambdas_vec,
-                &cd_cfg,
-                max_outer,
-                outer_tol,
-            )
-        }
-    });
+            (true, None) => {
+                let aug = Augmented::new(design);
+                prox_newton_solve_path_timed(
+                    &aug,
+                    &glm,
+                    make_pen,
+                    n_lambdas,
+                    lambda_min_ratio,
+                    lambdas_vec,
+                    &cd_cfg,
+                    max_outer,
+                    outer_tol,
+                )
+            }
+            (true, Some(scales)) => {
+                let aug = Augmented::new(design);
+                let mut x_scale_eff = Array1::<f64>::ones(p_eff);
+                for j in 0..n_cols {
+                    x_scale_eff[j] = scales[j];
+                }
+                let std_design = Standardized::new(aug, x_scale_eff);
+                prox_newton_solve_path_timed(
+                    &std_design,
+                    &glm,
+                    make_pen,
+                    n_lambdas,
+                    lambda_min_ratio,
+                    lambdas_vec,
+                    &cd_cfg,
+                    max_outer,
+                    outer_tol,
+                )
+            }
+        });
 
     let (mut coefs, intercepts) = crate::glm::split_intercept(betas_aug, fit_intercept);
     if let Some(scales) = scales_user.as_ref() {
@@ -433,6 +436,7 @@ where
     info.set_item("outer_converged", report.outer_converged)?;
     info.set_item("inner_iters", report.inner_iters)?;
     info.set_item("final_losses", report.final_losses)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),

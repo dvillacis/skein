@@ -34,9 +34,10 @@ use skein_core::{
         SparseGroupLasso, SparseGroupMcp, SparseGroupScad,
     },
     solver::{
-        broadcast_group_weights_to_coord, cd_solve, cmcp_lambda_max, lambda_grid, solve_block_path,
-        solve_path, solve_path_lla, surrogate_weights_bridge, surrogate_weights_cmcp,
-        surrogate_weights_gel, BlockPathConfig, CdConfig, PathConfig, Screening,
+        broadcast_group_weights_to_coord, cd_solve, cmcp_lambda_max, lambda_grid,
+        solve_block_path_timed, solve_path_lla, solve_path_timed, surrogate_weights_bridge,
+        surrogate_weights_cmcp, surrogate_weights_gel, BlockPathConfig, CdConfig, PathConfig,
+        Screening,
     },
     standardize::{
         destandardize_path, rescale_weights_for_standardize, standardize, StandardizeConfig,
@@ -245,8 +246,8 @@ where
         // thread pools (e.g. CV fold loops via joblib's "threads"
         // backend) can actually run folds in parallel. The closure
         // and its captures are pure Rust — no PyObject references.
-        let (betas_aug, report) =
-            py.allow_threads(|| solve_path(&design, &datafit, make_pen, &path_cfg));
+        let (betas_aug, report, times_ns) =
+            py.allow_threads(|| solve_path_timed(&design, &datafit, make_pen, &path_cfg));
         let (coefs, intercepts) = crate::glm::split_intercept(betas_aug, fit_intercept);
 
         let info = PyDict::new_bound(py);
@@ -255,6 +256,7 @@ where
         info.set_item("final_objs", report.final_objs)?;
         info.set_item("working_set_sizes", report.working_set_sizes)?;
         info.set_item("kkt_passes", report.kkt_passes)?;
+        info.set_item("times_ns", times_ns)?;
         info.set_item("sample_weights", true)?;
 
         return Ok((
@@ -276,8 +278,8 @@ where
     let design = DenseMatrix::new(xs);
     let datafit = LeastSquares::new(ys);
     let make_pen = move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, weights_std.clone()) };
-    let (betas_std, report) =
-        py.allow_threads(|| solve_path(&design, &datafit, make_pen, &path_cfg));
+    let (betas_std, report, times_ns) =
+        py.allow_threads(|| solve_path_timed(&design, &datafit, make_pen, &path_cfg));
     let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
 
     let info = PyDict::new_bound(py);
@@ -286,6 +288,7 @@ where
     info.set_item("final_objs", report.final_objs)?;
     info.set_item("working_set_sizes", report.working_set_sizes)?;
     info.set_item("kkt_passes", report.kkt_passes)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),
@@ -1164,8 +1167,8 @@ where
     let datafit = LeastSquares::new(ys);
     let make_pen =
         move |lam: f64| -> Box<dyn GroupPenalty> { make_inner(lam, weights_orig.clone()) };
-    let (betas_std, report) =
-        py.allow_threads(|| solve_block_path(&design, &datafit, make_pen, &groups, &block_cfg));
+    let (betas_std, report, times_ns) = py
+        .allow_threads(|| solve_block_path_timed(&design, &datafit, make_pen, &groups, &block_cfg));
     let (coefs, intercepts) = destandardize_path(betas_std.view(), &stats);
 
     let info = PyDict::new_bound(py);
@@ -1174,6 +1177,7 @@ where
     info.set_item("final_objs", report.final_objs)?;
     info.set_item("working_set_sizes", report.working_set_sizes)?;
     info.set_item("kkt_passes", report.kkt_passes)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),
@@ -1924,7 +1928,7 @@ where
     let datafit = LeastSquares::new(y_arr);
     let make_pen = move |lam: f64| -> Box<dyn Penalty> { make_penalty(lam, pen_weights.clone()) };
 
-    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
+    let (betas_aug, report, times_ns) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
             for j in 0..n_cols {
@@ -1932,9 +1936,9 @@ where
             }
             // Intercept column stays at 1.0 (already initialized by `ones`).
             let std_design = Standardized::new(csc_eff, x_scale_eff);
-            solve_path(&std_design, &datafit, make_pen, &path_cfg)
+            solve_path_timed(&std_design, &datafit, make_pen, &path_cfg)
         }
-        None => solve_path(&csc_eff, &datafit, make_pen, &path_cfg),
+        None => solve_path_timed(&csc_eff, &datafit, make_pen, &path_cfg),
     });
 
     let (mut coefs, intercepts) = crate::glm::split_intercept(betas_aug, fit_intercept);
@@ -1953,6 +1957,7 @@ where
     info.set_item("final_objs", report.final_objs)?;
     info.set_item("working_set_sizes", report.working_set_sizes)?;
     info.set_item("kkt_passes", report.kkt_passes)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),
@@ -2267,16 +2272,16 @@ where
     let make_pen =
         move |lam: f64| -> Box<dyn GroupPenalty> { make_inner(lam, group_w_eff.clone()) };
 
-    let (betas_aug, report) = py.allow_threads(|| match scales_user.as_ref() {
+    let (betas_aug, report, times_ns) = py.allow_threads(|| match scales_user.as_ref() {
         Some(scales) => {
             let mut x_scale_eff = Array1::<f64>::ones(csc_eff.n_features());
             for j in 0..n_cols {
                 x_scale_eff[j] = scales[j];
             }
             let std_design = Standardized::new(csc_eff, x_scale_eff);
-            solve_block_path(&std_design, &datafit, make_pen, &groups, &block_cfg)
+            solve_block_path_timed(&std_design, &datafit, make_pen, &groups, &block_cfg)
         }
-        None => solve_block_path(&csc_eff, &datafit, make_pen, &groups, &block_cfg),
+        None => solve_block_path_timed(&csc_eff, &datafit, make_pen, &groups, &block_cfg),
     });
 
     let (mut coefs, intercepts) = crate::glm::split_intercept(betas_aug, fit_intercept);
@@ -2294,6 +2299,7 @@ where
     info.set_item("final_objs", report.final_objs)?;
     info.set_item("working_set_sizes", report.working_set_sizes)?;
     info.set_item("kkt_passes", report.kkt_passes)?;
+    info.set_item("times_ns", times_ns)?;
 
     Ok((
         coefs.into_pyarray_bound(py),

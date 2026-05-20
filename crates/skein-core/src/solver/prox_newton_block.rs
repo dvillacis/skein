@@ -38,6 +38,7 @@ use crate::solver::block_path::block_lambda_max;
 use crate::solver::cd::CdConfig;
 use crate::solver::path::lambda_grid;
 use ndarray::{Array1, Array2, ArrayView1};
+use std::time::Instant;
 
 /// Cap on KKT-expansion passes per outer prox-Newton iteration. Same role
 /// and same number as the scalar `KKT_EXPANSION_PASSES` in
@@ -94,6 +95,41 @@ pub fn prox_newton_block_solve_path<F>(
 where
     F: Fn(ArrayView1<'_, f64>, &Groups, f64) -> Box<dyn GroupPenalty>,
 {
+    let (betas, report, _times_ns) = prox_newton_block_solve_path_timed(
+        design,
+        glm,
+        base_weights,
+        make_inner,
+        groups,
+        n_lambdas,
+        lambda_min_ratio,
+        explicit_lambdas,
+        cd_config,
+        max_outer,
+        outer_tol,
+    );
+    (betas, report)
+}
+
+/// Same as [`prox_newton_block_solve_path`], plus per-λ wall-clock time
+/// (nanoseconds). M-O6 surface.
+#[allow(clippy::too_many_arguments)]
+pub fn prox_newton_block_solve_path_timed<F>(
+    design: &dyn DesignMatrix,
+    glm: &dyn GlmDatafit,
+    base_weights: Array1<f64>,
+    make_inner: F,
+    groups: &Groups,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    explicit_lambdas: Option<Vec<f64>>,
+    cd_config: &CdConfig,
+    max_outer: usize,
+    outer_tol: f64,
+) -> (Array2<f64>, ProxNewtonBlockPathReport, Vec<u64>)
+where
+    F: Fn(ArrayView1<'_, f64>, &Groups, f64) -> Box<dyn GroupPenalty>,
+{
     let p = design.n_features();
     let n_groups = groups.n_groups();
     debug_assert_eq!(base_weights.len(), n_groups);
@@ -116,6 +152,7 @@ where
     let mut outer_converged_out = Vec::with_capacity(n_lams);
     let mut inner_iters_out = Vec::with_capacity(n_lams);
     let mut final_losses_out = Vec::with_capacity(n_lams);
+    let mut times_ns = Vec::with_capacity(n_lams);
 
     // Cache the per-group operator-norm Lipschitz once for the whole
     // path. The X columns don't change; only the weighted-LS sample
@@ -133,6 +170,7 @@ where
     let group_lip = group_lipschitz_cache(design, groups);
 
     for &lam in lambdas.iter() {
+        let lambda_start = Instant::now();
         let mut outer_iters = 0usize;
         let mut total_inner = 0usize;
         let mut outer_converged = false;
@@ -299,6 +337,7 @@ where
         outer_converged_out.push(outer_converged);
         inner_iters_out.push(total_inner);
         final_losses_out.push(glm.loss(design, warm.view()));
+        times_ns.push(lambda_start.elapsed().as_nanos() as u64);
         let _ = lam;
     }
 
@@ -311,6 +350,7 @@ where
             inner_iters: inner_iters_out,
             final_losses: final_losses_out,
         },
+        times_ns,
     )
 }
 

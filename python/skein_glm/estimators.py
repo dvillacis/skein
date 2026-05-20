@@ -4,6 +4,22 @@
 `SCADPathRegressor` return the entire λ-path. All four standardize and fit
 an intercept by default (matching `glmnet` / `ncvreg` conventions) and
 expose `coef_`, `intercept_`, and `info_` after `fit`.
+
+The ``info_`` dict carries per-λ solver diagnostics so users can profile a
+fit without rebuilding skein with ``SKEIN_PROFILE_PATH=1``. Keys depend on
+the underlying solver:
+
+CD-path estimators (LS-family scalar + group, multi-task LS, multinomial):
+    ``iters``, ``converged``, ``final_objs``, ``working_set_sizes``,
+    ``kkt_passes``, ``times_ns`` — each a list of length ``n_lambdas``.
+    ``times_ns[k]`` is the wall-clock nanoseconds spent on the k-th λ.
+
+Prox-Newton-path estimators (GLM scalar + group: logistic, Poisson, Cox):
+    ``outer_iters``, ``outer_converged``, ``inner_iters``,
+    ``final_losses``, ``times_ns`` — each a list of length ``n_lambdas``.
+
+Some estimators add extra keys (``n_tasks``, ``n_classes``,
+``sample_weights``); those are fixed scalars, not per-λ lists.
 """
 from __future__ import annotations
 

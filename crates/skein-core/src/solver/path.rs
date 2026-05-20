@@ -191,6 +191,23 @@ pub fn solve_path<F>(
 where
     F: Fn(f64) -> Box<dyn Penalty>,
 {
+    let (betas, report, _times_ns) = solve_path_timed(design, datafit, make_penalty, config);
+    (betas, report)
+}
+
+/// Same as [`solve_path`], plus per-λ wall-clock time (nanoseconds) measured
+/// from penalty construction through KKT verification. Lets Python /
+/// downstream callers profile a fit without rebuilding skein with
+/// `SKEIN_PROFILE_PATH=1`. M-O6 surface.
+pub fn solve_path_timed<F>(
+    design: &dyn DesignMatrix,
+    datafit: &dyn Datafit,
+    make_penalty: F,
+    config: &PathConfig,
+) -> (Array2<f64>, PathReport, Vec<u64>)
+where
+    F: Fn(f64) -> Box<dyn Penalty>,
+{
     let p = design.n_features();
 
     let lambdas = match &config.lambdas {
@@ -210,6 +227,7 @@ where
     let mut final_objs = Vec::with_capacity(n_lams);
     let mut working_set_sizes = Vec::with_capacity(n_lams);
     let mut kkt_passes_out = Vec::with_capacity(n_lams);
+    let mut times_ns = Vec::with_capacity(n_lams);
 
     let mut warm = Array1::<f64>::zeros(p);
     let mut prev_residual: Option<Array1<f64>> = None;
@@ -229,6 +247,7 @@ where
     };
 
     for (k, &lam) in lambdas.iter().enumerate() {
+        let lambda_start = Instant::now();
         let mut t = PhaseTimings::default();
         let phase_start = if profile { Some(Instant::now()) } else { None };
 
@@ -538,6 +557,7 @@ where
         final_objs.push(last_report.final_obj);
         working_set_sizes.push(ws.len());
         kkt_passes_out.push(passes);
+        times_ns.push(lambda_start.elapsed().as_nanos() as u64);
 
         prev_residual = Some(final_residual);
         // Hand the per-λ gradient cache off to the next λ. `None` here
@@ -565,6 +585,7 @@ where
             working_set_sizes,
             kkt_passes: kkt_passes_out,
         },
+        times_ns,
     )
 }
 

@@ -36,7 +36,7 @@ open v0.x lever.
 | O3 — Python 3.13 + NumPy 2.x in CI matrix | Operability | ✅ done | 3.13 added to the `python` job matrix; local pytest on 3.13 + NumPy 2.4.6 green (506 passed). NumPy 2.x was already the resolver default at v1.0 — `numpy>=1.24` floor stays; no API-removal hazards in the Python codebase |
 | O4 — Expanded wheel matrix (musllinux + Linux aarch64) | Operability | ⏳ planned | currently `CIBW_SKIP: "*-musllinux_*"`; aarch64 dropped from v0.1.x matrix |
 | O5 — `docs/benchmarks/speed.md` consolidation | Operability | ⏳ planned | M9.5 carryover — single landing page for all perf claims with provenance |
-| O6 — Structured timing / iteration surface | Operability | ⏳ planned | optional per-λ breakdown returned from path solvers; enables user-driven profiling without rebuilding |
+| O6 — Structured timing / iteration surface | Operability | ✅ done | per-λ wall time surfaced via `info_["times_ns"]` on every path estimator; powered by additive `solve_path_timed` / `solve_block_path_timed` / `prox_newton_*_solve_path_timed` siblings that keep the v1.0 freeze intact |
 
 Test count at v1.0.0: **358 cargo lib + 8 cargo integration + 455
 pytest, all green.** Each milestone below either keeps this number
@@ -426,17 +426,45 @@ provenance (host_id, BLAS feature, commit SHA, snapshot date) so
 users can tell at a glance what the "1.9× ahead of glmnet" claim
 covers.
 
-### O6 — Structured timing / iteration surface
+### ✅ O6 — Structured timing / iteration surface
 
-The Rust path solvers maintain a `PathReport` (per-λ working-set
-sizes, KKT pass counts, screening mode) — the Python facade does not
-expose this. Wire it through as an optional return field (e.g.
-`MCPRegressor(verbose_report=True).fit(X, y).path_report_`) so
-downstream users can profile their fit without rebuilding skein
-with `SKEIN_PROFILE_PATH=1`.
+**Shipped 2026-05-20.** The roadmap framing was partly stale at
+write-time: the Python `info_` dict already carried per-λ
+`working_set_sizes` / `kkt_passes` / `iters` / `converged` /
+`final_objs` (CD path) and `outer_iters` / `outer_converged` /
+`inner_iters` / `final_losses` (prox-Newton path). What was actually
+missing was wall-clock — the only datum that needs solver-internal
+instrumentation. O6 ships exactly that, plus documentation of the
+existing schema:
 
-Strictly additive — does not extend the v1.0 frozen API surface
-(adds a new field, does not remove or rename anything).
+- New `skein_core::solver::{solve_path_timed, solve_block_path_timed,
+  prox_newton_solve_path_timed, prox_newton_fused_solve_path_timed,
+  prox_newton_block_solve_path_timed}` — sibling functions returning
+  `(betas, report, Vec<u64>)` where the trailing vec is per-λ
+  wall-clock nanoseconds. The existing 2-tuple variants delegate to
+  these and discard the timing, so the v1.0 frozen API surface is
+  untouched (`cargo semver-checks check-release` against
+  `--baseline-rev v1.0.0` continues to pass — 222/222 checks).
+- The PyO3 layer (`crates/skein-py/src/{ls,glm,multinomial,multitask,mmap_chunked}.rs`)
+  routes every path builder through the `_timed` variant and adds a
+  `times_ns: List[int]` key to the returned info dict.
+- `python/skein_glm/estimators.py` module docstring now documents the
+  full `info_` dict schema (which keys appear for CD-path vs
+  prox-Newton-path estimators).
+- `tests/test_path_report.py` pins the schema (3 tests, +3 to the
+  pytest total).
+
+The `path_report_` attribute name floated in the original framing
+was dropped — `info_` is already the documented attribute on every
+estimator, and adding an alias would have created two redundant
+paths users have to choose between.
+
+**Verification considered.** Adding a field to the existing
+`PathReport` struct in `skein-core` was the first attempt and was
+correctly flagged by `cargo-semver-checks` as
+`constructible_struct_adds_field` (a 2.0-requiring break, since
+downstream code can construct `PathReport { ... }` directly). The
+shipped solution avoids that entirely.
 
 ---
 

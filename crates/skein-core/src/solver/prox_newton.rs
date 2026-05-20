@@ -32,6 +32,7 @@ use crate::solver::path::{
     priority_rule_screen_with_grad,
 };
 use ndarray::{Array1, Array2};
+use std::time::Instant;
 
 /// Cap on the per-PN-iter dual-extrapolation history. Matches the path
 /// solver's `DUAL_HISTORY_MAX` (celer's K=6); also bounds the per-iter
@@ -638,6 +639,38 @@ pub fn prox_newton_solve_path<F>(
 where
     F: Fn(f64) -> Box<dyn Penalty>,
 {
+    let (betas, report, _times_ns) = prox_newton_solve_path_timed(
+        design,
+        glm,
+        make_penalty,
+        n_lambdas,
+        lambda_min_ratio,
+        explicit_lambdas,
+        cd_config,
+        max_outer,
+        outer_tol,
+    );
+    (betas, report)
+}
+
+/// Same as [`prox_newton_solve_path`], plus per-λ wall-clock time
+/// (nanoseconds). M-O6 surface; lets downstream callers profile a fit
+/// without rebuilding with `SKEIN_PROFILE_PATH=1`.
+#[allow(clippy::too_many_arguments)]
+pub fn prox_newton_solve_path_timed<F>(
+    design: &dyn DesignMatrix,
+    glm: &dyn GlmDatafit,
+    make_penalty: F,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    explicit_lambdas: Option<Vec<f64>>,
+    cd_config: &CdConfig,
+    max_outer: usize,
+    outer_tol: f64,
+) -> (Array2<f64>, ProxNewtonPathReport, Vec<u64>)
+where
+    F: Fn(f64) -> Box<dyn Penalty>,
+{
     let p = design.n_features();
 
     let lambdas = match explicit_lambdas {
@@ -661,8 +694,10 @@ where
     let mut outer_converged_out = Vec::with_capacity(n_lams);
     let mut inner_iters_out = Vec::with_capacity(n_lams);
     let mut final_losses_out = Vec::with_capacity(n_lams);
+    let mut times_ns = Vec::with_capacity(n_lams);
 
     for (k, &lam) in lambdas.iter().enumerate() {
+        let lambda_start = Instant::now();
         let pen = make_penalty(lam);
         // Route through the screened variant — `lambda = Some(lam)` enables
         // gap-safe sphere screening + Anderson dual extrapolation on the
@@ -686,6 +721,7 @@ where
         let total_inner: usize = report.inner_iters.iter().sum();
         inner_iters_out.push(total_inner);
         final_losses_out.push(report.final_loss);
+        times_ns.push(lambda_start.elapsed().as_nanos() as u64);
     }
 
     (
@@ -697,6 +733,7 @@ where
             inner_iters: inner_iters_out,
             final_losses: final_losses_out,
         },
+        times_ns,
     )
 }
 
@@ -720,6 +757,37 @@ pub fn prox_newton_fused_solve_path<F>(
 where
     F: Fn(f64) -> Box<dyn Penalty>,
 {
+    let (betas, report, _times_ns) = prox_newton_fused_solve_path_timed(
+        design,
+        glm,
+        make_penalty,
+        n_lambdas,
+        lambda_min_ratio,
+        explicit_lambdas,
+        cd_config,
+        max_outer,
+        outer_tol,
+    );
+    (betas, report)
+}
+
+/// Same as [`prox_newton_fused_solve_path`], plus per-λ wall-clock time
+/// (nanoseconds). M-O6 surface.
+#[allow(clippy::too_many_arguments)]
+pub fn prox_newton_fused_solve_path_timed<F>(
+    design: &dyn DesignMatrix,
+    glm: &dyn GlmDatafit,
+    make_penalty: F,
+    n_lambdas: usize,
+    lambda_min_ratio: f64,
+    explicit_lambdas: Option<Vec<f64>>,
+    cd_config: &CdConfig,
+    max_outer: usize,
+    outer_tol: f64,
+) -> (Array2<f64>, ProxNewtonPathReport, Vec<u64>)
+where
+    F: Fn(f64) -> Box<dyn Penalty>,
+{
     let p = design.n_features();
 
     let lambdas = match explicit_lambdas {
@@ -740,8 +808,10 @@ where
     let mut outer_converged_out = Vec::with_capacity(n_lams);
     let mut inner_iters_out = Vec::with_capacity(n_lams);
     let mut final_losses_out = Vec::with_capacity(n_lams);
+    let mut times_ns = Vec::with_capacity(n_lams);
 
     for (k, &lam) in lambdas.iter().enumerate() {
+        let lambda_start = Instant::now();
         let pen = make_penalty(lam);
         let (new_beta, report) =
             prox_newton_fused_solve(design, glm, &*pen, warm, cd_config, max_outer, outer_tol);
@@ -752,6 +822,7 @@ where
         let total_inner: usize = report.inner_iters.iter().sum();
         inner_iters_out.push(total_inner);
         final_losses_out.push(report.final_loss);
+        times_ns.push(lambda_start.elapsed().as_nanos() as u64);
     }
 
     (
@@ -763,6 +834,7 @@ where
             inner_iters: inner_iters_out,
             final_losses: final_losses_out,
         },
+        times_ns,
     )
 }
 

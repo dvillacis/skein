@@ -119,6 +119,24 @@ pub fn solve_block_path<F>(
 where
     F: Fn(f64) -> Box<dyn GroupPenalty>,
 {
+    let (betas, report, _times_ns) =
+        solve_block_path_timed(design, datafit, make_penalty, groups, config);
+    (betas, report)
+}
+
+/// Same as [`solve_block_path`], plus per-λ wall-clock time (nanoseconds).
+/// M-O6 surface; lets downstream callers profile a fit without rebuilding
+/// with `SKEIN_PROFILE_PATH=1`.
+pub fn solve_block_path_timed<F>(
+    design: &dyn DesignMatrix,
+    datafit: &dyn Datafit,
+    make_penalty: F,
+    groups: &Groups,
+    config: &BlockPathConfig,
+) -> (Array2<f64>, BlockPathReport, Vec<u64>)
+where
+    F: Fn(f64) -> Box<dyn GroupPenalty>,
+{
     let p = design.n_features();
     let n_groups = groups.n_groups();
 
@@ -139,6 +157,7 @@ where
     let mut final_objs = Vec::with_capacity(n_lams);
     let mut working_set_sizes = Vec::with_capacity(n_lams);
     let mut kkt_passes_out = Vec::with_capacity(n_lams);
+    let mut times_ns = Vec::with_capacity(n_lams);
 
     // Per-group operator-norm Lipschitz, computed once for the whole path
     // and shared between the gap-safe screen and the inner CD.
@@ -149,6 +168,7 @@ where
     let mut prev_lambda: Option<f64> = None;
 
     for (k, &lam) in lambdas.iter().enumerate() {
+        let lambda_start = std::time::Instant::now();
         let pen = make_penalty(lam);
         let weights: Array1<f64> = pen.weights().to_owned();
 
@@ -251,6 +271,7 @@ where
         final_objs.push(last_report.final_obj);
         working_set_sizes.push(ws.len());
         kkt_passes_out.push(passes);
+        times_ns.push(lambda_start.elapsed().as_nanos() as u64);
 
         prev_residual = Some(final_residual);
         prev_lambda = Some(lam);
@@ -266,6 +287,7 @@ where
             working_set_sizes,
             kkt_passes: kkt_passes_out,
         },
+        times_ns,
     )
 }
 

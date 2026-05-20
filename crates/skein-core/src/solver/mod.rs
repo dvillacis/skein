@@ -22,7 +22,9 @@ mod prox_newton_block;
 pub use block_cd::{
     block_cd_solve_subset, block_cd_solve_subset_parallel, group_lipschitz, group_lipschitz_cache,
 };
-pub use block_path::{block_lambda_max, solve_block_path, BlockPathConfig, BlockPathReport};
+pub use block_path::{
+    block_lambda_max, solve_block_path, solve_block_path_timed, BlockPathConfig, BlockPathReport,
+};
 pub use block_path_lla::{solve_block_path_lla, BlockPathLLAReport};
 pub use cd::{cd_solve, CdConfig, CdReport};
 pub use convex_region::{group_convex_min_idx, scalar_convex_min_idx};
@@ -33,13 +35,17 @@ pub use lla::{
     surrogate_weights_bridge, surrogate_weights_cmcp, surrogate_weights_gel,
     surrogate_weights_group_mcp, surrogate_weights_group_scad, LLAReport,
 };
-pub use path::{lambda_grid, lambda_max, solve_path, PathConfig, PathReport, Screening};
+pub use path::{
+    lambda_grid, lambda_max, solve_path, solve_path_timed, PathConfig, PathReport, Screening,
+};
 pub use path_lla::{solve_path_lla, PathLLAReport};
 pub use prox_newton::{
-    prox_newton_fused_solve_path, prox_newton_solve, prox_newton_solve_path, ProxNewtonPathReport,
-    ProxNewtonReport,
+    prox_newton_fused_solve_path, prox_newton_fused_solve_path_timed, prox_newton_solve,
+    prox_newton_solve_path, prox_newton_solve_path_timed, ProxNewtonPathReport, ProxNewtonReport,
 };
-pub use prox_newton_block::{prox_newton_block_solve_path, ProxNewtonBlockPathReport};
+pub use prox_newton_block::{
+    prox_newton_block_solve_path, prox_newton_block_solve_path_timed, ProxNewtonBlockPathReport,
+};
 
 // --- Crate-internal solver helpers. Demoted from the v0.x public surface
 // during the v1.0 API freeze; intra-crate callers still reach them either

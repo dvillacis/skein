@@ -26,8 +26,8 @@ use skein_core::{
     groups::Groups,
     penalty::{GroupElasticNet, GroupLasso, GroupPenalty},
     solver::{
-        prox_newton_block_solve_path, surrogate_weights_group_mcp, surrogate_weights_group_scad,
-        CdConfig,
+        prox_newton_block_solve_path_timed, surrogate_weights_group_mcp,
+        surrogate_weights_group_scad, CdConfig,
     },
 };
 
@@ -196,11 +196,11 @@ where
         v
     });
 
-    let (betas_aug, report) = py.allow_threads(|| match scale_vec_eff {
+    let (betas_aug, report, times_ns) = py.allow_threads(|| match scale_vec_eff {
         Some(scales) => {
             let std_design = Standardized::new(DenseMatrix::new(x_eff), scales);
             let design = MultiTaskDesign::new(std_design, n_classes);
-            prox_newton_block_solve_path(
+            prox_newton_block_solve_path_timed(
                 &design,
                 &glm,
                 row_weights,
@@ -216,7 +216,7 @@ where
         }
         None => {
             let design = MultiTaskDesign::new(DenseMatrix::new(x_eff), n_classes);
-            prox_newton_block_solve_path(
+            prox_newton_block_solve_path_timed(
                 &design,
                 &glm,
                 row_weights,
@@ -250,6 +250,7 @@ where
     info.set_item("outer_converged", report.outer_converged)?;
     info.set_item("inner_iters", report.inner_iters)?;
     info.set_item("final_losses", report.final_losses)?;
+    info.set_item("times_ns", times_ns)?;
     info.set_item("n_classes", n_classes)?;
     info.set_item("n_features", p_user)?;
 
@@ -363,11 +364,11 @@ where
         v
     });
 
-    let (betas_aug, report) = py.allow_threads(|| match (fit_intercept, scale_vec_eff) {
+    let (betas_aug, report, times_ns) = py.allow_threads(|| match (fit_intercept, scale_vec_eff) {
         (true, Some(scales)) => {
             let std_design = Standardized::new(Augmented::new(csc), scales);
             let design = MultiTaskDesign::new(std_design, n_classes);
-            prox_newton_block_solve_path(
+            prox_newton_block_solve_path_timed(
                 &design,
                 &glm,
                 row_weights,
@@ -384,7 +385,7 @@ where
         (true, None) => {
             let augmented = Augmented::new(csc);
             let design = MultiTaskDesign::new(augmented, n_classes);
-            prox_newton_block_solve_path(
+            prox_newton_block_solve_path_timed(
                 &design,
                 &glm,
                 row_weights,
@@ -401,7 +402,7 @@ where
         (false, Some(scales)) => {
             let std_design = Standardized::new(csc, scales);
             let design = MultiTaskDesign::new(std_design, n_classes);
-            prox_newton_block_solve_path(
+            prox_newton_block_solve_path_timed(
                 &design,
                 &glm,
                 row_weights,
@@ -417,7 +418,7 @@ where
         }
         (false, None) => {
             let design = MultiTaskDesign::new(csc, n_classes);
-            prox_newton_block_solve_path(
+            prox_newton_block_solve_path_timed(
                 &design,
                 &glm,
                 row_weights,
@@ -451,6 +452,7 @@ where
     info.set_item("outer_converged", report.outer_converged)?;
     info.set_item("inner_iters", report.inner_iters)?;
     info.set_item("final_losses", report.final_losses)?;
+    info.set_item("times_ns", times_ns)?;
     info.set_item("n_classes", n_classes)?;
     info.set_item("n_features", p_user)?;
 
