@@ -26,7 +26,7 @@ open v0.x lever.
 | H3 — Property-based & fuzz tests | Hardening | ✅ done | 30 Rust `proptest`s + 4 Python `hypothesis` tests covering randomized invariants the hand-picked unit fixtures don't reach: sign / antisymmetry / monotonicity / magnitude-non-increase on `soft_threshold` / `elastic_net_prox` / `mcp_prox` / `scad_prox`, large-γ / large-a limit collapse to soft-threshold, group-prox rotation invariance for ℓ₂ group lasso / EN, BinomialLogit / PoissonLog / CoxPH surrogate gradient match against FD-of-loss (with both tie-handlers for Cox), Binomial / Poisson Hessian-diagonal match against the analytical Fisher diagonal, full `destandardize(standardize_β(β)) = β` bijection across every flag combo (center × scale × intercept) including `destandardize_path` and `rescale_weights_for_standardize` penalty preservation, and Python-side `weights = None ↔ ones` bit-equality through the PyO3 boundary plus per-feature permutation equivariance and a positive `sample_weights` no-op detector. Surfaced one architectural quirk (documented in `tests/test_weight_composition.py`): `sample_weights=None` and `sample_weights=ones(n)` take structurally different code paths in `crates/skein-py/src/ls.rs` (centered destandardize vs. augmented intercept column) and converge to the same optimum but along different iterate trajectories, so the identity holds approximately, not bit-exactly. |
 | H4 — Reproducibility audit | Hardening | ✅ done | `tests/test_reproducibility.py` pins every public RNG-consuming estimator with paired same-seed + different-seed fits: MCPPathCV / GroupLassoPathCV / LogisticLassoPathCV / AdaptiveLassoPathCV / MultinomialLassoPathCV (KFold-shuffle path), StabilitySelection (bootstrap subsampling), GraphicalStabilitySelection (graph stability), GraphicalBootstrap (CI bounds). Same seed → `np.array_equal` on `coef_` / `cv_scores_` / `selection_probabilities_` / `edge_selection_probabilities_` / `ci_lower_` / `ci_upper_`; different seed → measurable divergence (catches a silent dropped-RNG regression). BLAS-thread caveat documented inline: the Rust path solver itself is deterministic — the reproducibility we assert lives entirely in Python-side fold construction + bootstrap resampling, which is BLAS-thread-independent at the small problem sizes used. |
 | P1 — Native sparse-group SCAD block-CD for GLMs | Performance | ✅ done | dropped the LLA layer for logistic / Poisson / Cox sparse-group SCAD (dense + sparse, six PyO3 builders) by routing each closure through `SparseGroupScad::with_coord_weights` instead of `surrogate_sparse_group_scad` + `SparseGroupLasso`. Closes the last LLA-wrapped non-convex group family in the GLM PyO3 surface (sparse-group MCP was already native per M14c.2). All 11 `tests/test_sparse_group_scad.py` cases pass and the broader 605-pytest / 448-cargo-lib suites stay green |
-| P2 — Scalar MCP/SCAD path overhead investigation | Performance | ⏳ planned | M13.5 carryover, re-scoped — scalar MCP/SCAD route through `solve_path` directly (closed-form prox), not `path_lla`; the M14c.1 short-circuit already covers the LLA-side users (bridge/adaptive/multitask). Current `medium/deep` gap is 1.50× MCP vs Lasso (was 1.32× pre-M14e); EN-vs-Lasso is 1.24× so most of MCP's gap is generic non-trivial-prox cost, ~1.21× excess is genuinely MCP-specific. Profile-then-fix; smaller upper bound than originally claimed. |
+| P2 — Scalar MCP/SCAD path overhead investigation | Performance | ✅ closed (no structural lever) | profiled with `SKEIN_PROFILE_PATH` and a microbench + per-coord-visit attribution harness (`crates/skein-core/examples/{mcp_ls_medium,mcp_vs_lasso_micro,mcp_cd_attribution}.rs`); the medium/deep MCP-vs-Lasso gap localises entirely to `inner_cd` (penalty `prox_coord` is actually *faster* than Lasso's; `value(beta)` adds <2 µs/λ) and the driver is **MCP's bias-correction property creating ~31% more total coord work**: ~20% more inner CD iters per λ (firm-threshold settles slower) and a ~6% larger per-λ working set (warm-started support carries the bias-corrected coefficients forward). Per-coord-visit BLAS cost is identical (axpy 1.18×, grad 1.21× — exactly proportional to visit count). This is the same property that makes MCP useful versus Lasso; the right next attack is P6's uniform inner-CD coord-visit speedup. |
 | P3 — Cross-platform BLAS in distributed wheels | Performance | ⏳ planned | M10.G carryover — Linux/manylinux2014 already wires OpenBLAS; Windows wheels still ship without BLAS; MKL feature unwired |
 | P4 — Pre-pass gap-safe screening | Performance | ⏳ planned | M10.H carryover — requires H1 to measure |
 | P5 — M13.1 saturation-threshold tuning | Performance | ⏳ planned | conservative 0.5 may leave headroom on deep regime; cheap ablation, gated on H1 |
@@ -298,48 +298,137 @@ logistic predict-proba smoke + dense-sparse equivalence, Poisson
 smoke, Cox smoke, and GLM `a < 2` rejection. Full suite stays at 448
 cargo lib + 605 pytest, all green.
 
-### P2 — Scalar MCP/SCAD path overhead investigation
+### ✅ P2 — Scalar MCP/SCAD path overhead investigation
 
-**Carries M13.5 forward, but re-scoped.** Initial framing (taken
-from the v0.x roadmap) was that scalar MCP/SCAD pays "LLA outer
-wrapper cost" and that porting Phase 2.3's short-circuit would
-close it. Investigation post-v1.0 shows that's wrong: scalar
-MCP/SCAD don't go through `solve_path_lla` at all — they call
-`solve_path` directly with the `Mcp`/`Scad` penalty's closed-form
-prox. M14c.1 already shipped the short-circuit for `path_lla.rs`,
-and its scope (bridge / adaptive / multitask) really was the whole
-LLA-side surface; nothing was deferred.
+**Closed 2026-05-20 with a "no structural lever" outcome.** The
+gap localises to inner-CD coord-visit count, which is a direct
+consequence of MCP's bias-correction property — the same property
+that motivates choosing MCP over Lasso in the first place. P6's
+column-batching is the right next attack.
 
-Current `medium/deep` snapshot (committed in
-`benches/v2/results/scenarios/`):
+Background: the initial framing (carried from v0.x M13.5) was that
+scalar MCP/SCAD pays "LLA outer wrapper cost". That turned out to
+be wrong — scalar MCP/SCAD call `solve_path` directly with the
+`Mcp`/`Scad` closed-form prox; M14c.1's short-circuit already
+covered the LLA-side surface (bridge / adaptive / multitask) and
+nothing was deferred.
+
+The `medium/deep` snapshot still shows a real gap:
 
 | cell          | Lasso | MCP   | MCP/Lasso | EN/Lasso |
 |---------------|------:|------:|----------:|---------:|
 | medium/deep   | 1.13s | 1.70s | **1.50×** | 1.24×    |
 | medium/sparse | 0.37s | 0.46s | 1.24×     | 1.01×    |
 
-So the MCP gap exists, but EN-vs-Lasso shows the same 1.24× on deep
-even with a near-soft-threshold prox. The MCP-specific excess on top
-of that is ≈1.21× on deep, ≈1.24× on sparse — meaningful but smaller
-than M13.5's pre-M14e 1.32× claim. Upper bound on the medium/deep
-fix is ~0.3 s.
+EN-vs-Lasso accounts for the generic non-trivial-prox cost; the
+MCP-specific excess on top is ≈1.21× on deep, ≈1.24× on sparse.
 
-The real work is therefore:
+**Investigation artifacts** (kept as reusable profiling tools for
+P6 and future perf work):
 
-1. Profile (`SKEIN_PROFILE_PATH=1` + the
-   `crates/skein-core/examples/lasso_ls_medium.rs` pattern adapted
-   to MCP) to identify where the genuine MCP-specific overhead lives
-   — prox call cost, KKT-pass re-evaluation, weight-vector construction
-   per λ, or something else.
-2. Decide if the bottleneck is amenable to a focused fix or is
-   structural ("MCP firm-threshold is just more work per coord
-   update than soft-threshold, full stop").
-3. Either ship the fix or close P2 with a "no structural lever
-   available" note.
+- `crates/skein-core/examples/mcp_ls_medium.rs` — MCP sibling of
+  `lasso_ls_medium.rs`. Runs four cells (lasso/deep, mcp/deep,
+  lasso/sparse, mcp/sparse), emits the `SKEIN_PROFILE_PATH` phase
+  breakdown per cell, prints per-λ working-set distribution + a
+  Σ ws × iter coord-work proxy.
+- `crates/skein-core/examples/mcp_vs_lasso_micro.rs` — isolates
+  `prox_coord` and `value(beta)` so we can attribute the inner-CD
+  gap to penalty-side virtual calls vs design-side BLAS.
+- `crates/skein-core/examples/mcp_cd_attribution.rs` — re-implements
+  the `cd_solve_subset` loop in-line so we can count nonzero updates
+  per sweep and time `coord_grad` / `col_axpy` / `value(r)` separately.
 
-Lower priority than originally assigned given the smaller upper
-bound and the fact that the fix shape isn't pre-known. Reasonable
-to defer until another investigation surfaces a similar pattern.
+**Findings** (host = macOS arm64 + Accelerate):
+
+Phase log (medium/deep, 100 λs, 1 warm-up + 1 measured fit):
+
+```
+              Lasso        MCP         Δ
+  setup       0.15 ms      0.11 ms     ~0
+  screening   5.2 ms       5.2 ms      ~0
+  lipschitz   0.36 ms      0.39 ms     ~0
+  inner_cd    697 ms       920 ms      +223 ms   ← gap is here
+  dual_extrap 0.00 ms      0.00 ms     ~0
+  outer_state 143 ms       143 ms      ~0
+  bookkeeping 0.00 ms      0.00 ms     ~0
+```
+
+Microbench (80k prox calls + 400 value calls):
+
+```
+  prox_coord  Lasso   6.5 ns/call   MCP   3.1 ns/call   (MCP faster — Lasso routes through ElasticNet with α=1)
+  value(beta) Lasso  1.9 µs/call    MCP   2.4 µs/call   (MCP slower, but <2 µs/λ total)
+```
+
+Per-λ projected penalty cost: ~25 µs for Lasso, ~17 µs for MCP.
+Observed inner_cd gap: **2230 µs / λ**. So `prox_coord` and
+`value(beta)` together account for <2 % of the gap.
+
+Single-λ inner-CD attribution at λ_max × 1e-3, cold-start, full
+1000-feature sweep:
+
+```
+              iters   visits   nz_updates    grad      axpy
+  Lasso       10      10000    8701 (87.0%)  25.2 ms   17.9 ms
+  MCP         12      12000   10323 (86.0%)  30.6 ms   21.1 ms
+              ratio   1.20×   1.20×          1.21×     1.18×
+```
+
+Per-coord-visit BLAS cost is essentially identical; MCP just needs
+~20 % more sweeps to converge from cold start.
+
+Path-level `working_set_sizes` × `iters` coord-work proxy:
+
+```
+  Lasso deep:   91,967 coord-visits   (1.395 s wall)
+  MCP   deep:  120,648 coord-visits   (1.155 s wall)   1.31× more work
+  Lasso sparse:  2,636
+  MCP   sparse:  4,866                                  1.85× more work (tiny absolute)
+```
+
+The 1.31× coord-work ratio matches the inner_cd wall ratio (1.32×)
+almost exactly. So the per-iter wall difference is entirely
+explained by **more total coord work**, not higher per-coord cost.
+
+**Why this is structural.** MCP's firm-threshold de-biases
+moderate-|β| coordinates that Lasso shrinks aggressively. Two
+downstream consequences:
+
+1. **Larger warm-started support.** Once a coord activates on the
+   MCP path it tends to stay active (firm-threshold caps shrinkage
+   at γλ then flattens). The priority rule sizes the WS as
+   `(n_support × 2).max(p0).min(p)`, so MCP's larger warm-started
+   support yields a ~6 % larger average WS per λ.
+2. **More inner CD sweeps to settle.** Soft-threshold reaches a
+   coord's optimum in one shot when far from the boundary; firm-
+   threshold's stair-step rescaling needs more passes to converge
+   to coefficient-space tol.
+
+Both factors compound multiplicatively. Combined: ~20 % more iters
+× ~6 % bigger WS ≈ 27–31 % more total coord work, which is exactly
+what we measure.
+
+**Levers considered and rejected:**
+
+- *Tightening the WS-growth factor* (replace `n_support × 2` with
+  a smaller multiplier for MCP). Cuts WS but pushes work onto more
+  outer KKT passes; the existing `outer.violators` mechanism then
+  re-adds features one-at-a-time. Net effect: not a free win, and
+  the same factor governs the strong-rule WS sizing for every
+  separable penalty — regressing Lasso/EN to win on MCP is a bad
+  trade.
+- *MCP-aware coord ordering* (visit large-|β| coords first since
+  they're more likely to be at firm-saturation and need no update).
+  Speculative, and re-ordering breaks the inner-CD cyclic-convergence
+  argument; not worth a load-bearing implementation.
+
+**Why P6 is the right next step.** The remaining cost lives in
+`cd_solve_subset`'s `O(|ws| · n)` per-sweep BLAS work. P6's
+inner-CD column batching (process multiple coords per X-column
+scan) speeds up the coord-visit path uniformly, regardless of
+penalty. MCP has more visits per fit, so it benefits proportionally
+more from a P6 fix — and P6's structural change is what M10.I
+already flagged in the v0.x roadmap.
 
 ### P3 — Cross-platform BLAS in distributed wheels
 
