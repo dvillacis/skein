@@ -26,14 +26,14 @@ open v0.x lever.
 | H3 — Property-based & fuzz tests | Hardening | ⏳ planned | `proptest` on prox / threshold / surrogate identities; closes the long tail C1/C2 left |
 | H4 — Reproducibility audit | Hardening | ⏳ planned | RNG-seed coverage across stability selection, CV, bootstrap, multinomial init |
 | P1 — Native sparse-group MCP block-CD for GLMs | Performance | ⏳ planned | drops the LLA layer for logistic / Poisson / Cox sparse-group MCP (sibling of M13.4c) |
-| P2 — Scalar LLA one-outer-iter short-circuit | Performance | ⏳ planned | M13.5 carryover — bridge / adaptive / scalar MCP / SCAD still pay full LLA setup per λ in the convex regime |
+| P2 — Scalar MCP/SCAD path overhead investigation | Performance | ⏳ planned | M13.5 carryover, re-scoped — scalar MCP/SCAD route through `solve_path` directly (closed-form prox), not `path_lla`; the M14c.1 short-circuit already covers the LLA-side users (bridge/adaptive/multitask). Current `medium/deep` gap is 1.50× MCP vs Lasso (was 1.32× pre-M14e); EN-vs-Lasso is 1.24× so most of MCP's gap is generic non-trivial-prox cost, ~1.21× excess is genuinely MCP-specific. Profile-then-fix; smaller upper bound than originally claimed. |
 | P3 — Cross-platform BLAS in distributed wheels | Performance | ⏳ planned | M10.G carryover — Linux/manylinux2014 already wires OpenBLAS; Windows wheels still ship without BLAS; MKL feature unwired |
 | P4 — Pre-pass gap-safe screening | Performance | ⏳ planned | M10.H carryover — requires H1 to measure |
 | P5 — M13.1 saturation-threshold tuning | Performance | ⏳ planned | conservative 0.5 may leave headroom on deep regime; cheap ablation, gated on H1 |
 | P6 — Inner-CD column batching at large n | Performance | ⏳ planned | M13.6 follow-up — memory-bandwidth wall confirmed at n=50k, p=5k; structural change to `cd_solve_subset` |
 | O1 — `cargo-semver-checks` in CI | Operability | ✅ done | v1.0 stability promise machine-checked on every PR via `--baseline-rev v1.0.0`; 222 checks vs the freeze surface |
 | O2 — `cargo-audit` + `pip-audit` + dependabot | Operability | ⏳ planned | supply-chain hygiene baseline |
-| O3 — Python 3.13 + NumPy 2.x in CI matrix | Operability | ⏳ planned | 3.13 GA was 2024-10; NumPy 2.x has been stable for 12+ months |
+| O3 — Python 3.13 + NumPy 2.x in CI matrix | Operability | ✅ done | 3.13 added to the `python` job matrix; local pytest on 3.13 + NumPy 2.4.6 green (506 passed). NumPy 2.x was already the resolver default at v1.0 — `numpy>=1.24` floor stays; no API-removal hazards in the Python codebase |
 | O4 — Expanded wheel matrix (musllinux + Linux aarch64) | Operability | ⏳ planned | currently `CIBW_SKIP: "*-musllinux_*"`; aarch64 dropped from v0.1.x matrix |
 | O5 — `docs/benchmarks/speed.md` consolidation | Operability | ⏳ planned | M9.5 carryover — single landing page for all perf claims with provenance |
 | O6 — Structured timing / iteration surface | Operability | ⏳ planned | optional per-λ breakdown returned from path solvers; enables user-driven profiling without rebuilding |
@@ -165,18 +165,48 @@ Expected impact: same order as M13.4c (2–3× wall on the
 medium-deep cell). Touches `solver/prox_newton_block.rs` and the
 six PyO3 builders that dispatch sparse-group MCP for GLMs.
 
-### P2 — Scalar LLA one-outer-iter short-circuit
+### P2 — Scalar MCP/SCAD path overhead investigation
 
-**Carries M13.5 forward.** Phase 2.3 (M14c.1) ported the scalar-LLA
-short-circuit to `path_lla.rs` for bridge, adaptive lasso, and
-multitask LLA, but the scalar MCP / SCAD paths in the convex regime
-(γ large enough that LLA converges in one iter per λ) still pay full
-setup cost. Same fix shape: at outer iter 1, if the surrogate-weight
-delta is below ε, accept the current β as the solution and move to
-the next λ without a second pass.
+**Carries M13.5 forward, but re-scoped.** Initial framing (taken
+from the v0.x roadmap) was that scalar MCP/SCAD pays "LLA outer
+wrapper cost" and that porting Phase 2.3's short-circuit would
+close it. Investigation post-v1.0 shows that's wrong: scalar
+MCP/SCAD don't go through `solve_path_lla` at all — they call
+`solve_path` directly with the `Mcp`/`Scad` penalty's closed-form
+prox. M14c.1 already shipped the short-circuit for `path_lla.rs`,
+and its scope (bridge / adaptive / multitask) really was the whole
+LLA-side surface; nothing was deferred.
 
-Expected impact: closes the ~25–30 % gap from `skein Lasso medium /
-dense` to `skein MCP medium / dense` that M13.5 measured.
+Current `medium/deep` snapshot (committed in
+`benches/v2/results/scenarios/`):
+
+| cell          | Lasso | MCP   | MCP/Lasso | EN/Lasso |
+|---------------|------:|------:|----------:|---------:|
+| medium/deep   | 1.13s | 1.70s | **1.50×** | 1.24×    |
+| medium/sparse | 0.37s | 0.46s | 1.24×     | 1.01×    |
+
+So the MCP gap exists, but EN-vs-Lasso shows the same 1.24× on deep
+even with a near-soft-threshold prox. The MCP-specific excess on top
+of that is ≈1.21× on deep, ≈1.24× on sparse — meaningful but smaller
+than M13.5's pre-M14e 1.32× claim. Upper bound on the medium/deep
+fix is ~0.3 s.
+
+The real work is therefore:
+
+1. Profile (`SKEIN_PROFILE_PATH=1` + the
+   `crates/skein-core/examples/lasso_ls_medium.rs` pattern adapted
+   to MCP) to identify where the genuine MCP-specific overhead lives
+   — prox call cost, KKT-pass re-evaluation, weight-vector construction
+   per λ, or something else.
+2. Decide if the bottleneck is amenable to a focused fix or is
+   structural ("MCP firm-threshold is just more work per coord
+   update than soft-threshold, full stop").
+3. Either ship the fix or close P2 with a "no structural lever
+   available" note.
+
+Lower priority than originally assigned given the smaller upper
+bound and the fact that the fix shape isn't pre-known. Reasonable
+to defer until another investigation surfaces a similar pattern.
 
 ### P3 — Cross-platform BLAS in distributed wheels
 
@@ -288,11 +318,41 @@ Notes on the implementation:
 - Dependabot config for `Cargo.toml`, `pyproject.toml`,
   `.github/workflows/*.yml`. Weekly cadence.
 
-### O3 — Python 3.13 + NumPy 2.x in CI matrix
+### ✅ O3 — Python 3.13 + NumPy 2.x in CI matrix
 
-CI matrix currently pins `["3.10", "3.11", "3.12"]` (`ci.yml`). 3.13
-is in scope; NumPy 2.x is in scope. Pin both as additive matrix
-entries first (fail-fast = false), then promote once green.
+**Shipped 2026-05-20.** Python 3.13 added to the `python` job
+matrix (`ci.yml`); matrix is now `["3.10", "3.11", "3.12", "3.13"]`
+on both ubuntu-latest and macos-latest. `fail-fast: false` was
+already set on the python job, so a flake on any single row doesn't
+gate the others.
+
+Findings during the audit:
+
+- **NumPy 2.x was already the resolver default at v1.0.** The
+  `numpy>=1.24` / `scipy>=1.10` floors in `pyproject.toml` had no
+  upper cap, and modern pip on every Python in the matrix already
+  picks NumPy 2.x. Local `.venv/` (Python 3.12) was on NumPy 2.4.4
+  before this milestone landed; the 3.13 install picks NumPy 2.4.6.
+  The matrix bump is what makes "we support 3.13" a tested
+  guarantee instead of a hopeful one.
+- **No Python-code hazards.** Grepped `python/` and `tests/` for
+  removed NumPy-2 APIs (`np.float_`, `np.cast`, `np.NaN`, `np.product`,
+  `np.alltrue`, `np.in1d`, `np.trapz`, `numpy.core`, etc.) — zero
+  hits. Nothing to migrate.
+- **Single abi3 wheel covers all four Python versions.** The
+  maturin build emits `cp310-abi3` (per `crates/skein-py/Cargo.toml`'s
+  `abi3-py310`), so 3.11/3.12/3.13 all consume the same artifact.
+  The matrix exercises Python-level dispatch + each interpreter's
+  stdlib + NumPy resolution, not separate Rust builds.
+- **NumPy 1.x compatibility lane not added.** The `numpy>=1.24`
+  floor stays as a written promise but is no longer tested in CI;
+  modern resolvers always pick 2.x. If a user-reported regression
+  shows up, the cheapest fix is to bump the floor to `numpy>=2.0`
+  in a future minor and drop the unenforced 1.x claim.
+
+Acceptance: 506 tests passed on Python 3.13 + NumPy 2.4.6 +
+SciPy 1.17.1 + sklearn 1.8.0 locally (`/tmp/skein_py313`,
+`SKEIN_REQUIRE_FIXTURES=1`, ~7m38s wall). Import smoke passed.
 
 ### O4 — Expanded wheel matrix
 

@@ -87,7 +87,14 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python: ["3.10", "3.11", "3.12"]
+        # 3.10 is `requires-python` floor; 3.13 is the latest stable.
+        # The maturin build emits a single cp310-abi3 wheel (per
+        # `pyproject.toml [tool.maturin] features = ["pyo3/extension-module"]`
+        # and `crates/skein-py/Cargo.toml`'s `abi3-py310`), so 3.11/3.12/3.13
+        # all consume the same artifact — the matrix exercises the
+        # *Python-level* code paths against each interpreter's stdlib +
+        # NumPy 2.x resolution, not separate Rust builds.
+        python: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
