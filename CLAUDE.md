@@ -304,6 +304,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p skein-core --lib solve_path_screening_on_matches_screening_off_within_tol -- --nocapture
 cargo test -p skein-core --lib
 
+# Semver job — enforces the v1.0 Rust API freeze.
+# One-time setup: `cargo install cargo-semver-checks --locked`.
+# When cutting 2.0, bump the baseline-rev to the new major's tag.
+cargo semver-checks check-release -p skein-core --default-features --baseline-rev v1.0.0
+
 # Python job — every Python version in the CI matrix.
 maturin develop --release --features=blas-accelerate
 ruff check python/ tests/

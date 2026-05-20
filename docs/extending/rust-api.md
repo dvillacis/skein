@@ -250,6 +250,21 @@ against this page. New top-level `pub` items that aren't listed here
 either get added on intent or stay `pub(crate)`. We treat the diff as
 part of the release-prep checklist documented in `CLAUDE.md`.
 
+From v1.0 onward this is also a CI gate: `.github/workflows/ci.yml`
+runs `cargo-semver-checks check-release -p skein-core
+--default-features --baseline-rev v1.0.0` on every PR. A breaking
+change to the frozen surface (removed item, renamed export, signature
+change, new required trait method) fails the `semver` job. The only
+path to a breaking change is a 2.0 release: bump the baseline tag in
+the workflow, list the breakage in `CHANGELOG.md`, ship the new
+major. To reproduce the check locally:
+
+```bash
+cargo install cargo-semver-checks --locked    # one-time
+cargo semver-checks check-release -p skein-core \
+    --default-features --baseline-rev v1.0.0
+```
+
 ## See also
 
 - [Extending: backends](backend.md) — implementing `DesignMatrix`.

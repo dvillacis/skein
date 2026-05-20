@@ -45,6 +45,41 @@ jobs:
       - name: cargo test
         run: cargo test -p skein-core --lib
 
+  semver:
+    name: semver-checks (skein-core vs v1.0.0)
+    # Enforce the v1.0 Rust API stability promise (ROADMAP.md O1 +
+    # docs/extending/rust-api.md). `skein-core`'s `pub` surface — the
+    # re-exports in `lib.rs` plus everything reachable through the
+    # public modules — is frozen until 2.0; cargo-semver-checks fails
+    # the job on any breaking change (removed/renamed item, changed
+    # signature, added required trait method, etc.). skein-py is
+    # intentionally not checked: the PyO3 macro-generated symbols are
+    # not the contract, the Python API is.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # cargo-semver-checks --baseline-rev needs the v1.0.0 tag
+          # reachable in .git. GHA's default shallow checkout omits
+          # tags; fetch-depth: 0 pulls the full history so the tag
+          # resolves locally without an extra `git fetch --tags`.
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          # Prebuilt binary (~seconds). `cargo install
+          # cargo-semver-checks` compiles for ~6 min on a cold cache.
+          tool: cargo-semver-checks
+      - name: cargo-semver-checks against v1.0.0
+        # --default-features only: skein-core's default is empty (no
+        # BLAS), and the BLAS feature flags are mutually exclusive
+        # implementation switches that don't alter the public surface.
+        # --all-features would fail to build (blas-accelerate +
+        # blas-openblas both alias `blas-src as raw`); --default-features
+        # gives a pure-Rust matvec build with the full API surface intact.
+        run: cargo semver-checks check-release -p skein-core --default-features --baseline-rev v1.0.0
+
   python:
     name: python ${{ matrix.python }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
