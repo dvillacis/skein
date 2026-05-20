@@ -7,7 +7,14 @@ sizes:
   small:   { n: 1000,   p: 200,   sparsity: 0.0 }
   medium:  { n: 10000,  p: 1000,  sparsity: 0.0 }
   large:   { n: 50000,  p: 5000,  sparsity: 0.0 }
-  xlarge:  { n: 100000, p: 10000, sparsity: 0.0 }    # opt-in only
+  xlarge:  { n: 100000, p: 10000, sparsity: 0.0 }
+  # `xlarge` lands in the headline matrix per H1 (post-v1.0 roadmap),
+  # but cells are gated to a `packages: [skein]`-only or
+  # Python-only subset — R comparators (glmnet/ncvreg/grpreg) and
+  # some Python ones (sklearn `coordinate_descent`) hit memory or
+  # wall-clock ceilings before n=100k × p=10k dense. The asymmetry
+  # is documented in `paper/manifest.json` under
+  # `at_scale_comparator_gap`.
 
 regimes:
   # Internal regime keys are kept short. The path extent is named by
@@ -43,6 +50,19 @@ headline:
     packages: [skein, sklearn, celer, skglm]
     r_packages: [glmnet]
 
+  # H1 — at-scale tier (n=100k, p=10k). Python comparators kept where
+  # they fit (celer + skglm); sklearn coordinate_descent OOMs on dense
+  # 8 GB X under default thread count; R comparators dropped (glmnet
+  # binary is 32-bit `nlam × nvar` index space).
+  - id: ls_lasso
+    datafit: gaussian
+    penalty: lasso
+    sizes: [xlarge]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein, celer, skglm]
+    r_packages: []
+
   - id: ls_mcp
     datafit: gaussian
     penalty: mcp
@@ -51,6 +71,18 @@ headline:
     seeds: [0, 1, 2, 3, 4]
     packages: [skein, skglm]
     r_packages: [ncvreg]
+
+  # H1 — at-scale tier. skglm kept (handles MCP at scale); ncvreg
+  # dropped (its `XX` matrix is `p × p` dense, ~800 MB at p=10k just
+  # for that intermediate).
+  - id: ls_mcp
+    datafit: gaussian
+    penalty: mcp
+    sizes: [xlarge]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein, skglm]
+    r_packages: []
 
   - id: ls_scad
     datafit: gaussian
@@ -80,6 +112,17 @@ headline:
     packages: [skein]
     r_packages: [grpreg]
 
+  # H1 — at-scale tier. Skein-only; grpreg's Fortran core copies `X`
+  # for `XX.j` group-coord updates (peak RSS ≈ 3× X size).
+  - id: ls_group_lasso
+    datafit: gaussian
+    penalty: group_lasso
+    sizes: [xlarge]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: []
+
   - id: ls_group_mcp
     datafit: gaussian
     penalty: group_mcp
@@ -107,6 +150,18 @@ headline:
     seeds: [0, 1, 2, 3, 4]
     packages: [skein]
     r_packages: [glmnet]
+
+  # H1 — at-scale tier (n=100k, p=10k). Skein-only at this size; glmnet
+  # binomial path on 100k × 10k dense exceeds the per-cell wall budget
+  # (~ hour). The asymmetry is documented in paper/manifest.json.
+  - id: logistic_lasso
+    datafit: logistic
+    penalty: lasso
+    sizes: [xlarge]
+    regimes: [deep, sparse]
+    seeds: [0, 1, 2, 3, 4]
+    packages: [skein]
+    r_packages: []
 
   - id: logistic_mcp
     datafit: logistic

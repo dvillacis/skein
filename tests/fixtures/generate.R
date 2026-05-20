@@ -455,6 +455,177 @@ make_logistic_problem_mid <- function(seed = 411) {
 }
 
 # ============================================================
+# H1 — at-scale R-anchor fixtures (n=5000, p=500 default; tunable
+# via SKEIN_FIXTURE_LARGE_N / SKEIN_FIXTURE_LARGE_P env vars)
+# ============================================================
+#
+# A scale-up of the M14c.3 mid-tier covering the same LS + logistic
+# Lasso/MCP families. The default size (n=5000, p=500) is a 10×
+# extension over mid, large enough to expose the scale-dependent
+# regressions that motivated H1 (M13.6 memory-bandwidth wall,
+# Phase 2.3 strong-rule misfire at high p, etc.) while keeping each
+# JSON ~25 MB raw — still tractable locally.
+#
+# The roadmap aspiration is n=50000, p=2000, which would produce
+# ~800 MB JSON per fixture. The size is therefore tunable via
+# environment variable: maintainers regenerating overnight on a
+# machine with adequate RAM can bump it without editing this file.
+#
+# **Never committed** — same pattern as the mid-tier, gated through
+# `_skipped_if_missing_optional` on the Python side. Run
+# `Rscript tests/fixtures/generate.R` locally to populate; CI never
+# regenerates these.
+
+.env_int <- function(name, default) {
+  val <- Sys.getenv(name, unset = NA)
+  if (is.na(val) || val == "") default else as.integer(val)
+}
+LARGE_N <- .env_int("SKEIN_FIXTURE_LARGE_N", 5000L)
+LARGE_P <- .env_int("SKEIN_FIXTURE_LARGE_P", 500L)
+cat(sprintf("H1 large-tier fixture size: n=%d, p=%d\n", LARGE_N, LARGE_P))
+
+make_ls_problem_large <- function(seed = 501) {
+  set.seed(seed)
+  n <- LARGE_N
+  p <- LARGE_P
+  X <- matrix(rnorm(n * p), n, p)
+  beta <- numeric(p)
+  # Top-2% sparse: ~10 active features at p=500, ~40 at p=2000.
+  k_active <- max(8L, as.integer(round(0.02 * p)))
+  beta[1:k_active] <- sign(rnorm(k_active)) *
+                       (0.4 + 1.6 * runif(k_active))
+  y <- X %*% beta + 0.2 * rnorm(n)
+  list(X = X, y = as.numeric(y), beta_true = beta, n = n, p = p)
+}
+
+make_logistic_problem_large <- function(seed = 511) {
+  set.seed(seed)
+  n <- LARGE_N
+  p <- LARGE_P
+  X <- matrix(rnorm(n * p), n, p)
+  beta <- numeric(p)
+  k_active <- max(6L, as.integer(round(0.015 * p)))
+  beta[1:k_active] <- sign(rnorm(k_active)) *
+                       (0.4 + 1.2 * runif(k_active))
+  eta <- X %*% beta
+  prob <- 1 / (1 + exp(-eta))
+  y <- as.numeric(runif(n) < prob)
+  list(X = X, y = y, beta_true = beta, n = n, p = p)
+}
+
+# ---- Fixture L1: glmnet gaussian lasso path, at-scale ----
+{
+  prob <- make_ls_problem_large(seed = 501)
+  fit <- glmnet(prob$X, prob$y, family = "gaussian", alpha = 1,
+                standardize = TRUE, intercept = TRUE,
+                control = list(thresh = 1e-10), nlambda = 50)
+  coef_full <- as.matrix(coef(fit))
+  intercepts <- coef_full[1, ]
+  coefs <- t(coef_full[-1, ])
+  write_fixture("glmnet_lasso_gaussian_large", list(
+    package = "glmnet",
+    package_version = as.character(packageVersion("glmnet")),
+    family = "gaussian",
+    alpha = 1.0,
+    standardize = TRUE,
+    intercept = TRUE,
+    thresh = 1e-10,
+    scale = "large",
+    n = prob$n, p = prob$p,
+    seed = 501,
+    X = prob$X, y = prob$y,
+    beta_true = prob$beta_true,
+    lambdas = as.numeric(fit$lambda),
+    coefs = coefs,
+    intercepts = as.numeric(intercepts)
+  ))
+}
+
+# ---- Fixture L2: ncvreg gaussian MCP path, at-scale ----
+{
+  prob <- make_ls_problem_large(seed = 503)
+  fit <- ncvreg(prob$X, prob$y, family = "gaussian",
+                penalty = "MCP", gamma = 3.0,
+                eps = 1e-10, max.iter = 100000,
+                nlambda = 50)
+  coef_full <- as.matrix(fit$beta)
+  intercepts <- coef_full[1, ]
+  coefs <- t(coef_full[-1, ])
+  write_fixture("ncvreg_mcp_gaussian_large", list(
+    package = "ncvreg",
+    package_version = as.character(packageVersion("ncvreg")),
+    family = "gaussian",
+    penalty = "MCP",
+    gamma = 3.0,
+    eps = 1e-10,
+    scale = "large",
+    n = prob$n, p = prob$p,
+    seed = 503,
+    X = prob$X, y = prob$y,
+    beta_true = prob$beta_true,
+    lambdas = as.numeric(fit$lambda),
+    coefs = coefs,
+    intercepts = as.numeric(intercepts)
+  ))
+}
+
+# ---- Fixture L3: glmnet binomial lasso path, at-scale ----
+{
+  prob <- make_logistic_problem_large(seed = 511)
+  fit <- glmnet(prob$X, prob$y, family = "binomial", alpha = 1,
+                standardize = TRUE, intercept = TRUE,
+                control = list(thresh = 1e-10), nlambda = 50)
+  coef_full <- as.matrix(coef(fit))
+  intercepts <- coef_full[1, ]
+  coefs <- t(coef_full[-1, ])
+  write_fixture("glmnet_lasso_binomial_large", list(
+    package = "glmnet",
+    package_version = as.character(packageVersion("glmnet")),
+    family = "binomial",
+    alpha = 1.0,
+    standardize = TRUE,
+    intercept = TRUE,
+    thresh = 1e-10,
+    scale = "large",
+    n = prob$n, p = prob$p,
+    seed = 511,
+    X = prob$X, y = prob$y,
+    beta_true = prob$beta_true,
+    lambdas = as.numeric(fit$lambda),
+    coefs = coefs,
+    intercepts = as.numeric(intercepts)
+  ))
+}
+
+# ---- Fixture L4: ncvreg binomial MCP path, at-scale ----
+{
+  prob <- make_logistic_problem_large(seed = 513)
+  fit <- ncvreg(prob$X, prob$y, family = "binomial",
+                penalty = "MCP", gamma = 3.0,
+                eps = 1e-10, max.iter = 100000,
+                nlambda = 50)
+  coef_full <- as.matrix(fit$beta)
+  intercepts <- coef_full[1, ]
+  coefs <- t(coef_full[-1, ])
+  write_fixture("ncvreg_mcp_binomial_large", list(
+    package = "ncvreg",
+    package_version = as.character(packageVersion("ncvreg")),
+    family = "binomial",
+    penalty = "MCP",
+    gamma = 3.0,
+    eps = 1e-10,
+    scale = "large",
+    n = prob$n, p = prob$p,
+    seed = 513,
+    X = prob$X, y = prob$y,
+    beta_true = prob$beta_true,
+    lambdas = as.numeric(fit$lambda),
+    coefs = coefs,
+    intercepts = as.numeric(intercepts)
+  ))
+}
+
+# ============================================================
 # M14a R-anchor fixtures (independent-reference correctness gates)
 # ============================================================
 #

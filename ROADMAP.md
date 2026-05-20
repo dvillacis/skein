@@ -21,7 +21,7 @@ open v0.x lever.
 
 | Milestone | Theme | Status | Notes |
 |-----------|-------|--------|-------|
-| H1 — At-scale bench + fixture tier (n ≥ 100k) | Hardening | ⏳ planned | M12 P1 + M9.4 carryover; prerequisite for any future perf claim at the size users care about |
+| H1 — At-scale bench + fixture tier (n ≥ 100k) | Hardening | ✅ infra | infrastructure shipped 2026-05-20: `xlarge` (100k × 10k) in headline matrix for ls_lasso / ls_mcp / logistic_lasso / ls_group_lasso, comparator gap captured in `paper/manifest.json` under `at_scale_comparator_gap`, per-PR `large` canary in bench-smoke, `*_large` R-anchor fixtures (n=5k/p=500 default, env-tunable to 50k/p=2k), `docs/benchmarks/at_scale.md`. Rendered `xlarge` snapshots are maintainer-overnight, not part of this closeout. |
 | H2 — Numerical-stability sweep | Hardening | ⏳ planned | collinear / zero-variance / extreme-weight / near-singular design fixtures across every solver |
 | H3 — Property-based & fuzz tests | Hardening | ⏳ planned | `proptest` on prox / threshold / surrogate identities; closes the long tail C1/C2 left |
 | H4 — Reproducibility audit | Hardening | ⏳ planned | RNG-seed coverage across stability selection, CV, bootstrap, multinomial init |
@@ -46,7 +46,55 @@ flat (perf work) or grows it (hardening).
 
 ## Hardening
 
-### H1 — At-scale bench + fixture tier (n ≥ 100k)
+### ✅ H1 — At-scale bench + fixture tier (n ≥ 100k)
+
+**Shipped 2026-05-20 (infrastructure).** The headline matrix, the
+per-PR canary, the R-anchor scaffolding, and the documentation
+landed together. Rendered `xlarge` snapshots are maintainer-
+overnight and do not gate this milestone — H1's contract was
+*making it possible to measure at n ≥ 100k*, not generating one
+specific snapshot run.
+
+What shipped:
+
+- **`xlarge` (n=100k, p=10k) in `benches/v2/config.yaml` headline**
+  for `ls_lasso`, `ls_mcp`, `logistic_lasso`, `ls_group_lasso` —
+  five seeds × two regimes per scenario. Cross-package comparators
+  kept where they fit (celer, skglm for LS Lasso/MCP); R packages
+  + `sklearn.coordinate_descent` dropped at this tier with the
+  asymmetry captured in `paper/manifest.json` under
+  `at_scale_comparator_gap` so paper figures flag the gap rather
+  than silently dropping the comparator.
+- **`bench-smoke-at-scale` job** running one `large/sparse` skein-
+  only cell under release maturin + OpenBLAS, `--trials 1`, every
+  PR. Target ≤15 min wall-clock; emits a workflow warning at >10
+  min so budget creep is visible. Existing dev-profile `small`
+  canary unchanged.
+- **`--trials` CLI override** on `benches/v2/report/_run_cell.py`
+  so the smoke job can short-circuit the 5-trial default without
+  shipping a separate config.
+- **`*_large` R-anchor fixtures** in `tests/fixtures/generate.R` for
+  LS + logistic Lasso/MCP (four new optional tests in
+  `tests/test_r_regression.py`). Default size n=5k × p=500;
+  `SKEIN_FIXTURE_LARGE_N` / `SKEIN_FIXTURE_LARGE_P` env vars let
+  maintainers regenerate at the roadmap's aspirational n=50k × p=2k
+  on a machine with adequate RAM. Never committed (same pattern as
+  M14c.3 mid-tier); CI silently skips when fixtures are absent.
+- **`docs/benchmarks/at_scale.md`** as the durable home for the
+  tier definitions, comparator asymmetry, reproduction recipe, and
+  per-PR canary semantics.
+
+**Not in this closeout** (deferred to a maintainer run):
+
+- Actually generating `xlarge` aggregates and committing them under
+  `benches/v2/results/scenarios/`. The matrix is ~10–12 hours of
+  wall-clock on one laptop; that's a maintainer-overnight job, not
+  a v1.x infra task.
+- `xlarge` extension to the rest of the headline scenarios
+  (logistic_mcp, poisson_*, cox_*, ls_group_mcp,
+  ls_sparse_group_mcp). The four scenarios picked here are the
+  H1 list per the original deliverable; extending the rest is a
+  natural follow-up but not in scope.
 
 **Carries forward**: M12 P1, M9.4.
 

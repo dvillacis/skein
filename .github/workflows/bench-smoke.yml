@@ -1,15 +1,26 @@
 name: Bench smoke
 
-# Lightweight regression canary for benches/v2. Runs two small LS cells
-# (one Lasso, one MCP) under skein only, in dev profile, and verifies
-# that the cell driver emits a JSONL row + a coef sidecar. Not a
-# correctness check — that's what `cargo test` / `pytest` are for. The
-# goal is catching pipeline breakage (renamed runner, broken
-# Snakemake rule, missing module export) on every PR.
+# Lightweight regression canary for benches/v2.
 #
-# The full headline matrix is *not* run in CI — it needs a release
-# build + multi-hour wall-clock, which is the maintainer's job, not
-# every-PR's.
+# Two jobs run in parallel on every PR:
+#
+#   * `smoke` — two **small** LS cells (Lasso + MCP) under skein only,
+#     dev maturin profile. Catches pipeline breakage (renamed runner,
+#     broken Snakemake rule, missing module export). Wall-clock ~1 min.
+#
+#   * `smoke-at-scale` — one **large** (n=50k, p=5k) LS Lasso cell,
+#     skein only, release maturin profile + OpenBLAS, `--trials 1`.
+#     Catches regressions that only fire at scale (Phase 2.3 strong-
+#     rule misfire, M13.6 memory-bandwidth wall regression, etc).
+#     Wall-clock target ≤15 min (H1 acceptance criterion); recent
+#     committed snapshots have `large/sparse skein` at ~14 s/trial on
+#     Apple M1 BLAS, so ~50 s × 2 (warmup + 1 trial) on Linux + ~5 min
+#     release build is the expected budget.
+#
+# The full headline matrix is *not* run in CI — it needs the release
+# build for every (scenario × size × regime × seed × package), which
+# is the maintainer's overnight job. See `docs/benchmarks/at_scale.md`
+# for the maintainer-run procedure.
 
 on:
   pull_request:
@@ -109,3 +120,77 @@ jobs:
             --out paper/tables/T1_estimator_surface.tex
           test -s paper/figures/F1_coverage_matrix.pdf
           test -s paper/tables/T1_estimator_surface.tex
+
+  smoke-at-scale:
+    # H1 at-scale canary. Independent job so it runs in parallel with
+    # `smoke` rather than serially extending the PR wait. Release
+    # build is necessary — `large` cells under dev profile would blow
+    # the 15 min budget on the BLAS-less ndarray fallback.
+    name: bench smoke (at scale)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system OpenBLAS
+        # `blas-openblas` feature links against the system libopenblas;
+        # ubuntu-latest doesn't ship it by default.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libopenblas-dev
+
+      - name: pin PATH (setup-python first; cargo present)
+        run: |
+          echo "$pythonLocation/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install skein + bench extras (release profile + OpenBLAS)
+        env:
+          MATURIN_PEP517_ARGS: "--release --features=blas-openblas"
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e '.[bench]' -v
+          python -c "import skein_glm; print(skein_glm.__version__)"
+
+      - name: Run at-scale cell (ls_lasso large sparse seed 0 skein)
+        # `--trials 1` keeps the cell under the 15 min budget. With
+        # `defaults.trials=5` this same cell would run ~6× longer and
+        # blow the timeout. Pipeline canary only — statistics-grade
+        # snapshots are maintainer-overnight (see at_scale.md).
+        run: |
+          python -m benches.v2.report._run_cell \
+            --scenario ls_lasso --size large --regime sparse --seed 0 \
+            --package skein --config benches/v2/config.yaml \
+            --trials 1 \
+            --out /tmp/at_scale_lasso.jsonl \
+            --env-out /tmp/at_scale_lasso.env.json
+
+      - name: Assert at-scale cell produced valid output
+        run: |
+          python <<'PYEOF'
+          import json
+          from pathlib import Path
+          row_path = Path("/tmp/at_scale_lasso.jsonl")
+          env_path = Path("/tmp/at_scale_lasso.env.json")
+          assert row_path.exists(), f"missing JSONL: {row_path}"
+          assert env_path.exists(), f"missing env.json: {env_path}"
+          row = json.loads(row_path.read_text())
+          assert row["status"] == "ok", f"at-scale: status={row['status']!r} ({row.get('reason')})"
+          assert row["fit_time_s"] > 0, "at-scale: fit_time_s = 0"
+          assert row["active_set_size"] > 0, "at-scale: empty support"
+          env = json.loads(env_path.read_text())
+          assert env.get("host_id"), "at-scale: env capture missing host_id"
+          # H1 budget canary — flag if the cell took longer than the
+          # configured ceiling. Hard failure would be flaky on
+          # cold/slow runners, so emit a warning to the workflow log.
+          if row["fit_time_s"] > 600:
+              print(f"::warning::at-scale cell exceeded 10 min ({row['fit_time_s']:.0f}s); "
+                    "tighten the H1 budget if this becomes routine")
+          print(f"OK  at-scale: time={row['fit_time_s']:.1f}s "
+                f"active={row['active_set_size']} host={env['host_id']}")
+          PYEOF

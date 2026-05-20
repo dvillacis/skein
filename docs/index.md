@@ -315,6 +315,7 @@ benchmarks/index
 benchmarks/lasso_ls_correctness
 benchmarks/mcp_ls
 benchmarks/scad_ls
+benchmarks/at_scale
 ```
 
 ```{toctree}

@@ -126,6 +126,27 @@ ARTIFACT_PROVENANCE = {
 }
 
 
+# H1 — at-scale (n=100k, p=10k) headline cells run with a reduced
+# comparator set because several Python and R packages OOM or exceed
+# the per-cell wall budget before the size ceiling. The asymmetry is
+# captured here so downstream paper figures can flag the gap rather
+# than silently dropping the comparator. Keep aligned with the
+# `xlarge` entries in `benches/v2/config.yaml`.
+AT_SCALE_COMPARATOR_GAP = {
+    "xlarge": {
+        "ls_lasso":        {"included": ["skein", "celer", "skglm"],
+                            "excluded": {"sklearn": "coordinate_descent OOM on dense 8 GB X",
+                                         "glmnet":  "32-bit nlam × nvar index space"}},
+        "ls_mcp":          {"included": ["skein", "skglm"],
+                            "excluded": {"ncvreg":  "p × p `XX` intermediate ≈ 800 MB at p=10k"}},
+        "logistic_lasso":  {"included": ["skein"],
+                            "excluded": {"glmnet":  "binomial path exceeds per-cell wall (~hour)"}},
+        "ls_group_lasso":  {"included": ["skein"],
+                            "excluded": {"grpreg":  "Fortran core copies X (peak RSS ≈ 3× X size)"}},
+    },
+}
+
+
 def build_manifest(paper_dir: Path, project_root: Path) -> dict:
     files: dict[str, dict] = {}
     missing: list[str] = []
@@ -146,6 +167,7 @@ def build_manifest(paper_dir: Path, project_root: Path) -> dict:
         "files":        files,
         "missing":      missing,
         "expected":     sorted(ARTIFACT_PROVENANCE.keys()),
+        "at_scale_comparator_gap": AT_SCALE_COMPARATOR_GAP,
     }
 
 

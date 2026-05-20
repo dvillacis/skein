@@ -431,6 +431,95 @@ def test_glmnet_lasso_binomial_mid_matches_skein_mcp_high_gamma():
     )
 
 
+# ---- H1 at-scale (default n=5000, p=500; env-tunable) --------------------
+#
+# Same fixture-tier semantics as the mid-tier above: never committed,
+# `_skipped_if_missing_optional` so CI silently skips. The size is
+# controlled by `SKEIN_FIXTURE_LARGE_N` / `SKEIN_FIXTURE_LARGE_P`
+# at R generation time; the Python side reads `fix["n"]` and `fix["p"]`
+# directly so tolerances and shape checks scale with whatever the
+# maintainer generated.
+#
+# Tolerances are loosened one notch above the mid-tier — at p=500+
+# the active-set boundary fuzz is meaningfully larger because
+# strong-rule screening interacts with more candidates per λ, and
+# nonconvex local-min divergence grows roughly with p.
+
+
+def test_glmnet_lasso_gaussian_large_matches_skein_mcp_high_gamma():
+    fix = _skipped_if_missing_optional("glmnet_lasso_gaussian_large")
+    model = skein.MCPPathRegressor(
+        gamma=1e6,
+        lambdas=fix["lambdas"],
+        standardize=True,
+        fit_intercept=True,
+        tol=1e-10,
+        max_iter=20000,
+        screening="off",
+    ).fit(fix["X"], fix["y"])
+    _assert_path_matches(
+        model.coefs_, fix["coefs"],
+        smallest_lambda_atol=2e-2,
+        active_set_fuzz_frac=0.20,
+        label="glmnet lasso gaussian (large) vs skein MCP γ=1e6",
+    )
+
+
+def test_ncvreg_mcp_gaussian_large_matches_skein():
+    fix = _skipped_if_missing_optional("ncvreg_mcp_gaussian_large")
+    model = skein.MCPPathRegressor(
+        gamma=fix["gamma"],
+        lambdas=fix["lambdas"],
+        standardize=True,
+        fit_intercept=True,
+        tol=1e-10,
+        max_iter=50000,
+        screening="off",
+    ).fit(fix["X"], fix["y"])
+    _assert_path_matches(
+        model.coefs_, fix["coefs"],
+        smallest_lambda_atol=1e-2,
+        active_set_fuzz_frac=0.20,
+        label="ncvreg MCP gaussian (large) vs skein",
+    )
+
+
+def test_glmnet_lasso_binomial_large_matches_skein_mcp_high_gamma():
+    fix = _skipped_if_missing_optional("glmnet_lasso_binomial_large")
+    model = skein.LogisticMCPPathRegressor(
+        gamma=1e6,
+        lambdas=fix["lambdas"],
+        standardize=True,
+        fit_intercept=True,
+        tol=1e-8,
+        max_iter=20000,
+    ).fit(fix["X"], fix["y"])
+    _assert_path_matches(
+        model.coefs_, fix["coefs"],
+        smallest_lambda_atol=1e-1,
+        active_set_fuzz_frac=0.20,
+        label="glmnet binomial lasso (large) vs skein logistic MCP γ=1e6",
+    )
+
+
+def test_ncvreg_mcp_binomial_large_matches_skein():
+    fix = _skipped_if_missing_optional("ncvreg_mcp_binomial_large")
+    model = skein.LogisticMCPPathRegressor(
+        gamma=fix["gamma"],
+        lambdas=fix["lambdas"],
+        standardize=True,
+        fit_intercept=True,
+        tol=1e-8,
+        max_iter=50000,
+    ).fit(fix["X"], fix["y"])
+    _assert_path_matches(
+        model.coefs_, fix["coefs"],
+        smallest_lambda_atol=5e-2,
+        active_set_fuzz_frac=0.20,
+        label="ncvreg MCP binomial (large) vs skein logistic MCP",
+    )
+
+
 # ---- meta tests ----------------------------------------------------------
 
 

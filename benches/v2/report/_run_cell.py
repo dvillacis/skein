@@ -96,12 +96,13 @@ def _lambda_grid(
 
 def run_cell(*, scenario: str, size: str, regime: str, seed: int,
              package: str, config_path: Path, out: Path,
-             env_out: Path) -> dict:
+             env_out: Path, trials: int | None = None) -> dict:
     cfg = yaml.safe_load(config_path.read_text())
     n, p = _resolve_size(cfg, size)
     regime_cfg = cfg["regimes"][regime]
     tol = float(cfg["defaults"]["tol"])
-    trials = int(cfg["defaults"]["trials"])
+    if trials is None:
+        trials = int(cfg["defaults"]["trials"])
 
     # Environment capture happens first so the file exists even if the fit
     # blows up later (helps debug "what did this host have installed").
@@ -214,10 +215,15 @@ def main() -> int:
     ap.add_argument("--config", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--env-out", type=Path, required=True)
+    ap.add_argument("--trials", type=int, default=None,
+                    help="Override `defaults.trials` from config. Used by "
+                         "bench-smoke to keep the per-PR at-scale cell under "
+                         "the 15 min wall-clock budget.")
     a = ap.parse_args()
     row = run_cell(
         scenario=a.scenario, size=a.size, regime=a.regime, seed=a.seed,
         package=a.package, config_path=a.config, out=a.out, env_out=a.env_out,
+        trials=a.trials,
     )
     print(json.dumps({k: row.get(k) for k in
                       ("status", "fit_time_s", "active_set_size", "host_id")}))
