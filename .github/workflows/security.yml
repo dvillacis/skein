@@ -1,0 +1,105 @@
+name: Security audit
+
+# Supply-chain hygiene gate (ROADMAP O2). Runs `cargo audit` against
+# the RustSec advisory DB and `pip-audit` against the PyPA advisory
+# DB. The advisory databases are updated independently of this repo,
+# so a weekly cron catches new CVEs against an unchanged dependency
+# tree — the more common failure mode than a fresh-dep PR breaking
+# the gate.
+#
+# Triggers chosen for signal-to-noise: PR runs only when a dep
+# manifest or lockfile actually changes (so unrelated PRs don't
+# re-audit), push to main on the same paths so a merged dep bump is
+# verified, and the weekly cron on Mondays so a fresh advisory has
+# the working week to be triaged.
+
+on:
+  pull_request:
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'crates/**/Cargo.toml'
+      - 'pyproject.toml'
+      - '.cargo/audit.toml'
+      - '.github/workflows/security.yml'
+  push:
+    branches: [main, master]
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - 'crates/**/Cargo.toml'
+      - 'pyproject.toml'
+      - '.cargo/audit.toml'
+      - '.github/workflows/security.yml'
+  schedule:
+    # Mondays 06:00 UTC — failure has the working week to be triaged
+    # rather than landing on a weekend.
+    - cron: '0 6 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-audit:
+    name: cargo-audit (RustSec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          # Prebuilt binary (~seconds). `cargo install cargo-audit`
+          # compiles for ~3 min on a cold cache; the prebuilt mirrors
+          # the `cargo-semver-checks` pattern already used in ci.yml.
+          tool: cargo-audit
+      - name: cargo audit
+        # The advisory allowlist lives in `.cargo/audit.toml`; see
+        # that file for the per-advisory rationale. `--deny warnings`
+        # promotes non-vulnerability advisories (unmaintained, unsound,
+        # notice) into hard failures so an upstream crate going
+        # unmaintained surfaces here instead of going unnoticed.
+        run: cargo audit --deny warnings
+
+  pip-audit:
+    name: pip-audit (PyPA advisory DB)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          # 3.12 matches the `docs` job; we just need a working
+          # interpreter to resolve runtime + dev deps, not the full
+          # CI matrix (advisory data is per-package-version, not
+          # per-interpreter).
+          python-version: "3.12"
+      - name: pin PATH (setup-python first; cargo present)
+        # See `.github/workflows/ci.yml` for the rationale. Linux-only
+        # here so the framework-Python issue does not apply, but the
+        # push is idempotent and the comment keeps the workflow files
+        # uniform.
+        run: |
+          echo "$pythonLocation/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: install package + dev deps + pip-audit
+        # Audit the same dep tree users get from `pip install
+        # skein-glm[dev]`. Dev profile keeps the maturin build to
+        # ~3-4 min, matching the regular python job's budget. We do
+        # NOT install `[bench]` here: per CLAUDE.md its resolution
+        # currently fails (snakemake >=8 needs Python 3.11+ while the
+        # project's `requires-python` is `>=3.10`), and the bench
+        # extra is a maintainer tool, not a user-facing surface.
+        env:
+          MATURIN_PEP517_ARGS: "--profile dev"
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -v -e ".[dev]"
+          python -m pip install pip-audit
+      - name: pip-audit
+        # No args ⇒ audit the current Python environment via the PyPI
+        # JSON API. `--strict` promotes resolution-skipped packages
+        # into failures so a transitively-undiscoverable dep cannot
+        # silently slip the gate.
+        run: pip-audit --strict

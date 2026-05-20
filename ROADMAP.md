@@ -32,7 +32,7 @@ open v0.x lever.
 | P5 — M13.1 saturation-threshold tuning | Performance | ⏳ planned | conservative 0.5 may leave headroom on deep regime; cheap ablation, gated on H1 |
 | P6 — Inner-CD column batching at large n | Performance | ⏳ planned | M13.6 follow-up — memory-bandwidth wall confirmed at n=50k, p=5k; structural change to `cd_solve_subset` |
 | O1 — `cargo-semver-checks` in CI | Operability | ✅ done | v1.0 stability promise machine-checked on every PR via `--baseline-rev v1.0.0`; 222 checks vs the freeze surface |
-| O2 — `cargo-audit` + `pip-audit` + dependabot | Operability | ⏳ planned | supply-chain hygiene baseline |
+| O2 — `cargo-audit` + `pip-audit` + dependabot | Operability | ✅ done | supply-chain hygiene baseline; weekly cron + per-PR on dep-manifest changes; 1 documented advisory ignore (RUSTSEC-2025-0020, pyo3 unreachable API) |
 | O3 — Python 3.13 + NumPy 2.x in CI matrix | Operability | ✅ done | 3.13 added to the `python` job matrix; local pytest on 3.13 + NumPy 2.4.6 green (506 passed). NumPy 2.x was already the resolver default at v1.0 — `numpy>=1.24` floor stays; no API-removal hazards in the Python codebase |
 | O4 — Expanded wheel matrix (musllinux + Linux aarch64) | Operability | ⏳ planned | currently `CIBW_SKIP: "*-musllinux_*"`; aarch64 dropped from v0.1.x matrix |
 | O5 — `docs/benchmarks/speed.md` consolidation | Operability | ⏳ planned | M9.5 carryover — single landing page for all perf claims with provenance |
@@ -308,15 +308,66 @@ Notes on the implementation:
   symbols are not the contract, the Python API is. A Python
   equivalent would need a different tool (e.g. `griffe`).
 
-### O2 — Supply-chain hygiene
+### ✅ O2 — Supply-chain hygiene
 
-- `cargo-audit` job in `.github/workflows/ci.yml` (one cron + on
-  every PR touching `Cargo.lock`).
-- `pip-audit` over the resolved `requirements-dev.lock` (current
-  resolution issue with the `bench` extra notwithstanding — audit
-  the resolved dev set).
-- Dependabot config for `Cargo.toml`, `pyproject.toml`,
-  `.github/workflows/*.yml`. Weekly cadence.
+**Shipped 2026-05-20.** Three coupled pieces landed together:
+
+- **`cargo-audit`** in a new `.github/workflows/security.yml` job.
+  Runs against the RustSec advisory DB. Triggers: PRs that touch
+  `Cargo.lock` / workspace `Cargo.toml` / crate manifests / the
+  audit allowlist / the workflow itself; push to main on the same
+  paths; weekly Monday 06:00 UTC cron so a new advisory against an
+  unchanged tree still fails CI. `--deny warnings` promotes
+  non-vulnerability advisories (unmaintained / unsound / notice) to
+  hard failures.
+- **`pip-audit`** as the sibling job in the same workflow. Audits
+  the same dep tree users get from `pip install skein-glm[dev]` —
+  builds with `MATURIN_PEP517_ARGS=--profile dev` so the maturin
+  step matches the regular python job's ~3-4 min budget. `--strict`
+  fails the gate if any package gets skipped by the resolver. The
+  `[bench]` extra is intentionally excluded (per CLAUDE.md its
+  resolution fails on the project's `requires-python` floor; bench
+  is a maintainer tool, not a user-facing surface).
+- **`.github/dependabot.yml`** with weekly Monday updates across the
+  three ecosystems that ship from this repo: `cargo` (workspace
+  `Cargo.lock`), `pip` (`pyproject.toml` runtime + extras), and
+  `github-actions` (the `@vN` pins in `.github/workflows/*.yml`).
+  Open-PR cap of 5 per ecosystem so a quiet week doesn't flood the
+  PR queue.
+
+Advisory allowlist landed at `.cargo/audit.toml`. One entry:
+
+- **RUSTSEC-2025-0020** — pyo3 0.22.6 buffer-overflow risk in
+  `PyString::from_object`. Verified unreachable from skein's binding
+  surface (`grep -rn "PyString" crates/ python/` → zero hits). The
+  0.22 → 0.24 upgrade is a deliberate breaking refactor (Bound<'py,
+  T> default API + matching numpy crate bump) that earns its own
+  milestone, not a security-driven emergency. The ignore is paired
+  with the rationale inline so a future reviewer can re-evaluate.
+
+Local pre-flight verification before shipping:
+
+- `cargo audit` against current `Cargo.lock`: 177 deps scanned, 1
+  vulnerability found (RUSTSEC-2025-0020, allowlisted), 0 others.
+- `pip-audit --strict` against a fresh `[dev]` install: 0 known
+  vulnerabilities once `idna` resolved to ≥3.15 (CVE-2026-45409 fix
+  version); fresh CI installs already resolve to the patched
+  version, so no manifest pin needed.
+
+Notes on the implementation:
+
+- The audit jobs went in a separate workflow rather than appended to
+  `ci.yml` because `schedule:` triggers apply per-workflow; pinning
+  it to `security.yml` keeps the weekly cron from re-running the
+  full rust + python matrix.
+- Ubuntu-only — advisory checks are platform-independent, and
+  doubling the matrix would just slow the cron without changing
+  what it catches.
+- No CHANGELOG entry: this is CI tooling, not a user-visible v1.x
+  behavior change (matches the O1/O3 precedent).
+
+Follow-up tracked outside O2: schedule the pyo3 0.22 → ≥0.24 bump as
+its own milestone so RUSTSEC-2025-0020 can come off the allowlist.
 
 ### ✅ O3 — Python 3.13 + NumPy 2.x in CI matrix
 

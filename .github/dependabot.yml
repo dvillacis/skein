@@ -1,0 +1,57 @@
+version: 2
+
+# Weekly supply-chain bumps across the three ecosystems that ship in
+# this repo (ROADMAP O2). Weekly is deliberately conservative — daily
+# would drown the PR queue, monthly leaves CVE-class advisories
+# unaddressed for too long. The `security` workflow's cron is the
+# safety net if any of these ecosystems goes dormant.
+
+updates:
+  # Rust workspace. Single workspace `Cargo.lock` at the repo root
+  # covers both `skein-core` and `skein-py`; dependabot picks up the
+  # workspace manifests through it.
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - rust
+    commit-message:
+      prefix: "chore(deps)"
+    # The v1.0 Rust API stability promise is enforced by the
+    # `cargo-semver-checks` job, so a dep bump that incidentally
+    # changes a re-exported type will fail CI rather than slip
+    # through. No manual ignore list needed for that.
+
+  # Python project metadata. Picks up `[project] dependencies`
+  # (numpy / scipy / scikit-learn / joblib) and the
+  # `[project.optional-dependencies]` extras (dev, docs, bench).
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - python
+    commit-message:
+      prefix: "chore(deps)"
+
+  # GitHub Actions versions used in `.github/workflows/*.yml`. The
+  # hardcoded pins (`@v4`, `@v5`, etc.) age out slowly but silently;
+  # dependabot is the only signal that a major version is available.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "chore(deps)"
