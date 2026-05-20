@@ -28,11 +28,12 @@ use skein_core::{
     design::{DenseMatrix, DesignMatrix as _, Standardized},
     groups::Groups,
     penalty::{
-        ElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad, SparseGroupLasso, SparseGroupMcp,
+        ElasticNet, GroupLasso, GroupMcp, GroupPenalty, Mcp, Scad, SparseGroupLasso,
+        SparseGroupMcp, SparseGroupScad,
     },
     solver::{
         prox_newton_block_solve_path_timed, prox_newton_fused_solve_path_timed,
-        prox_newton_solve_path_timed, surrogate_sparse_group_scad, CdConfig,
+        prox_newton_solve_path_timed, CdConfig,
     },
     Penalty,
 };
@@ -1250,16 +1251,19 @@ pub(crate) fn solve_logistic_sparse_group_scad_path<'py>(
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_scad(
-                beta,
-                g,
+            // P1 — native sparse-group SCAD block-CD inside the prox-Newton
+            // outer loop. `SparseGroupScad::prox_group` replaces the
+            // LLA-wrapped weighted SparseGroupLasso surrogate; mirrors the
+            // M14c.2 swap for sparse-group MCP.
+            let _ = beta;
+            let cw = crate::glm::split_coord_weights_per_group(coord_w_eff.view(), g);
+            Box::new(SparseGroupScad::with_coord_weights(
                 lam,
-                a,
                 alpha,
-                group_w.view(),
-                coord_w_eff.view(),
-            );
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+                a,
+                group_w.clone(),
+                cw,
+            ))
         },
     )
 }
@@ -1749,16 +1753,19 @@ pub(crate) fn solve_poisson_sparse_group_scad_path<'py>(
         validate_y_nonneg,
         make_glm,
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_scad(
-                beta,
-                g,
+            // P1 — native sparse-group SCAD block-CD inside the prox-Newton
+            // outer loop. `SparseGroupScad::prox_group` replaces the
+            // LLA-wrapped weighted SparseGroupLasso surrogate; mirrors the
+            // M14c.2 swap for sparse-group MCP.
+            let _ = beta;
+            let cw = crate::glm::split_coord_weights_per_group(coord_w_eff.view(), g);
+            Box::new(SparseGroupScad::with_coord_weights(
                 lam,
-                a,
                 alpha,
-                group_w.view(),
-                coord_w_eff.view(),
-            );
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+                a,
+                group_w.clone(),
+                cw,
+            ))
         },
     )
 }
@@ -2593,9 +2600,19 @@ pub(crate) fn solve_cox_sparse_group_scad_path<'py>(
         outer_tol,
         ties,
         move |beta, g, lam, group_w| {
-            let (gw, cw) =
-                surrogate_sparse_group_scad(beta, g, lam, a, alpha, group_w.view(), coord_w.view());
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+            // P1 — native sparse-group SCAD block-CD inside the prox-Newton
+            // outer loop. `SparseGroupScad::prox_group` replaces the
+            // LLA-wrapped weighted SparseGroupLasso surrogate; mirrors the
+            // M14c.2 swap for sparse-group MCP.
+            let _ = beta;
+            let cw = crate::glm::split_coord_weights_per_group(coord_w.view(), g);
+            Box::new(SparseGroupScad::with_coord_weights(
+                lam,
+                alpha,
+                a,
+                group_w.clone(),
+                cw,
+            ))
         },
     )
 }
@@ -3771,16 +3788,19 @@ pub(crate) fn solve_logistic_sparse_group_scad_path_sparse<'py>(
         validate_y_binary,
         |y_arr| Box::new(BinomialLogit::new(y_arr)),
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_scad(
-                beta,
-                g,
+            // P1 — native sparse-group SCAD block-CD inside the prox-Newton
+            // outer loop. `SparseGroupScad::prox_group` replaces the
+            // LLA-wrapped weighted SparseGroupLasso surrogate; mirrors the
+            // M14c.2 swap for sparse-group MCP.
+            let _ = beta;
+            let cw = crate::glm::split_coord_weights_per_group(coord_w_eff.view(), g);
+            Box::new(SparseGroupScad::with_coord_weights(
                 lam,
-                a,
                 alpha,
-                group_w.view(),
-                coord_w_eff.view(),
-            );
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+                a,
+                group_w.clone(),
+                cw,
+            ))
         },
     )
 }
@@ -4316,16 +4336,19 @@ pub(crate) fn solve_poisson_sparse_group_scad_path_sparse<'py>(
         validate_y_nonneg,
         make_glm,
         move |beta, g, lam, group_w| {
-            let (gw, cw) = surrogate_sparse_group_scad(
-                beta,
-                g,
+            // P1 — native sparse-group SCAD block-CD inside the prox-Newton
+            // outer loop. `SparseGroupScad::prox_group` replaces the
+            // LLA-wrapped weighted SparseGroupLasso surrogate; mirrors the
+            // M14c.2 swap for sparse-group MCP.
+            let _ = beta;
+            let cw = crate::glm::split_coord_weights_per_group(coord_w_eff.view(), g);
+            Box::new(SparseGroupScad::with_coord_weights(
                 lam,
-                a,
                 alpha,
-                group_w.view(),
-                coord_w_eff.view(),
-            );
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+                a,
+                group_w.clone(),
+                cw,
+            ))
         },
     )
 }
@@ -4793,9 +4816,19 @@ pub(crate) fn solve_cox_sparse_group_scad_path_sparse<'py>(
         outer_tol,
         ties,
         move |beta, g, lam, group_w| {
-            let (gw, cw) =
-                surrogate_sparse_group_scad(beta, g, lam, a, alpha, group_w.view(), coord_w.view());
-            Box::new(SparseGroupLasso::with_coord_weights(lam, alpha, gw, cw))
+            // P1 — native sparse-group SCAD block-CD inside the prox-Newton
+            // outer loop. `SparseGroupScad::prox_group` replaces the
+            // LLA-wrapped weighted SparseGroupLasso surrogate; mirrors the
+            // M14c.2 swap for sparse-group MCP.
+            let _ = beta;
+            let cw = crate::glm::split_coord_weights_per_group(coord_w.view(), g);
+            Box::new(SparseGroupScad::with_coord_weights(
+                lam,
+                alpha,
+                a,
+                group_w.clone(),
+                cw,
+            ))
         },
     )
 }

@@ -25,7 +25,7 @@ open v0.x lever.
 | H2 — Numerical-stability sweep | Hardening | ✅ done | 84 new pytests across four files (`tests/test_numerics_design_pathologies.py`, `test_numerics_extreme_weights.py`, `test_numerics_glm_saturation.py`, `test_numerics_glasso_singular.py`) covering collinear / zero-variance designs, 12-decade sample-weight spreads, zero per-feature and per-group weights, Poisson η near `ETA_CLAMP`, separable & class-imbalanced logistic, heavy-ties Cox under both Breslow and Efron, and rank-deficient single / joint glasso. Surfaced one finding: nonconvex glasso (MCP / SCAD) does not preserve SPD in extreme `n ≪ p` (n=5, p=40 produced min eigvalue −8.8e-3) — documented as an algorithmic property; finiteness + symmetry remain the asserted contract. All tests run under a 30 s wall-clock budget to catch infinite-loop fallback. |
 | H3 — Property-based & fuzz tests | Hardening | ✅ done | 30 Rust `proptest`s + 4 Python `hypothesis` tests covering randomized invariants the hand-picked unit fixtures don't reach: sign / antisymmetry / monotonicity / magnitude-non-increase on `soft_threshold` / `elastic_net_prox` / `mcp_prox` / `scad_prox`, large-γ / large-a limit collapse to soft-threshold, group-prox rotation invariance for ℓ₂ group lasso / EN, BinomialLogit / PoissonLog / CoxPH surrogate gradient match against FD-of-loss (with both tie-handlers for Cox), Binomial / Poisson Hessian-diagonal match against the analytical Fisher diagonal, full `destandardize(standardize_β(β)) = β` bijection across every flag combo (center × scale × intercept) including `destandardize_path` and `rescale_weights_for_standardize` penalty preservation, and Python-side `weights = None ↔ ones` bit-equality through the PyO3 boundary plus per-feature permutation equivariance and a positive `sample_weights` no-op detector. Surfaced one architectural quirk (documented in `tests/test_weight_composition.py`): `sample_weights=None` and `sample_weights=ones(n)` take structurally different code paths in `crates/skein-py/src/ls.rs` (centered destandardize vs. augmented intercept column) and converge to the same optimum but along different iterate trajectories, so the identity holds approximately, not bit-exactly. |
 | H4 — Reproducibility audit | Hardening | ✅ done | `tests/test_reproducibility.py` pins every public RNG-consuming estimator with paired same-seed + different-seed fits: MCPPathCV / GroupLassoPathCV / LogisticLassoPathCV / AdaptiveLassoPathCV / MultinomialLassoPathCV (KFold-shuffle path), StabilitySelection (bootstrap subsampling), GraphicalStabilitySelection (graph stability), GraphicalBootstrap (CI bounds). Same seed → `np.array_equal` on `coef_` / `cv_scores_` / `selection_probabilities_` / `edge_selection_probabilities_` / `ci_lower_` / `ci_upper_`; different seed → measurable divergence (catches a silent dropped-RNG regression). BLAS-thread caveat documented inline: the Rust path solver itself is deterministic — the reproducibility we assert lives entirely in Python-side fold construction + bootstrap resampling, which is BLAS-thread-independent at the small problem sizes used. |
-| P1 — Native sparse-group MCP block-CD for GLMs | Performance | ⏳ planned | drops the LLA layer for logistic / Poisson / Cox sparse-group MCP (sibling of M13.4c) |
+| P1 — Native sparse-group SCAD block-CD for GLMs | Performance | ✅ done | dropped the LLA layer for logistic / Poisson / Cox sparse-group SCAD (dense + sparse, six PyO3 builders) by routing each closure through `SparseGroupScad::with_coord_weights` instead of `surrogate_sparse_group_scad` + `SparseGroupLasso`. Closes the last LLA-wrapped non-convex group family in the GLM PyO3 surface (sparse-group MCP was already native per M14c.2). All 11 `tests/test_sparse_group_scad.py` cases pass and the broader 605-pytest / 448-cargo-lib suites stay green |
 | P2 — Scalar MCP/SCAD path overhead investigation | Performance | ⏳ planned | M13.5 carryover, re-scoped — scalar MCP/SCAD route through `solve_path` directly (closed-form prox), not `path_lla`; the M14c.1 short-circuit already covers the LLA-side users (bridge/adaptive/multitask). Current `medium/deep` gap is 1.50× MCP vs Lasso (was 1.32× pre-M14e); EN-vs-Lasso is 1.24× so most of MCP's gap is generic non-trivial-prox cost, ~1.21× excess is genuinely MCP-specific. Profile-then-fix; smaller upper bound than originally claimed. |
 | P3 — Cross-platform BLAS in distributed wheels | Performance | ⏳ planned | M10.G carryover — Linux/manylinux2014 already wires OpenBLAS; Windows wheels still ship without BLAS; MKL feature unwired |
 | P4 — Pre-pass gap-safe screening | Performance | ⏳ planned | M10.H carryover — requires H1 to measure |
@@ -41,7 +41,7 @@ open v0.x lever.
 Test count at v1.0.0: **358 cargo lib + 8 cargo integration + 455
 pytest, all green.** Each milestone below either keeps this number
 flat (perf work) or grows it (hardening). Current HEAD: **448 cargo
-lib + 605 pytest** (post-H4).
+lib + 605 pytest** (post-P1; P1 is a perf-swap, counts unchanged from H4).
 
 ---
 
@@ -268,18 +268,35 @@ beyond that regime they should gate with `OMP_NUM_THREADS=1` /
 
 ## Performance
 
-### P1 — Native sparse-group MCP block-CD for GLMs
+### ✅ P1 — Native sparse-group SCAD block-CD for GLMs
 
-**Sibling of M13.4c** (native group-MCP BCD for logistic / Poisson /
-Cox) and **M14c.2** (native sparse-group MCP penalty + 6 GLM PyO3
-swaps were already done for LS; the GLM swap is what's left). The
-GLM sparse-group MCP path still routes through LLA, paying the full
-outer-iter cost on what is, in the convex regime, a one-iteration
-problem.
+**Shipped 2026-05-20.** Closes out the last LLA-wrapped non-convex
+group family on the GLM PyO3 surface. Sibling of **M13.4c** (native
+group-MCP BCD for logistic / Poisson / Cox) and **M14c.2** (native
+sparse-group MCP — the MCP side of this work was already done in
+M14c.2; the original P1 entry mislabelled what was left). The native
+`SparseGroupScad` penalty itself shipped in M14h alongside the four
+LS PyO3 swaps; the six GLM swaps are what this milestone landed.
 
-Expected impact: same order as M13.4c (2–3× wall on the
-medium-deep cell). Touches `solver/prox_newton_block.rs` and the
-six PyO3 builders that dispatch sparse-group MCP for GLMs.
+What shipped:
+
+- `crates/skein-py/src/glm.rs` — all six sparse-group SCAD builders
+  (`solve_{logistic,poisson,cox}_sparse_group_scad_path` and their
+  `_sparse` counterparts) now build `SparseGroupScad::with_coord_weights`
+  directly inside the prox-Newton `make_inner` closure, mirroring the
+  M14c.2 pattern for sparse-group MCP. The closures are β-independent
+  (the LLA β-iterate is no longer needed).
+- `surrogate_sparse_group_scad` is dropped from the `glm.rs` import
+  list; the function itself remains in `skein-core` (v1.0 stable
+  surface) for downstream users who still want the LLA surrogate.
+- `SparseGroupScad` added to the `penalty::` import list.
+
+Validation: 11 / 11 `tests/test_sparse_group_scad.py` cases pass —
+covers LS shape / recovery / dense-sparse equivalence / `a < 2`
+rejection / `a → ∞` limit-to-sparse-group-lasso / path-CV, plus
+logistic predict-proba smoke + dense-sparse equivalence, Poisson
+smoke, Cox smoke, and GLM `a < 2` rejection. Full suite stays at 448
+cargo lib + 605 pytest, all green.
 
 ### P2 — Scalar MCP/SCAD path overhead investigation
 
