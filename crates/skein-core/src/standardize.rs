@@ -677,3 +677,185 @@ mod tests {
         }
     }
 }
+
+/// Randomized bijection coverage for `standardize` / `destandardize` (H3).
+///
+/// The standardized solver fits `β̃` in transformed space and the caller
+/// recovers original-scale `(β, α)` via `destandardize`. The full
+/// round-trip identity is:
+///
+/// ```text
+///     β̃_j = β_orig_j · s_j                   (definition of β̃)
+///     destandardize(β̃, stats) = (β_orig, α)  (bijection)
+///     α       = ȳ − Σ_j β_orig_j · x̄_j         (when centered + fit_intercept)
+/// ```
+///
+/// The properties cover every flag combination (`center_x × scale_x ×
+/// fit_intercept`) so that destandardize stays consistent if the
+/// branching ever changes shape.
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::collection::vec as prop_vec;
+    use proptest::prelude::*;
+
+    const N_SAMPLES: usize = 8;
+    const N_FEATURES: usize = 4;
+
+    fn arb_x_flat() -> impl Strategy<Value = Vec<f64>> {
+        prop_vec(-3.0_f64..3.0, N_SAMPLES * N_FEATURES)
+    }
+    fn arb_y() -> impl Strategy<Value = Vec<f64>> {
+        prop_vec(-3.0_f64..3.0, N_SAMPLES)
+    }
+    fn arb_beta_orig() -> impl Strategy<Value = Vec<f64>> {
+        prop_vec(-2.0_f64..2.0, N_FEATURES)
+    }
+    fn arb_config() -> impl Strategy<Value = StandardizeConfig> {
+        (any::<bool>(), any::<bool>(), any::<bool>()).prop_map(|(c, s, fi)| StandardizeConfig {
+            center_x: c,
+            scale_x: s,
+            fit_intercept: fi,
+        })
+    }
+
+    fn build_x(flat: &[f64]) -> Array2<f64> {
+        Array2::from_shape_vec((N_SAMPLES, N_FEATURES), flat.to_vec()).expect("shape ok")
+    }
+
+    proptest! {
+        /// `destandardize(standardize_β(β_orig)) == β_orig`, for every
+        /// (center_x, scale_x, fit_intercept) combination.
+        ///
+        /// Zero-variance columns break the bijection by construction
+        /// (`β̃_j = β_orig_j · 0` loses the original-scale value), so
+        /// drop those draws. Continuous random inputs hit them with
+        /// probability zero — the assume just makes the failure mode
+        /// explicit.
+        #[test]
+        fn destandardize_inverts_standardize_beta(
+            x_flat in arb_x_flat(),
+            y_vec in arb_y(),
+            beta_orig_vec in arb_beta_orig(),
+            cfg in arb_config(),
+        ) {
+            let x = build_x(&x_flat);
+            let y = Array1::from(y_vec);
+            let beta_orig = Array1::from(beta_orig_vec);
+
+            let (_, _, stats) = standardize(x.view(), y.view(), &cfg);
+
+            // Skip degenerate column draws.
+            if let Some(scales) = &stats.x_scales {
+                prop_assume!(scales.iter().all(|&s| s > 1e-6));
+            }
+
+            // Form β̃ from β_orig according to the standardization stats.
+            let beta_std: Array1<f64> = match &stats.x_scales {
+                Some(s) => Array1::from_iter((0..N_FEATURES).map(|j| beta_orig[j] * s[j])),
+                None => beta_orig.clone(),
+            };
+
+            let (beta_back, alpha) = destandardize(beta_std.view(), &stats);
+
+            // β recovered to round-off.
+            for j in 0..N_FEATURES {
+                prop_assert!(
+                    (beta_back[j] - beta_orig[j]).abs() < 1e-10 * (1.0 + beta_orig[j].abs()),
+                    "j={}, expected={}, got={}", j, beta_orig[j], beta_back[j],
+                );
+            }
+
+            // Intercept matches the documented `α = ȳ − Σ β_j x̄_j` form,
+            // collapsing as the flags toggle off.
+            let n_f = N_SAMPLES as f64;
+            let y_mean = y.sum() / n_f;
+            let expected_alpha = match (cfg.fit_intercept, cfg.center_x) {
+                (false, _) => 0.0,
+                (true, false) => y_mean,
+                (true, true) => {
+                    let means = stats.x_means.as_ref().expect("center_x ⇒ means");
+                    let dot: f64 = (0..N_FEATURES).map(|j| beta_orig[j] * means[j]).sum();
+                    y_mean - dot
+                }
+            };
+            prop_assert!(
+                (alpha - expected_alpha).abs() < 1e-10 * (1.0 + expected_alpha.abs()),
+                "alpha: expected={}, got={}", expected_alpha, alpha,
+            );
+        }
+
+        /// `destandardize_path` is the row-wise lift of `destandardize`
+        /// and must agree on every row.
+        #[test]
+        fn destandardize_path_matches_per_row(
+            x_flat in arb_x_flat(),
+            y_vec in arb_y(),
+            betas_orig_flat in prop_vec(-2.0_f64..2.0, 3 * N_FEATURES),
+            cfg in arb_config(),
+        ) {
+            let x = build_x(&x_flat);
+            let y = Array1::from(y_vec);
+            let (_, _, stats) = standardize(x.view(), y.view(), &cfg);
+            if let Some(scales) = &stats.x_scales {
+                prop_assume!(scales.iter().all(|&s| s > 1e-6));
+            }
+
+            let betas_orig = Array2::from_shape_vec((3, N_FEATURES), betas_orig_flat).unwrap();
+            let mut betas_std = betas_orig.clone();
+            if let Some(s) = &stats.x_scales {
+                for k in 0..3 {
+                    for j in 0..N_FEATURES {
+                        betas_std[[k, j]] *= s[j];
+                    }
+                }
+            }
+
+            let (path_betas, path_alphas) = destandardize_path(betas_std.view(), &stats);
+            for k in 0..3 {
+                let (b_row, a_row) = destandardize(betas_std.row(k), &stats);
+                for j in 0..N_FEATURES {
+                    prop_assert!((path_betas[[k, j]] - b_row[j]).abs() < 1e-12);
+                }
+                prop_assert!((path_alphas[k] - a_row).abs() < 1e-12);
+            }
+        }
+
+        /// `rescale_weights_for_standardize` lifts the per-feature
+        /// L1 penalty `λ Σ w_j |β_j|` into standardized space as
+        /// `λ Σ (w_j / s_j) |β̃_j|`. The composed identity:
+        /// `(w_j / s_j) · |β̃_j| = (w_j / s_j) · |β_orig_j · s_j|
+        ///                       = w_j · |β_orig_j|`.
+        #[test]
+        fn rescale_weights_preserves_penalty_value(
+            x_flat in arb_x_flat(),
+            y_vec in arb_y(),
+            beta_orig_vec in arb_beta_orig(),
+            w_vec in prop_vec(0.0_f64..3.0, N_FEATURES),
+            cfg in arb_config(),
+        ) {
+            let x = build_x(&x_flat);
+            let y = Array1::from(y_vec);
+            let beta_orig = Array1::from(beta_orig_vec);
+            let weights = Array1::from(w_vec);
+
+            let (_, _, stats) = standardize(x.view(), y.view(), &cfg);
+            if let Some(scales) = &stats.x_scales {
+                prop_assume!(scales.iter().all(|&s| s > 1e-6));
+            }
+
+            let w_rescaled = rescale_weights_for_standardize(weights.view(), &stats);
+            let beta_std: Array1<f64> = match &stats.x_scales {
+                Some(s) => Array1::from_iter((0..N_FEATURES).map(|j| beta_orig[j] * s[j])),
+                None => beta_orig.clone(),
+            };
+
+            let pen_orig: f64 = (0..N_FEATURES).map(|j| weights[j] * beta_orig[j].abs()).sum();
+            let pen_std: f64 = (0..N_FEATURES).map(|j| w_rescaled[j] * beta_std[j].abs()).sum();
+            prop_assert!(
+                (pen_orig - pen_std).abs() < 1e-10 * (1.0 + pen_orig.abs()),
+                "penalty mismatch: orig={}, std={}", pen_orig, pen_std,
+            );
+        }
+    }
+}

@@ -740,3 +740,356 @@ mod tests {
         assert!((b1[0] - b2[0]).abs() > 1e-3);
     }
 }
+
+/// Randomized property coverage for the prox operators (H3).
+///
+/// The hand-written `tests` module above pins specific (z, step, λ, …)
+/// triples — useful for documenting expected outputs but easy to miss
+/// regressions outside the picked points. The properties below quantify
+/// invariants that must hold *everywhere* on the parameter domain:
+///
+/// - sign preservation, antisymmetry, zero-fixed-point, monotonicity in
+///   `z`, and magnitude non-increase — for every scalar prox;
+/// - large-`γ` / large-`a` limits of MCP / SCAD collapse to
+///   [`soft_threshold`] — catches denominator-sign / saturation-boundary
+///   typos that constant-point tests can't see;
+/// - group-prox rotation invariance — the ℓ₂ group lasso / EN prox must
+///   commute with orthogonal rotations of the block (the prox lives on
+///   the ray through `z`, so this is the geometric content of the
+///   firm-threshold formula).
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    // Domain ranges chosen to span the regimes the solver actually
+    // visits:
+    //   step ∈ [0.1, 10] — LS solvers use ~1; GLM IRLS at saturated
+    //                      samples climbs to ~step=4 (see the
+    //                      `mcp_matches_ncvreg_v_scaled_at_glm_bench_tail`
+    //                      vanilla test).
+    //   lambda ∈ [1e-4, 2]   — path interior; below this the prox is
+    //                          ~identity and the tests are vacuous.
+    //   weight ∈ [0, 3]   — includes the unpenalised endpoint (w=0)
+    //                       used by adaptive / stability selection.
+    //   gamma  ∈ [1.5, 20]   — MCP convex branch (γ > 1).
+    //   a      ∈ [2.5, 20]   — SCAD a > 2; ≥ 2.5 keeps `1−1/(a−1)`
+    //                          comfortably positive.
+    //   alpha  ∈ [0, 1]   — elastic-net interpolation endpoints inclusive.
+    //   z      ∈ [-50, 50]   — large enough to land in MCP / SCAD
+    //                          saturation regions for any (λ, γ, step).
+    fn arb_step() -> impl Strategy<Value = f64> {
+        0.1_f64..10.0
+    }
+    fn arb_lambda() -> impl Strategy<Value = f64> {
+        1e-4_f64..2.0
+    }
+    fn arb_weight() -> impl Strategy<Value = f64> {
+        0.0_f64..3.0
+    }
+    fn arb_gamma() -> impl Strategy<Value = f64> {
+        1.5_f64..20.0
+    }
+    fn arb_a() -> impl Strategy<Value = f64> {
+        2.5_f64..20.0
+    }
+    fn arb_alpha() -> impl Strategy<Value = f64> {
+        0.0_f64..=1.0
+    }
+    fn arb_z() -> impl Strategy<Value = f64> {
+        -50.0_f64..50.0
+    }
+
+    /// |out| ≤ |z| · (1 + tiny_eps). Tiny slack absorbs round-off in
+    /// the `(|z| − step·λw) / (1 − 1/γ)` division near the saturation
+    /// boundary; the analytical bound is exact (equality at the
+    /// firm/saturation kink), so the slack is purely floating-point.
+    fn magnitude_non_increasing(z: f64, y: f64) -> bool {
+        y.abs() <= z.abs() + 1e-10 * (1.0 + z.abs())
+    }
+
+    // ---- soft threshold (lasso) ---------------------------------------
+
+    proptest! {
+        #[test]
+        fn soft_threshold_sign_preserving(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(), w in arb_weight(),
+        ) {
+            let y = soft_threshold(z, step, lam, w);
+            prop_assert!(y == 0.0 || y.signum() == z.signum());
+        }
+
+        #[test]
+        fn soft_threshold_antisymmetric(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(), w in arb_weight(),
+        ) {
+            let yp = soft_threshold(z, step, lam, w);
+            let yn = soft_threshold(-z, step, lam, w);
+            prop_assert!((yp + yn).abs() < 1e-12);
+        }
+
+        #[test]
+        fn soft_threshold_zero_fixed(
+            step in arb_step(), lam in arb_lambda(), w in arb_weight(),
+        ) {
+            prop_assert_eq!(soft_threshold(0.0, step, lam, w), 0.0);
+        }
+
+        #[test]
+        fn soft_threshold_monotone_in_z(
+            z1 in arb_z(), z2 in arb_z(),
+            step in arb_step(), lam in arb_lambda(), w in arb_weight(),
+        ) {
+            let (lo, hi) = if z1 <= z2 { (z1, z2) } else { (z2, z1) };
+            let y_lo = soft_threshold(lo, step, lam, w);
+            let y_hi = soft_threshold(hi, step, lam, w);
+            prop_assert!(y_lo <= y_hi + 1e-12);
+        }
+
+        #[test]
+        fn soft_threshold_magnitude_non_increasing(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(), w in arb_weight(),
+        ) {
+            let y = soft_threshold(z, step, lam, w);
+            prop_assert!(magnitude_non_increasing(z, y));
+        }
+    }
+
+    // ---- elastic-net (lasso + ridge) ----------------------------------
+
+    proptest! {
+        #[test]
+        fn elastic_net_sign_preserving(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(),
+            alpha in arb_alpha(), w in arb_weight(),
+        ) {
+            let y = elastic_net_prox(z, step, lam, alpha, w);
+            prop_assert!(y == 0.0 || y.signum() == z.signum());
+        }
+
+        #[test]
+        fn elastic_net_antisymmetric(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(),
+            alpha in arb_alpha(), w in arb_weight(),
+        ) {
+            let yp = elastic_net_prox(z, step, lam, alpha, w);
+            let yn = elastic_net_prox(-z, step, lam, alpha, w);
+            prop_assert!((yp + yn).abs() < 1e-12);
+        }
+
+        #[test]
+        fn elastic_net_monotone_in_z(
+            z1 in arb_z(), z2 in arb_z(),
+            step in arb_step(), lam in arb_lambda(),
+            alpha in arb_alpha(), w in arb_weight(),
+        ) {
+            let (lo, hi) = if z1 <= z2 { (z1, z2) } else { (z2, z1) };
+            let y_lo = elastic_net_prox(lo, step, lam, alpha, w);
+            let y_hi = elastic_net_prox(hi, step, lam, alpha, w);
+            prop_assert!(y_lo <= y_hi + 1e-12);
+        }
+
+        #[test]
+        fn elastic_net_magnitude_non_increasing(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(),
+            alpha in arb_alpha(), w in arb_weight(),
+        ) {
+            let y = elastic_net_prox(z, step, lam, alpha, w);
+            prop_assert!(magnitude_non_increasing(z, y));
+        }
+
+        #[test]
+        fn elastic_net_alpha_one_equals_soft_threshold(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(), w in arb_weight(),
+        ) {
+            let yen = elastic_net_prox(z, step, lam, 1.0, w);
+            let yst = soft_threshold(z, step, lam, w);
+            prop_assert!((yen - yst).abs() < 1e-12);
+        }
+    }
+
+    // ---- MCP -----------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn mcp_sign_preserving(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(),
+            gamma in arb_gamma(), w in arb_weight(),
+        ) {
+            let y = mcp_prox(z, step, lam, gamma, w);
+            prop_assert!(y == 0.0 || y.signum() == z.signum());
+        }
+
+        #[test]
+        fn mcp_antisymmetric(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(),
+            gamma in arb_gamma(), w in arb_weight(),
+        ) {
+            let yp = mcp_prox(z, step, lam, gamma, w);
+            let yn = mcp_prox(-z, step, lam, gamma, w);
+            prop_assert!((yp + yn).abs() < 1e-10);
+        }
+
+        #[test]
+        fn mcp_monotone_in_z(
+            z1 in arb_z(), z2 in arb_z(),
+            step in arb_step(), lam in arb_lambda(),
+            gamma in arb_gamma(), w in arb_weight(),
+        ) {
+            let (lo, hi) = if z1 <= z2 { (z1, z2) } else { (z2, z1) };
+            let y_lo = mcp_prox(lo, step, lam, gamma, w);
+            let y_hi = mcp_prox(hi, step, lam, gamma, w);
+            // Tolerance scales with magnitude — the firm-threshold
+            // formula's divisor amplifies round-off near the kink.
+            let slack = 1e-10 * (1.0 + y_hi.abs().max(y_lo.abs()));
+            prop_assert!(y_lo <= y_hi + slack);
+        }
+
+        #[test]
+        fn mcp_magnitude_non_increasing(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(),
+            gamma in arb_gamma(), w in arb_weight(),
+        ) {
+            let y = mcp_prox(z, step, lam, gamma, w);
+            prop_assert!(magnitude_non_increasing(z, y));
+        }
+
+        /// As γ → ∞ the MCP firm-threshold denominator `(1 − 1/γ) → 1`
+        /// and the saturation boundary `γ·step·λw → ∞`, so the prox
+        /// collapses to plain soft-threshold. Picking γ = 1e6 puts
+        /// every drawn `z` deep in the firm-threshold branch.
+        #[test]
+        fn mcp_large_gamma_limit_is_soft_threshold(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(), w in arb_weight(),
+        ) {
+            let y_mcp = mcp_prox(z, step, lam, 1e6, w);
+            let y_st  = soft_threshold(z, step, lam, w);
+            prop_assert!((y_mcp - y_st).abs() < 1e-3 * (1.0 + z.abs()));
+        }
+    }
+
+    // ---- SCAD ----------------------------------------------------------
+
+    proptest! {
+        #[test]
+        fn scad_sign_preserving(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(),
+            a in arb_a(), w in arb_weight(),
+        ) {
+            let y = scad_prox(z, step, lam, a, w);
+            prop_assert!(y == 0.0 || y.signum() == z.signum());
+        }
+
+        #[test]
+        fn scad_antisymmetric(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(),
+            a in arb_a(), w in arb_weight(),
+        ) {
+            let yp = scad_prox(z, step, lam, a, w);
+            let yn = scad_prox(-z, step, lam, a, w);
+            prop_assert!((yp + yn).abs() < 1e-10);
+        }
+
+        #[test]
+        fn scad_monotone_in_z(
+            z1 in arb_z(), z2 in arb_z(),
+            step in arb_step(), lam in arb_lambda(),
+            a in arb_a(), w in arb_weight(),
+        ) {
+            let (lo, hi) = if z1 <= z2 { (z1, z2) } else { (z2, z1) };
+            let y_lo = scad_prox(lo, step, lam, a, w);
+            let y_hi = scad_prox(hi, step, lam, a, w);
+            let slack = 1e-10 * (1.0 + y_hi.abs().max(y_lo.abs()));
+            prop_assert!(y_lo <= y_hi + slack);
+        }
+
+        #[test]
+        fn scad_magnitude_non_increasing(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(),
+            a in arb_a(), w in arb_weight(),
+        ) {
+            let y = scad_prox(z, step, lam, a, w);
+            prop_assert!(magnitude_non_increasing(z, y));
+        }
+
+        /// As `a → ∞`, SCAD's quadratic / saturation regions push past
+        /// any finite `z` and the prox collapses to soft-threshold —
+        /// the same lasso limit MCP has at large γ.
+        #[test]
+        fn scad_large_a_limit_is_soft_threshold(
+            z in arb_z(), step in arb_step(), lam in arb_lambda(), w in arb_weight(),
+        ) {
+            let y_scad = scad_prox(z, step, lam, 1e6, w);
+            let y_st   = soft_threshold(z, step, lam, w);
+            prop_assert!((y_scad - y_st).abs() < 1e-3 * (1.0 + z.abs()));
+        }
+    }
+
+    // ---- group prox: rotation invariance ------------------------------
+
+    /// 2×2 rotation acting on a length-2 block. `c = cos θ`, `s = sin θ`.
+    fn rotate_2d(block: &mut [f64], c: f64, s: f64) {
+        let (b0, b1) = (block[0], block[1]);
+        block[0] = c * b0 - s * b1;
+        block[1] = s * b0 + c * b1;
+    }
+
+    proptest! {
+        /// Group lasso prox `(1 − thr/‖z‖)+ · z` lives on the ray
+        /// through `z` and scales by a function of `‖z‖` only. So for
+        /// any orthogonal Q, `prox(Q·z) = Q·prox(z)` — equivalently,
+        /// the prox commutes with rotation.
+        ///
+        /// Drawing `θ ∈ [-π, π]` covers every 2D orthogonal matrix with
+        /// `det = +1` (reflections share the same invariance argument).
+        #[test]
+        fn group_soft_threshold_rotation_invariant(
+            b0 in -10.0_f64..10.0, b1 in -10.0_f64..10.0,
+            theta in -std::f64::consts::PI..std::f64::consts::PI,
+            step in arb_step(), lam in arb_lambda(), w in arb_weight(),
+        ) {
+            let c = theta.cos();
+            let s = theta.sin();
+
+            // Path A: prox in original frame, then rotate.
+            let mut path_a = vec![b0, b1];
+            group_soft_threshold(&mut path_a, step, lam, w);
+            rotate_2d(&mut path_a, c, s);
+
+            // Path B: rotate first, then prox in rotated frame.
+            let mut path_b = vec![b0, b1];
+            rotate_2d(&mut path_b, c, s);
+            group_soft_threshold(&mut path_b, step, lam, w);
+
+            for k in 0..2 {
+                prop_assert!((path_a[k] - path_b[k]).abs() < 1e-10);
+            }
+        }
+
+        /// Same rotation invariance must hold for the group elastic-net
+        /// prox at every α ∈ [0, 1] — the firm-threshold + ridge factor
+        /// is again a function of ‖block‖ only.
+        #[test]
+        fn group_elastic_net_rotation_invariant(
+            b0 in -10.0_f64..10.0, b1 in -10.0_f64..10.0,
+            theta in -std::f64::consts::PI..std::f64::consts::PI,
+            step in arb_step(), lam in arb_lambda(),
+            alpha in arb_alpha(), w in arb_weight(),
+        ) {
+            let c = theta.cos();
+            let s = theta.sin();
+
+            let mut path_a = vec![b0, b1];
+            group_elastic_net_prox(&mut path_a, step, lam, alpha, w);
+            rotate_2d(&mut path_a, c, s);
+
+            let mut path_b = vec![b0, b1];
+            rotate_2d(&mut path_b, c, s);
+            group_elastic_net_prox(&mut path_b, step, lam, alpha, w);
+
+            for k in 0..2 {
+                prop_assert!((path_a[k] - path_b[k]).abs() < 1e-10);
+            }
+        }
+    }
+}

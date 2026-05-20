@@ -19,6 +19,9 @@ mod least_squares;
 mod multinomial_logit;
 mod poisson_log;
 
+#[cfg(test)]
+mod surrogate_proptests;
+
 pub use binomial_logit::BinomialLogit;
 pub use cox_ph::{CoxPH, TieHandling};
 pub(crate) use gram_least_squares::GramLeastSquares;

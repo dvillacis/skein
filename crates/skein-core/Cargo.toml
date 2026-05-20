@@ -44,6 +44,10 @@ blas-openblas = ["ndarray/blas", "blas-src/openblas", "dep:openblas-src", "openb
 [dev-dependencies]
 approx = "0.5"
 criterion = { version = "0.5", default-features = false, features = ["plotters", "cargo_bench_support"] }
+# proptest powers the H3 randomized-coverage tier (prox idempotence /
+# monotonicity, GLM surrogate ↔ gradient/Hessian identities, standardize
+# bijection). Kept dev-only — no shipped wheel pulls it in.
+proptest = { version = "1", default-features = false, features = ["std"] }
 tempfile = "3"
 
 [[bench]]

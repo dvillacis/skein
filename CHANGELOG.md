@@ -12,6 +12,31 @@ new wall-clock instrumentation).
 
 ### Hardening
 
+- **H3 — Property-based & fuzz tests on prox / surrogate.** 30 new
+  Rust `proptest`s in `crates/skein-core` (dev-only dep) + 4 Python
+  `hypothesis` tests close the randomized-coverage gap M12's C1/C2
+  unit tests left open:
+  - `src/prox.rs` — sign / antisymmetry / monotonicity /
+    magnitude-non-increase on every scalar prox, EN ↔ soft-threshold
+    at α=1, MCP-as-γ→∞ and SCAD-as-a→∞ collapse to soft-threshold,
+    2D rotation invariance of the group lasso / EN block prox.
+  - `src/datafit/surrogate_proptests.rs` — BinomialLogit / PoissonLog
+    / CoxPH (Breslow + Efron) surrogate gradient identity vs.
+    central-FD of `loss(β)`; analytical Fisher Hessian diagonal
+    match for the canonical-link GLMs.
+  - `src/standardize.rs` — full `destandardize(standardize_β(β)) = β`
+    bijection across every `(center_x, scale_x, fit_intercept)` flag
+    combo, plus `destandardize_path` row-consistency and
+    `rescale_weights_for_standardize` penalty preservation.
+  - `tests/test_weight_composition.py` — `weights = None ↔ ones`
+    bit-equality across the PyO3 boundary for MCPPathRegressor and
+    GroupLassoPathRegressor; per-feature permutation equivariance;
+    positive non-uniform `sample_weights` no-op detector. Documents
+    one architectural quirk surfaced by the exercise: `sample_weights
+    = None` and `sample_weights = ones(n)` take structurally
+    different paths in `crates/skein-py/src/ls.rs` and so are
+    *approximately* — not bit-exactly — equivalent.
+
 - **H2 — Numerical-stability sweep.** Four new pytest files (84
   tests) covering pathological inputs that earlier well-conditioned
   synthetics didn't reach:

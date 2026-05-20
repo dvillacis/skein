@@ -23,7 +23,7 @@ open v0.x lever.
 |-----------|-------|--------|-------|
 | H1 — At-scale bench + fixture tier (n ≥ 100k) | Hardening | ✅ infra | infrastructure shipped 2026-05-20: `xlarge` (100k × 10k) in headline matrix for ls_lasso / ls_mcp / logistic_lasso / ls_group_lasso, comparator gap captured in `paper/manifest.json` under `at_scale_comparator_gap`, per-PR `large` canary in bench-smoke, `*_large` R-anchor fixtures (n=5k/p=500 default, env-tunable to 50k/p=2k), `docs/benchmarks/at_scale.md`. Rendered `xlarge` snapshots are maintainer-overnight, not part of this closeout. |
 | H2 — Numerical-stability sweep | Hardening | ✅ done | 84 new pytests across four files (`tests/test_numerics_design_pathologies.py`, `test_numerics_extreme_weights.py`, `test_numerics_glm_saturation.py`, `test_numerics_glasso_singular.py`) covering collinear / zero-variance designs, 12-decade sample-weight spreads, zero per-feature and per-group weights, Poisson η near `ETA_CLAMP`, separable & class-imbalanced logistic, heavy-ties Cox under both Breslow and Efron, and rank-deficient single / joint glasso. Surfaced one finding: nonconvex glasso (MCP / SCAD) does not preserve SPD in extreme `n ≪ p` (n=5, p=40 produced min eigvalue −8.8e-3) — documented as an algorithmic property; finiteness + symmetry remain the asserted contract. All tests run under a 30 s wall-clock budget to catch infinite-loop fallback. |
-| H3 — Property-based & fuzz tests | Hardening | ⏳ planned | `proptest` on prox / threshold / surrogate identities; closes the long tail C1/C2 left |
+| H3 — Property-based & fuzz tests | Hardening | ✅ done | 30 Rust `proptest`s + 4 Python `hypothesis` tests covering randomized invariants the hand-picked unit fixtures don't reach: sign / antisymmetry / monotonicity / magnitude-non-increase on `soft_threshold` / `elastic_net_prox` / `mcp_prox` / `scad_prox`, large-γ / large-a limit collapse to soft-threshold, group-prox rotation invariance for ℓ₂ group lasso / EN, BinomialLogit / PoissonLog / CoxPH surrogate gradient match against FD-of-loss (with both tie-handlers for Cox), Binomial / Poisson Hessian-diagonal match against the analytical Fisher diagonal, full `destandardize(standardize_β(β)) = β` bijection across every flag combo (center × scale × intercept) including `destandardize_path` and `rescale_weights_for_standardize` penalty preservation, and Python-side `weights = None ↔ ones` bit-equality through the PyO3 boundary plus per-feature permutation equivariance and a positive `sample_weights` no-op detector. Surfaced one architectural quirk (documented in `tests/test_weight_composition.py`): `sample_weights=None` and `sample_weights=ones(n)` take structurally different code paths in `crates/skein-py/src/ls.rs` (centered destandardize vs. augmented intercept column) and converge to the same optimum but along different iterate trajectories, so the identity holds approximately, not bit-exactly. |
 | H4 — Reproducibility audit | Hardening | ⏳ planned | RNG-seed coverage across stability selection, CV, bootstrap, multinomial init |
 | P1 — Native sparse-group MCP block-CD for GLMs | Performance | ⏳ planned | drops the LLA layer for logistic / Poisson / Cox sparse-group MCP (sibling of M13.4c) |
 | P2 — Scalar MCP/SCAD path overhead investigation | Performance | ⏳ planned | M13.5 carryover, re-scoped — scalar MCP/SCAD route through `solve_path` directly (closed-form prox), not `path_lla`; the M14c.1 short-circuit already covers the LLA-side users (bridge/adaptive/multitask). Current `medium/deep` gap is 1.50× MCP vs Lasso (was 1.32× pre-M14e); EN-vs-Lasso is 1.24× so most of MCP's gap is generic non-trivial-prox cost, ~1.21× excess is genuinely MCP-specific. Profile-then-fix; smaller upper bound than originally claimed. |
@@ -40,8 +40,8 @@ open v0.x lever.
 
 Test count at v1.0.0: **358 cargo lib + 8 cargo integration + 455
 pytest, all green.** Each milestone below either keeps this number
-flat (perf work) or grows it (hardening). Current HEAD: **418 cargo
-lib + 593 pytest** (post-H2).
+flat (perf work) or grows it (hardening). Current HEAD: **448 cargo
+lib + 597 pytest** (post-H3).
 
 ---
 
@@ -181,26 +181,53 @@ separate, stricter test on `GraphicalLasso`.)
 Roll-up: test count moves from **506 pytest pre-H2 to 593
 (`pytest tests/`, 9 skipped, all unrelated)**.
 
-### H3 — Property-based & fuzz tests on prox / surrogate
+### ✅ H3 — Property-based & fuzz tests on prox / surrogate
 
-`proptest` (Rust) and `hypothesis` (Python) over:
+Closure of the C1/C2 randomized-coverage gap M12 left open. `proptest`
+in Rust covers the in-tree numerical contracts; `hypothesis` in Python
+covers what crosses the PyO3 boundary.
 
-- **Prox identities**: `prox(prox(x)) = prox(x)`; soft-threshold
-  monotonicity; group-prox rotation invariance for ℓ₂ group lasso;
-  MCP/SCAD agreement with closed-form references at random points.
-- **Surrogate identities**: `GlmDatafit::surrogate_at(β)` returns a
-  `LeastSquares` whose quadratic approximation matches the GLM
-  gradient + Hessian at β to machine precision (we have this for
-  logistic + Poisson + Cox in test fixtures; property-based version
-  catches Lipschitz-bound regressions).
-- **Standardize bijection**: `destandardize(standardize(X, β)) ≈ β`
-  for arbitrary X / weights.
-- **Penalty / weight composition**: per-feature × per-sample ×
-  per-group weight combos that don't currently have a unit test but
-  are documented as valid through the public API.
+**Rust (`proptest`, in `crates/skein-core`, dev-only dep):**
 
-This is the closure of C1/C2 from M12 — those milestones added
-direct unit tests but didn't introduce randomized coverage.
+- `src/prox.rs` — 22 properties on `soft_threshold`, `elastic_net_prox`,
+  `mcp_prox`, `scad_prox`, `group_soft_threshold`, `group_elastic_net_prox`:
+  sign preservation, antisymmetry, zero fixed-point, monotonicity in
+  `z`, magnitude non-increase; large-γ and large-a limit collapse to
+  `soft_threshold`; 2D rotation invariance of the group prox.
+- `src/datafit/surrogate_proptests.rs` — 5 properties on the GLM
+  surrogates. BinomialLogit / PoissonLog / CoxPH (both tie-handlers):
+  surrogate's `coord_grad` at β matches central-FD of `loss(β)`.
+  BinomialLogit / PoissonLog (with optional sample-weights / offset):
+  surrogate's `coord_lipschitz` matches the analytical Fisher Hessian
+  diagonal. Cox's diagonal-IRLS is approximate by construction so the
+  Lipschitz identity is not asserted.
+- `src/standardize.rs` — 3 properties: `destandardize(β · s) = β` for
+  every (center_x × scale_x × fit_intercept) flag combo plus the
+  documented intercept formula, `destandardize_path` agrees with
+  per-row `destandardize`, and `rescale_weights_for_standardize`
+  preserves the L1 penalty value under the standardized-space lift.
+
+**Python (`hypothesis`, dev-only dep):**
+
+- `tests/test_weight_composition.py` — 4 properties through the public
+  estimators: `weights=None ≡ weights=ones(p)` for MCPPathRegressor
+  (bit-equal — both reach the same internal `Array1::ones(p)`),
+  per-group `weights=None ≡ weights=ones(n_groups)` for
+  GroupLassoPathRegressor, per-feature column-permutation equivariance
+  for MCPPathRegressor at tight tol, and a positive non-uniform
+  `sample_weights` no-op detector. Inputs are derived from a
+  hypothesis-drawn RNG seed (X / y aren't fuzzed element-wise — the
+  invariances are bit-equality assertions strengthened by repeated
+  runs, not by pathological draws).
+
+One architectural finding documented inline in the Python module
+docstring: `sample_weights=None` and `sample_weights=ones(n)` take
+structurally different code paths in `crates/skein-py/src/ls.rs` — the
+no-weights path centers via `standardize`/`destandardize_path`; the
+explicit path uses an augmented intercept column. Both formulations
+target the same penalised LS objective and converge to the same
+optimum, but their iterate trajectories and λ-grids differ, so this is
+*not* a bit-equality invariance and we don't test it as one.
 
 ### H4 — Reproducibility audit
 

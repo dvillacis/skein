@@ -29,6 +29,10 @@ dependencies = [
 dev = [
     "pytest>=7",
     "pytest-cov",
+    # `hypothesis` drives the H3 weight-composition fuzz tier that
+    # crosses the PyO3 boundary (per-feature × per-sample × per-group
+    # weight combos through the public estimators).
+    "hypothesis>=6",
     "maturin>=1.5",
     "ruff",
     "mypy",
