@@ -4,6 +4,65 @@ All notable changes to `skein-glm` are recorded here. The project
 follows semantic versioning. The stable Rust API surface is frozen as
 of v1.0.0; see `docs/extending/rust-api.md` for the contract.
 
+## [Unreleased]
+
+Post-v1.0 hardening & operability work. The public API surface is
+unchanged; everything below is additive (new tests, new CI gates,
+new wall-clock instrumentation).
+
+### Hardening
+
+- **H2 — Numerical-stability sweep.** Four new pytest files (84
+  tests) covering pathological inputs that earlier well-conditioned
+  synthetics didn't reach:
+  - `tests/test_numerics_design_pathologies.py` — collinear columns
+    at ε ∈ {0, 1e-12, 1e-8} and constant columns across LS / group /
+    logistic / Poisson penalties, with and without `standardize`,
+    plus an explicit `rescale_weights_for_standardize` audit on a
+    zero-variance column.
+  - `tests/test_numerics_extreme_weights.py` — `sample_weights`
+    spanning 12 decades, zero per-feature weights (asserting the
+    unpenalized feature stays nonzero across the path), zero
+    per-group weights for group lasso / MCP / sparse-group lasso.
+  - `tests/test_numerics_glm_saturation.py` — Poisson η driven
+    against `ETA_CLAMP`, linearly separable & extreme-imbalance
+    logistic, and Cox under heavy-ties / all-events-at-one-time
+    with both Breslow and Efron.
+  - `tests/test_numerics_glasso_singular.py` — rank-deficient
+    single / joint glasso, `diag_offset=0`, duplicated and constant
+    variables, precomputed singular covariance.
+
+  Every test enforces a 30 s wall-clock budget to catch the
+  infinite-loop fallback that `gap < tol²` once produced. Surfaced
+  one algorithmic finding: nonconvex glasso (MCP / SCAD) does not
+  preserve SPD across iterations at extreme `n ≪ p` (the L1 SPD
+  invariant relies on the FHT-2008 block update being positive on
+  every coordinate, which the MCP / SCAD release region can flip).
+  Documented in the H2 test file; the H2 contract is finiteness +
+  symmetry, and that still holds.
+
+  Test count moves from 506 → **593 pytest** (`pytest tests/`, 9
+  skipped, all unrelated).
+
+### Hardening / Performance / Operability (status carry-over)
+
+The following milestones shipped between v1.0.0 and this release and
+are folded into the same Unreleased window — see `ROADMAP.md` for
+the per-milestone evidence and discussion. They are noted here for
+release-notes completeness:
+
+- **H1** — at-scale bench infrastructure (`xlarge` n=100k×p=10k in
+  the headline matrix, per-PR `large` canary, `*_large` R-anchor
+  fixtures, `docs/benchmarks/at_scale.md`).
+- **O1** — `cargo-semver-checks` in CI against the `v1.0.0`
+  baseline.
+- **O2** — `cargo-audit` + `pip-audit` + dependabot for
+  supply-chain hygiene.
+- **O3** — Python 3.13 + NumPy 2.x in the CI matrix.
+- **O6** — per-λ wall-clock surfaced on every path estimator via
+  `info_["times_ns"]`, powered by additive `solve_*_path_timed`
+  siblings that keep the v1.0 freeze intact.
+
 ## [1.0.0] — 2026-05-19
 
 The v1.0 release. Closes the **stable Rust API audit** (M8.5) — the
