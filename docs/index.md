@@ -312,6 +312,7 @@ api/abcs
 :caption: Benchmarks
 
 benchmarks/index
+benchmarks/speed
 benchmarks/lasso_ls_correctness
 benchmarks/mcp_ls
 benchmarks/scad_ls

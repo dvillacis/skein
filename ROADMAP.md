@@ -35,14 +35,13 @@ open v0.x lever.
 | O2 — `cargo-audit` + `pip-audit` + dependabot | Operability | ✅ done | supply-chain hygiene baseline; weekly cron + per-PR on dep-manifest changes; 1 documented advisory ignore (RUSTSEC-2025-0020, pyo3 unreachable API) |
 | O3 — Python 3.13 + NumPy 2.x in CI matrix | Operability | ✅ done | 3.13 added to the `python` job matrix; local pytest on 3.13 + NumPy 2.4.6 green (506 passed). NumPy 2.x was already the resolver default at v1.0 — `numpy>=1.24` floor stays; no API-removal hazards in the Python codebase |
 | O4 — Expanded wheel matrix (musllinux + Linux aarch64) | Operability | ⏳ planned | currently `CIBW_SKIP: "*-musllinux_*"`; aarch64 dropped from v0.1.x matrix |
-| O5 — `docs/benchmarks/speed.md` consolidation | Operability | ⏳ planned | M9.5 carryover — single landing page for all perf claims with provenance |
+| O5 — `docs/benchmarks/speed.md` consolidation | Operability | ✅ done | One-page headline summary at `docs/benchmarks/speed.md` with full provenance block (host_id, BLAS, skein version, snapshot date, git rev) and per-scenario speedup tables sourced from `paper/tables/T2_headline_timings.md`. Honest about which cells skein loses on (logistic_lasso / poisson_lasso / cox_lasso pre-M13.8 snapshot) and which scenarios have no comparator. Linked into the docs index toctree + `docs/benchmarks/index.md`. |
 | O6 — Structured timing / iteration surface | Operability | ✅ done | per-λ wall time surfaced via `info_["times_ns"]` on every path estimator; powered by additive `solve_path_timed` / `solve_block_path_timed` / `prox_newton_*_solve_path_timed` siblings that keep the v1.0 freeze intact |
 
 Test count at v1.0.0: **358 cargo lib + 8 cargo integration + 455
 pytest, all green.** Each milestone below either keeps this number
 flat (perf work) or grows it (hardening). Current HEAD: **448 cargo
-lib + 606 pytest** (post-P3a; P3 part (a) ships `skein_glm.__build_features__`
-with one new pytest pinning the type contract — `test_build_features_attribute_shape`).
+lib + 606 pytest** (post-O5; O5 is docs-only, counts unchanged from P3a).
 
 ---
 
@@ -905,15 +904,53 @@ SciPy 1.17.1 + sklearn 1.8.0 locally (`/tmp/skein_py313`,
 Both decisions made sense at v0.1; v1.0 is a different audience.
 Re-evaluate both.
 
-### O5 — `docs/benchmarks/speed.md` consolidation
+### ✅ O5 — `docs/benchmarks/speed.md` consolidation
 
-**M9.5 carryover.** Headline numbers live in five places: `README.md`,
-`ROADMAP_old.md`, `paper/tables/T2_headline_timings.md`, individual
-`docs/perf/*.md` profile notes, and `paper/BUNDLE.md`. Consolidate
-into a single `docs/benchmarks/speed.md` landing page with explicit
-provenance (host_id, BLAS feature, commit SHA, snapshot date) so
-users can tell at a glance what the "1.9× ahead of glmnet" claim
-covers.
+**Shipped 2026-05-21.** `docs/benchmarks/speed.md` is now the
+canonical landing page for skein's wall-clock headline claims. It
+sources its numbers directly from `paper/tables/T2_headline_timings.md`
+(the v2 benchmark suite's machine-generated headline table) and surfaces
+them as scenario-by-scenario speedup ratios against glmnet / ncvreg /
+celer / skglm / grpreg, with explicit provenance for the snapshot
+(host_id `3c43bb844695`, Apple M1, Accelerate, skein 0.10.0,
+2026-05-19, git rev `474c68a1` per-cell / `08b1d378` bundle assembly).
+
+What landed:
+
+- **Provenance-first.** The "Provenance" section is the page's first
+  table — host, CPU, BLAS, OS, Python, every comparator's pinned
+  version, snapshot date, and the git rev. No headline number on the
+  page is unmoored from this block.
+- **Three speedup tables.** LS family (skein wins everywhere it has a
+  peer — 1.45× over glmnet on `ls_lasso`, 4.59× over ncvreg on
+  `ls_mcp`, 2.71× over celer on `ls_lasso`, etc.); group/structured
+  family (~2× over grpreg on both `ls_group_lasso` and `ls_group_mcp`);
+  GLM family (4.85× over ncvreg on `logistic_mcp`; losing to glmnet on
+  `logistic_lasso` / `poisson_lasso` / `cox_lasso`).
+- **Honest about the losses.** The page calls out explicitly that
+  the snapshot is from skein 0.10.0, predating the M13.8 celer-style
+  screening cascade that the README's "2.2–8.2× wall-clock on
+  `logistic_lasso`" claim was measured against. v1.0+ users running a
+  fresh v2 bundle should see different numbers on those three cells;
+  re-snapshot is maintainer-overnight.
+- **Caveats spelled out.** Single-threaded inner CD only (CV / stability
+  parallelism is a separate axis). Deep-tail (`λ_min/λ_max = 1e-3`)
+  cells only — sparse cells track the same direction qualitatively
+  but finish 3–10× faster.
+- **Reproduction recipe.** The exact `pip install -e '.[bench]'` +
+  `maturin develop --release --features=blas-accelerate` +
+  `snakemake --profile profiles/m1-headline` sequence that
+  regenerates the snapshot.
+- **Linked from the doctree.** Added to `docs/index.md`'s benchmark
+  toctree and surfaced as section "0. Headline summary" at the top of
+  `docs/benchmarks/index.md`.
+
+Closes the M9.5 carryover. Future maintainers re-running the v2
+bundle should regenerate `speed.md`'s headline table from the new
+T2 — the script for that is a few lines of Python (currently inlined
+in the commit message that landed this milestone; promoting it to a
+`benches/v2/report/render_speed_md.py` driver is a follow-up if
+re-snapshots become frequent).
 
 ### ✅ O6 — Structured timing / iteration surface
 
