@@ -29,7 +29,7 @@ use crate::penalty::Penalty;
 use crate::solver::cd::{cd_solve_subset_weighted_ls_with_lips, CdConfig};
 use crate::solver::path::{
     anderson_extrapolate_pair, compute_outer_state, lambda_grid, lambda_max,
-    priority_rule_screen_with_grad,
+    priority_rule_screen_with_grad, saturation_threshold,
 };
 use ndarray::{Array1, Array2};
 use std::time::Instant;
@@ -38,16 +38,6 @@ use std::time::Instant;
 /// solver's `DUAL_HISTORY_MAX` (celer's K=6); also bounds the per-iter
 /// memory footprint at `2 · K · p · 8` bytes (= 96 KB at p=1000).
 const DUAL_HISTORY_MAX: usize = 6;
-
-/// Once the warm β has more than this fraction of nonzero entries, skip
-/// the screened inner loop and fall back to the legacy KKT-only path.
-/// Mirrors `solver::path::SCREENING_SATURATION_THRESHOLD` (M13.1) — at
-/// saturation, dual extrapolation + safe-sphere screening overhead
-/// (1 extra rmatvec per pass, O(p) prox calls) exceeds the screening
-/// gain because nearly all features are active and can't be screened.
-/// Measured on logistic_lasso small-deep (active 191/200): without
-/// this bypass the screened loop is ~15% slower than the legacy path.
-const PN_SCREENING_SATURATION_THRESHOLD: f64 = 0.5;
 
 /// Minimum working-set size when the strong rule has nothing to lean on
 /// (cold start with β = 0 at λ_max). Same role as `PathConfig::p0`; the
@@ -124,6 +114,10 @@ pub(crate) fn prox_newton_solve_screened(
     let mut outer_iters = 0usize;
 
     let weights: Array1<f64> = penalty.weights().to_owned();
+    // M13.1 saturation-bypass threshold (P5 ablation surface). Read once
+    // per λ-call so the env-var lookup doesn't repeat per outer iter; in
+    // production this collapses to the default constant.
+    let saturation_thresh = saturation_threshold();
 
     for outer in 0..max_outer {
         outer_iters = outer + 1;
@@ -146,12 +140,12 @@ pub(crate) fn prox_newton_solve_screened(
             priority_rule_screen_with_grad(grad0.view(), weights.view(), warm.view(), ws_size);
 
         // Saturation bypass: when the warm β has more than
-        // PN_SCREENING_SATURATION_THRESHOLD × p nonzero entries, the
-        // screening overhead (extra rmatvec for Anderson + O(p) prox
-        // for safe-sphere test) outweighs the screening gain, because
-        // active features can't be screened. Fall back to the legacy
-        // KKT-only loop in that regime. Mirrors path.rs's M13.1.
-        let saturated = (n_support as f64) > PN_SCREENING_SATURATION_THRESHOLD * (p as f64);
+        // `saturation_thresh` × p nonzero entries, the screening overhead
+        // (extra rmatvec for Anderson + O(p) prox for safe-sphere test)
+        // outweighs the screening gain, because active features can't be
+        // screened. Fall back to the legacy KKT-only loop in that regime.
+        // Mirrors path.rs's M13.1.
+        let saturated = (n_support as f64) > saturation_thresh * (p as f64);
         let effective_lambda = if saturated { None } else { lambda };
 
         let inner_iter_total = match effective_lambda {

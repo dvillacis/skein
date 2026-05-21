@@ -97,9 +97,20 @@ fn run(label: &str, n: usize, p: usize, warmup: bool) -> std::time::Duration {
     let datafit = LeastSquares::new(y);
     let weights = Array1::<f64>::ones(p);
     let lam_max = lambda_max(&design, &datafit, weights.view());
+    // SKEIN_REGIME=sparse selects the support-recovery regime
+    // (λ_min/λ_max = 5e-2, active set stays at true support); default
+    // matches benches/v2 `deep` (λ_min/λ_max = 1e-3, dense tail).
+    // Added for the P5 saturation-threshold ablation — the threshold
+    // affects deep and sparse cells differently, so both regimes need
+    // to be measurable from the same example.
+    let lambda_min_ratio = if std::env::var("SKEIN_REGIME").as_deref() == Ok("sparse") {
+        5e-2
+    } else {
+        1e-3
+    };
     let config = PathConfig {
         n_lambdas: N_LAMBDAS,
-        lambda_min_ratio: 1e-3,
+        lambda_min_ratio,
         lambdas: None,
         cd: CdConfig {
             max_iter: 200,

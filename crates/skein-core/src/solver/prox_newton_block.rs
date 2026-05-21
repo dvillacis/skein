@@ -36,7 +36,7 @@ use crate::solver::block_cd::{
 };
 use crate::solver::block_path::block_lambda_max;
 use crate::solver::cd::CdConfig;
-use crate::solver::path::lambda_grid;
+use crate::solver::path::{lambda_grid, saturation_threshold};
 use ndarray::{Array1, Array2, ArrayView1};
 use std::time::Instant;
 
@@ -46,15 +46,6 @@ use std::time::Instant;
 /// before we fall back to the full group set. In practice 1–3 passes is
 /// plenty even for the densest GLM × group cells.
 const BLOCK_KKT_EXPANSION_PASSES: usize = 5;
-
-/// Saturation threshold for the block-PN screening bypass. Mirrors the
-/// scalar PN bypass and path.rs's M13.1: when more than this fraction
-/// of groups are already active at the start of a PN outer iter,
-/// `block_gap_safe_screen` + KKT-WS expansion is pure overhead because
-/// active groups can't be screened. Skip the screening machinery and
-/// fall back to a single full-group block-CD call (the original
-/// pre-Phase-4 behavior).
-const BLOCK_PN_SCREENING_SATURATION_THRESHOLD: f64 = 0.5;
 
 #[derive(Debug, Clone)]
 pub struct ProxNewtonBlockPathReport {
@@ -168,6 +159,10 @@ where
     // than necessary). A tighter cache that recomputes per outer iter
     // is M3.x.
     let group_lip = group_lipschitz_cache(design, groups);
+    // M13.1 saturation-bypass threshold (P5 ablation surface). Read once
+    // per fit so the env-var lookup doesn't repeat per λ × outer iter;
+    // in production this collapses to the default constant.
+    let saturation_thresh = saturation_threshold();
 
     for &lam in lambdas.iter() {
         let lambda_start = Instant::now();
@@ -201,17 +196,17 @@ where
             // (constant base_weights) and LLA-wrapped non-convex
             // surrogates (per-group adaptive weights).
             //
-            // Saturation bypass: when more than half the groups are
-            // already active at the start of this PN iter, screening
+            // Saturation bypass: when more than `saturation_thresh × n_groups`
+            // are already active at the start of this PN iter, screening
             // can't help (active groups can't be screened); fall back
             // to the single full-group block-CD call (the pre-Phase-4
-            // behavior). Mirrors the scalar PN bypass — see the const
-            // definition above for rationale.
+            // behavior). Mirrors the scalar PN bypass — see the
+            // `DEFAULT_SATURATION_THRESHOLD` docstring in `path.rs` for
+            // rationale.
             let n_active_groups = (0..n_groups)
                 .filter(|&g| groups.group(g).iter().any(|&j| warm[j] != 0.0))
                 .count();
-            let saturated = (n_active_groups as f64)
-                > BLOCK_PN_SCREENING_SATURATION_THRESHOLD * (n_groups as f64);
+            let saturated = (n_active_groups as f64) > saturation_thresh * (n_groups as f64);
             if saturated {
                 let group_subset: Vec<usize> = (0..n_groups).collect();
                 let (b_new, inner_report) = block_cd_solve_subset_with_cache(

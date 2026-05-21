@@ -113,7 +113,8 @@ pub enum Screening {
     GapSafe,
 }
 
-/// Active-set saturation threshold above which screening is bypassed.
+/// Default active-set saturation threshold above which screening is
+/// bypassed.
 ///
 /// When the warm-started β at λ_k already has >50 % of features active,
 /// strong-rule / gap-safe screening at λ_{k+1} costs more than it saves:
@@ -129,7 +130,28 @@ pub enum Screening {
 /// Threshold = 0.5 is conservative — it fires only after the active set
 /// is genuinely saturated, leaves all small-active-set λs (the regime
 /// where screening actually pays off) untouched. See ROADMAP M13.1.
-const SCREENING_SATURATION_THRESHOLD: f64 = 0.5;
+const DEFAULT_SATURATION_THRESHOLD: f64 = 0.5;
+
+/// Effective saturation threshold used by every solver path's M13.1
+/// bypass (path / prox_newton / prox_newton_block).
+///
+/// Returns [`DEFAULT_SATURATION_THRESHOLD`] unless
+/// `SKEIN_SATURATION_THRESHOLD` is set in the environment to a
+/// parseable float in `[0.0, 1.0]`, in which case the env-var value is
+/// used. Invalid (unparseable or out-of-range) values silently fall back
+/// to the default — this is a debug-only ablation surface, not a
+/// user-facing knob.
+///
+/// **P5 ablation hook.** ROADMAP P5 measures whether a non-0.5 value
+/// dominates the regime × size matrix; production builds should not
+/// set the env var.
+pub(crate) fn saturation_threshold() -> f64 {
+    std::env::var("SKEIN_SATURATION_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|&v| (0.0..=1.0).contains(&v))
+        .unwrap_or(DEFAULT_SATURATION_THRESHOLD)
+}
 
 #[derive(Debug, Clone)]
 pub struct PathConfig {
@@ -246,6 +268,11 @@ where
         Vec::new()
     };
 
+    // M13.1 saturation-bypass threshold (P5 ablation surface). Read once
+    // per fit so the env-var lookup doesn't repeat per λ; in production
+    // this collapses to the default constant.
+    let saturation_thresh = saturation_threshold();
+
     for (k, &lam) in lambdas.iter().enumerate() {
         let lambda_start = Instant::now();
         let mut t = PhaseTimings::default();
@@ -267,14 +294,15 @@ where
         //   the first (uses the cold-start residual = -y).
         //
         // M13.1 — adaptive saturation bypass: once the warm β has more
-        // than SCREENING_SATURATION_THRESHOLD × p nonzero entries, the
-        // strong / gap-safe rules pay screening setup *and* extra KKT
+        // than `saturation_thresh` × p nonzero entries, the strong /
+        // gap-safe rules pay screening setup *and* extra KKT
         // re-iterations to add back features they wrongly pruned. In
         // that regime we degrade to a full-feature sweep, which the
-        // measurement in the threshold's docstring shows is faster.
+        // measurement in `DEFAULT_SATURATION_THRESHOLD`'s docstring
+        // shows is faster.
         let active_count = warm.iter().filter(|&&b| b != 0.0).count();
         let saturated = !matches!(config.screening, Screening::Off)
-            && (active_count as f64) > SCREENING_SATURATION_THRESHOLD * (p as f64);
+            && (active_count as f64) > saturation_thresh * (p as f64);
         let effective_screening = if saturated {
             Screening::Off
         } else {

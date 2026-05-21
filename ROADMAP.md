@@ -29,7 +29,7 @@ open v0.x lever.
 | P2 — Scalar MCP/SCAD path overhead investigation | Performance | ✅ closed (no structural lever) | profiled with `SKEIN_PROFILE_PATH` and a microbench + per-coord-visit attribution harness (`crates/skein-core/examples/{mcp_ls_medium,mcp_vs_lasso_micro,mcp_cd_attribution}.rs`); the medium/deep MCP-vs-Lasso gap localises entirely to `inner_cd` (penalty `prox_coord` is actually *faster* than Lasso's; `value(beta)` adds <2 µs/λ) and the driver is **MCP's bias-correction property creating ~31% more total coord work**: ~20% more inner CD iters per λ (firm-threshold settles slower) and a ~6% larger per-λ working set (warm-started support carries the bias-corrected coefficients forward). Per-coord-visit BLAS cost is identical (axpy 1.18×, grad 1.21× — exactly proportional to visit count). This is the same property that makes MCP useful versus Lasso; the right next attack is P6's uniform inner-CD coord-visit speedup. |
 | P3 — Cross-platform BLAS in distributed wheels | Performance | ⏳ planned | M10.G carryover — Linux/manylinux2014 already wires OpenBLAS; Windows wheels still ship without BLAS; MKL feature unwired |
 | P4 — Pre-pass gap-safe screening | Performance | ✅ closed (subsumed by existing screening cascade) | Implemented and A/B-measured 2026-05-21; pre-pass screen at λ_k entry reuses the M13.2 `prev_grad` cache to invoke `gap_safe_screen_with_grad` before the first inner-CD pass. At large (n=50k, p=5k) the change registered as a **+11–15 % regression** in both deep and sparse regimes despite identical iter / KKT-pass counts; the cascade of M13.1 saturation bypass + M13.2 priority rule + post-pass `compute_outer_state.safely_inactive` already prunes everything the pre-pass would catch, so the only net effect is the screen's O(p) overhead repeated per λ. Implementation + tests reverted; closeout below records what was tried and why it didn't pay. |
-| P5 — M13.1 saturation-threshold tuning | Performance | ⏳ planned | conservative 0.5 may leave headroom on deep regime; cheap ablation, gated on H1 |
+| P5 — M13.1 saturation-threshold tuning | Performance | ✅ closed (0.5 already optimal) | 10-replicate ablation across {0.3, 0.4, 0.5, 0.6, 0.7} × {deep, sparse} on medium (n=10k, p=1k): **0.5 strictly dominates** in both regimes (p25 wall, locale-immune Python parse). Closest competitor is 0.7 sparse at +1.8 % (effectively tied); every other (threshold, regime) is 8–24 % slower than 0.5. M13.1's original calibration validated, not displaceable. The `saturation_threshold()` helper + `SKEIN_SATURATION_THRESHOLD` env-var hook are kept in tree as a permanent ablation surface (sibling to `SKEIN_PROFILE_PATH`), so future maintainers can re-run the sweep if the cascade ever changes shape. |
 | P6 — Inner-CD column batching at large n | Performance | ✅ closed (no measurable lever) | M13.6's 1.5× super-linearity does not reproduce on current HEAD — full-path large (n=50k, p=5k) scales 15.79× wall for 25× n×p growth (0.63× factor, sub-linear), and per-coord-visit BLAS cost is *lowest* at large (0.37 ns/elem vs 0.82 at medium — Accelerate amortises call overhead over longer vectors). Both the bandwidth-wall premise and the path-level super-linearity premise are falsified; the M14.x perf work between M13.6 and v1.0 appears to have already closed the gap. |
 | O1 — `cargo-semver-checks` in CI | Operability | ✅ done | v1.0 stability promise machine-checked on every PR via `--baseline-rev v1.0.0`; 222 checks vs the freeze surface |
 | O2 — `cargo-audit` + `pip-audit` + dependabot | Operability | ✅ done | supply-chain hygiene baseline; weekly cron + per-PR on dep-manifest changes; 1 documented advisory ignore (RUSTSEC-2025-0020, pyo3 unreachable API) |
@@ -41,9 +41,11 @@ open v0.x lever.
 Test count at v1.0.0: **358 cargo lib + 8 cargo integration + 455
 pytest, all green.** Each milestone below either keeps this number
 flat (perf work) or grows it (hardening). Current HEAD: **448 cargo
-lib + 605 pytest** (post-P4 closeout; P2, P6, and P4 are all no-lever
-closeouts whose implementation work — when there was any — was reverted,
-counts unchanged from H4).
+lib + 605 pytest** (post-P5 closeout; P2, P6, P4, and P5 are all no-lever
+closeouts. P5 differs from the others — it ships the `saturation_threshold()`
+ablation helper + `SKEIN_SATURATION_THRESHOLD` env-var hook as permanent
+infrastructure but doesn't change the production threshold, since the
+ablation validated 0.5 as already optimal).
 
 ---
 
@@ -570,14 +572,91 @@ saturation. P5 in particular is a cheap ablation that adjusts
 how often the M13.1 bypass fires, which is closer to a
 threshold-tuning experiment than a structural change.
 
-### P5 — M13.1 saturation-threshold tuning
+### ✅ P5 — M13.1 saturation-threshold tuning
 
-M13.1 shipped at `SCREENING_SATURATION_THRESHOLD = 0.5` — the
-conservative choice. Lower thresholds (e.g. 0.3) likely recover
-more of the gap to `screening = Off` on deep regimes; higher
-thresholds are safer on borderline-saturated cells. Ablation cell in
-`benches/v2/` to measure at every regime × scenario; gate on H1
-landing first so the ablation has scale to measure against.
+**Closed 2026-05-21 with a "0.5 already optimal" outcome.** Different
+flavor of "no lever" from P2 / P6 / P4: those closed because the
+proposed change couldn't deliver a measurable win; P5 closes
+because the *current* parameter value is the optimum of the
+ablation grid — moving it in either direction strictly regresses
+medium-cell wall in both regimes.
+
+Background framing (now resolved): M13.1 shipped at
+`SCREENING_SATURATION_THRESHOLD = 0.5` — chosen "conservatively"
+because the original M13.1 measurement only checked threshold = 0.5
+vs the alternatives of full Strong (no bypass) or full Off (no
+screening). The roadmap entry conjectured that lower thresholds
+(0.3) might recover more of the off-vs-strong gap on deep
+regimes; higher thresholds might be safer on borderline-saturated
+cells. P5 actually measured the trade-off across a 5-point grid.
+
+**What was implemented and kept.** A small refactor of
+`crates/skein-core/src/solver/path.rs` that replaces the
+compile-time `const SCREENING_SATURATION_THRESHOLD: f64 = 0.5`
+with a `DEFAULT_SATURATION_THRESHOLD` const plus a
+`pub(crate) fn saturation_threshold()` helper that reads
+`SKEIN_SATURATION_THRESHOLD` (validated as a float in `[0, 1]`)
+and falls back to the default on absent / invalid input. The two
+GLM sibling constants (`PN_SCREENING_SATURATION_THRESHOLD` in
+`prox_newton.rs` and `BLOCK_PN_SCREENING_SATURATION_THRESHOLD` in
+`prox_newton_block.rs`) are removed in favour of importing the
+shared helper, so all three solver entrypoints (LS path, GLM
+prox-Newton, group prox-Newton) respect the same env-var override.
+This is kept in tree as a permanent ablation hook — same pattern
+as `SKEIN_PROFILE_PATH` — so future maintainers can re-run the
+sweep if the screening cascade ever changes shape.
+
+The `lasso_ls_scaling.rs` example also picked up a
+`SKEIN_REGIME=sparse` env var (5e-2 λ_min/λ_max) so the sweep can
+hit both the dense-tail and support-recovery regimes from the
+same binary.
+
+**Measurement.** 10 replicates per (threshold × regime) at medium
+(n=10k, p=1k) on the same release binary, locale-immune Python
+parse of the example's `fit in <Duration>` lines (the prior
+locale=es_MX bash/awk pipeline truncated decimal-point values to
+integer seconds — corrected before drawing conclusions). p25
+medium wall (lower quartile, robust to occasional load spikes):
+
+| threshold | deep medium    | sparse medium   |
+|-----------|---------------:|----------------:|
+| 0.3       | 1709 ms (+19.7 %) | 732 ms (+22.2 %) |
+| 0.4       | 1755 ms (+23.0 %) | 647 ms ( +8.0 %) |
+| **0.5**   | **1427 ms (best)**   | **599 ms (best)**   |
+| 0.6       | 1624 ms (+13.8 %) | 690 ms (+15.3 %) |
+| 0.7       | 1763 ms (+23.6 %) | 610 ms ( +1.8 %) |
+
+0.5 is the **strict optimum** in both regimes; every other point
+on the grid is slower by p25 wall. The closest competitor is 0.7
+on sparse (+1.8 %, effectively tied — well within the per-run
+variance), but it still doesn't beat the default; in deep regime
+0.7 is +23.6 % worse, which kills it as a global pick.
+
+**Why 0.5 happens to be optimal.** The threshold trades inner-CD
+work against KKT-verifier work, and the two costs cross at
+roughly equal active-density. Lower threshold → bypass fires
+earlier → more λs do full-feature sweeps (cheaper per-λ inner CD
+in absolute terms once the active set is dense, but more total
+work over the path). Higher threshold → bypass fires later →
+more λs run Strong screening (fewer features per CD pass, but
+more KKT-verifier rounds and more screen-then-re-add overhead).
+The crossover at 0.5 reflects skein's specific per-coord BLAS
+cost / KKT-verifier cost ratio under Accelerate; a different
+BLAS or a structural change to either phase would shift the
+optimum, which is why the env-var hook stays.
+
+**What was NOT measured** (deferred to a maintainer cell if ever
+needed):
+
+- Large cells (n=50k, p=5k) at the full grid. ~25 s per fit ×
+  50 conditions = ~20 min wall; expected to track medium given
+  the same scaling story, but not confirmed.
+- GLM prox-Newton paths (logistic / Poisson / Cox). The helper
+  refactor wires their saturation bypasses to the same env var,
+  but the threshold was only measured at the LS surface. If a
+  future investigation finds the GLM optimum differs, the
+  natural fix is a per-solver default (not a single shared
+  constant).
 
 ### ✅ P6 — Inner-CD column batching at large n
 
