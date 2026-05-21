@@ -589,3 +589,18 @@ __all__ = [
 ]
 
 __version__ = "1.0.0"
+
+# BLAS feature flags this wheel was built with. Empty tuple ⇒ no
+# hardware BLAS (uses ndarray's pure-Rust `matrixmultiply` fallback;
+# ~3× slower on the inner-CD hot path). Each entry corresponds to a
+# `--features=<name>` passed to maturin at build time; supported values:
+#
+#   "blas-accelerate"  — macOS Accelerate framework.
+#   "blas-openblas"    — system OpenBLAS shared lib.
+#
+# Currently empty on Windows wheels (no BLAS wired); ROADMAP P3 tracks
+# closing that gap. Users can `print(skein_glm.__build_features__)` to
+# check what they got.
+from skein_glm._core import build_features as _build_features
+
+__build_features__: tuple[str, ...] = tuple(_build_features())

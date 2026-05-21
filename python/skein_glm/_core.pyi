@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
+def build_features() -> list[str]: ...
 def convex_min_idx_scalar(
     betas: NDArray[np.float64],
     col_lip: NDArray[np.float64],

@@ -28,8 +28,36 @@ mod orthonormalize;
 
 use pyo3::prelude::*;
 
+/// Returns the BLAS feature flags this wheel was built with.
+///
+/// Each entry corresponds to a `--features=<name>` passed to `maturin
+/// develop` / `cibuildwheel`'s `MATURIN_PEP517_ARGS`:
+///
+/// - `"blas-accelerate"` — macOS Accelerate framework.
+/// - `"blas-openblas"`   — system OpenBLAS (via the system shared lib).
+///
+/// An empty list means the wheel uses ndarray's pure-Rust `matrixmultiply`
+/// fallback — correct, but ~3× slower on the inner-CD hot path than
+/// either hardware-BLAS path. Currently the case on Windows wheels;
+/// ROADMAP P3 tracks closing that gap.
+///
+/// Wired through to Python as `skein_glm.__build_features__`. P3
+/// acceptance criterion.
+#[pyfunction]
+fn build_features() -> Vec<&'static str> {
+    let mut features = Vec::new();
+    if cfg!(feature = "blas-accelerate") {
+        features.push("blas-accelerate");
+    }
+    if cfg!(feature = "blas-openblas") {
+        features.push("blas-openblas");
+    }
+    features
+}
+
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(build_features, m)?)?;
     m.add_function(wrap_pyfunction!(ls::solve_mcp_ls, m)?)?;
     m.add_function(wrap_pyfunction!(ls::solve_scad_ls, m)?)?;
     m.add_function(wrap_pyfunction!(ls::solve_mcp_ls_path, m)?)?;

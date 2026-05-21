@@ -3132,3 +3132,21 @@ def test_logistic_mcp_path_standardize_recovers_signal_with_inflated_scale():
     assert np.sign(last[0]) == np.sign(true_beta[0])
     assert np.sign(last[2]) == np.sign(true_beta[2])
     assert np.sign(last[5]) == np.sign(true_beta[5])
+
+
+# ---- P3: build-features introspection ----------------------------------
+
+
+def test_build_features_attribute_shape():
+    """`skein_glm.__build_features__` is a tuple of strings drawn from the
+    known BLAS feature set, with at most one entry (the BLAS features are
+    mutually exclusive at link time — `blas-src` would fail to compile
+    otherwise). Empty tuple ⇒ pure-Rust fallback build (no BLAS). The
+    actual contents are platform/CI-determined; this test just pins the
+    shape so a regression in the PyO3 ↔ Python wiring fails immediately."""
+    feats = skein.__build_features__
+    assert isinstance(feats, tuple)
+    assert all(isinstance(f, str) for f in feats)
+    assert len(feats) <= 1
+    if feats:
+        assert feats[0] in ("blas-accelerate", "blas-openblas")

@@ -27,7 +27,7 @@ open v0.x lever.
 | H4 — Reproducibility audit | Hardening | ✅ done | `tests/test_reproducibility.py` pins every public RNG-consuming estimator with paired same-seed + different-seed fits: MCPPathCV / GroupLassoPathCV / LogisticLassoPathCV / AdaptiveLassoPathCV / MultinomialLassoPathCV (KFold-shuffle path), StabilitySelection (bootstrap subsampling), GraphicalStabilitySelection (graph stability), GraphicalBootstrap (CI bounds). Same seed → `np.array_equal` on `coef_` / `cv_scores_` / `selection_probabilities_` / `edge_selection_probabilities_` / `ci_lower_` / `ci_upper_`; different seed → measurable divergence (catches a silent dropped-RNG regression). BLAS-thread caveat documented inline: the Rust path solver itself is deterministic — the reproducibility we assert lives entirely in Python-side fold construction + bootstrap resampling, which is BLAS-thread-independent at the small problem sizes used. |
 | P1 — Native sparse-group SCAD block-CD for GLMs | Performance | ✅ done | dropped the LLA layer for logistic / Poisson / Cox sparse-group SCAD (dense + sparse, six PyO3 builders) by routing each closure through `SparseGroupScad::with_coord_weights` instead of `surrogate_sparse_group_scad` + `SparseGroupLasso`. Closes the last LLA-wrapped non-convex group family in the GLM PyO3 surface (sparse-group MCP was already native per M14c.2). All 11 `tests/test_sparse_group_scad.py` cases pass and the broader 605-pytest / 448-cargo-lib suites stay green |
 | P2 — Scalar MCP/SCAD path overhead investigation | Performance | ✅ closed (no structural lever) | profiled with `SKEIN_PROFILE_PATH` and a microbench + per-coord-visit attribution harness (`crates/skein-core/examples/{mcp_ls_medium,mcp_vs_lasso_micro,mcp_cd_attribution}.rs`); the medium/deep MCP-vs-Lasso gap localises entirely to `inner_cd` (penalty `prox_coord` is actually *faster* than Lasso's; `value(beta)` adds <2 µs/λ) and the driver is **MCP's bias-correction property creating ~31% more total coord work**: ~20% more inner CD iters per λ (firm-threshold settles slower) and a ~6% larger per-λ working set (warm-started support carries the bias-corrected coefficients forward). Per-coord-visit BLAS cost is identical (axpy 1.18×, grad 1.21× — exactly proportional to visit count). This is the same property that makes MCP useful versus Lasso; the right next attack is P6's uniform inner-CD coord-visit speedup. |
-| P3 — Cross-platform BLAS in distributed wheels | Performance | ⏳ planned | M10.G carryover — Linux/manylinux2014 already wires OpenBLAS; Windows wheels still ship without BLAS; MKL feature unwired |
+| P3 — Cross-platform BLAS in distributed wheels | Performance | ⏳ in progress | `skein_glm.__build_features__` shipped 2026-05-21 (P3 acceptance criterion — users can introspect what BLAS the wheel was built with); Windows BLAS audit + MKL question still open |
 | P4 — Pre-pass gap-safe screening | Performance | ✅ closed (subsumed by existing screening cascade) | Implemented and A/B-measured 2026-05-21; pre-pass screen at λ_k entry reuses the M13.2 `prev_grad` cache to invoke `gap_safe_screen_with_grad` before the first inner-CD pass. At large (n=50k, p=5k) the change registered as a **+11–15 % regression** in both deep and sparse regimes despite identical iter / KKT-pass counts; the cascade of M13.1 saturation bypass + M13.2 priority rule + post-pass `compute_outer_state.safely_inactive` already prunes everything the pre-pass would catch, so the only net effect is the screen's O(p) overhead repeated per λ. Implementation + tests reverted; closeout below records what was tried and why it didn't pay. |
 | P5 — M13.1 saturation-threshold tuning | Performance | ✅ closed (0.5 already optimal) | 10-replicate ablation across {0.3, 0.4, 0.5, 0.6, 0.7} × {deep, sparse} on medium (n=10k, p=1k): **0.5 strictly dominates** in both regimes (p25 wall, locale-immune Python parse). Closest competitor is 0.7 sparse at +1.8 % (effectively tied); every other (threshold, regime) is 8–24 % slower than 0.5. M13.1's original calibration validated, not displaceable. The `saturation_threshold()` helper + `SKEIN_SATURATION_THRESHOLD` env-var hook are kept in tree as a permanent ablation surface (sibling to `SKEIN_PROFILE_PATH`), so future maintainers can re-run the sweep if the cascade ever changes shape. |
 | P6 — Inner-CD column batching at large n | Performance | ✅ closed (no measurable lever) | M13.6's 1.5× super-linearity does not reproduce on current HEAD — full-path large (n=50k, p=5k) scales 15.79× wall for 25× n×p growth (0.63× factor, sub-linear), and per-coord-visit BLAS cost is *lowest* at large (0.37 ns/elem vs 0.82 at medium — Accelerate amortises call overhead over longer vectors). Both the bandwidth-wall premise and the path-level super-linearity premise are falsified; the M14.x perf work between M13.6 and v1.0 appears to have already closed the gap. |
@@ -41,11 +41,8 @@ open v0.x lever.
 Test count at v1.0.0: **358 cargo lib + 8 cargo integration + 455
 pytest, all green.** Each milestone below either keeps this number
 flat (perf work) or grows it (hardening). Current HEAD: **448 cargo
-lib + 605 pytest** (post-P5 closeout; P2, P6, P4, and P5 are all no-lever
-closeouts. P5 differs from the others — it ships the `saturation_threshold()`
-ablation helper + `SKEIN_SATURATION_THRESHOLD` env-var hook as permanent
-infrastructure but doesn't change the production threshold, since the
-ablation validated 0.5 as already optimal).
+lib + 606 pytest** (post-P3a; P3 part (a) ships `skein_glm.__build_features__`
+with one new pytest pinning the type contract — `test_build_features_attribute_shape`).
 
 ---
 
@@ -434,29 +431,46 @@ penalty. MCP has more visits per fit, so it benefits proportionally
 more from a P6 fix — and P6's structural change is what M10.I
 already flagged in the v0.x roadmap.
 
-### P3 — Cross-platform BLAS in distributed wheels
+### P3 — Cross-platform BLAS in distributed wheels (in progress)
 
-**Carries M10.G forward.** Current state:
+**Carries M10.G forward.** Two-part milestone: (a) introspection
+surface so users can tell what BLAS their wheel ships with, and
+(b) actually wire BLAS on Windows.
+
+**(a) `__build_features__` — shipped 2026-05-21.** New
+`pub fn build_features() -> Vec<&'static str>` in
+`crates/skein-py/src/lib.rs` returns the active BLAS feature flags
+determined at compile time via `cfg!(feature = "blas-*")`. Wired
+through to Python as `skein_glm.__build_features__: tuple[str, ...]`
+in `python/skein_glm/__init__.py`. Empty tuple ⇒ no hardware BLAS
+(ndarray's pure-Rust `matrixmultiply` fallback, ~3× slower on the
+inner-CD hot path). Backed by `tests/test_smoke.py::test_build_features_attribute_shape`
+pinning the type contract; the `_core.pyi` stub teaches mypy about
+the new function. P3 acceptance criterion as written
+(`skein_glm.__build_features__` exposed) is now satisfied.
+
+**(b) Windows BLAS wiring — still open.** Current state:
 
 - macOS arm64 wheels: `blas-accelerate` (✓).
 - Linux x86_64 wheels: `blas-openblas` via manylinux2014 OpenBLAS
   package (✓ — wired in `.github/workflows/wheels.yml`).
 - **Windows wheels: no BLAS feature enabled.** The Cython-grade
-  matvec gap is therefore largest on Windows.
+  matvec gap is therefore largest on Windows. After (a),
+  `skein_glm.__build_features__ == ()` on a Windows wheel makes
+  the gap user-visible.
 - **MKL feature unwired.** Listed in the v0.x roadmap as an option;
   not built, not exposed.
 
-Deliverable:
+Remaining deliverable:
 
 - Audit Windows wheel for whether `blas-openblas` (`vcpkg openblas`)
   is reachable in cibuildwheel; if so, wire it. Otherwise document
-  the gap.
-- Decide whether to add `blas-mkl` as a documented opt-in build
-  feature. Not in the default wheel matrix.
-
-Acceptance: a published wheel that lacks BLAS prints a one-line
-runtime notice on first import (or in `skein_glm.__version__` /
-`__build_features__`) so users know what they have.
+  the gap. Three plausible paths to try in order: (1) `vcpkg install
+  openblas:x64-windows` + `OPENBLAS_DIR` env hint for `openblas-src/system`;
+  (2) `openblas-src/static` (builds OpenBLAS from source — slow CI but
+  reliable); (3) `intel-mkl-src` prebuilt-binary download as a `blas-mkl`
+  opt-in feature. (3) doubles as the MKL question — only worth wiring
+  if (1) and (2) both fail.
 
 ### ✅ P4 — Pre-pass gap-safe screening
 
