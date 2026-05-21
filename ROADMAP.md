@@ -28,9 +28,9 @@ open v0.x lever.
 | P1 — Native sparse-group SCAD block-CD for GLMs | Performance | ✅ done | dropped the LLA layer for logistic / Poisson / Cox sparse-group SCAD (dense + sparse, six PyO3 builders) by routing each closure through `SparseGroupScad::with_coord_weights` instead of `surrogate_sparse_group_scad` + `SparseGroupLasso`. Closes the last LLA-wrapped non-convex group family in the GLM PyO3 surface (sparse-group MCP was already native per M14c.2). All 11 `tests/test_sparse_group_scad.py` cases pass and the broader 605-pytest / 448-cargo-lib suites stay green |
 | P2 — Scalar MCP/SCAD path overhead investigation | Performance | ✅ closed (no structural lever) | profiled with `SKEIN_PROFILE_PATH` and a microbench + per-coord-visit attribution harness (`crates/skein-core/examples/{mcp_ls_medium,mcp_vs_lasso_micro,mcp_cd_attribution}.rs`); the medium/deep MCP-vs-Lasso gap localises entirely to `inner_cd` (penalty `prox_coord` is actually *faster* than Lasso's; `value(beta)` adds <2 µs/λ) and the driver is **MCP's bias-correction property creating ~31% more total coord work**: ~20% more inner CD iters per λ (firm-threshold settles slower) and a ~6% larger per-λ working set (warm-started support carries the bias-corrected coefficients forward). Per-coord-visit BLAS cost is identical (axpy 1.18×, grad 1.21× — exactly proportional to visit count). This is the same property that makes MCP useful versus Lasso; the right next attack is P6's uniform inner-CD coord-visit speedup. |
 | P3 — Cross-platform BLAS in distributed wheels | Performance | ⏳ planned | M10.G carryover — Linux/manylinux2014 already wires OpenBLAS; Windows wheels still ship without BLAS; MKL feature unwired |
-| P4 — Pre-pass gap-safe screening | Performance | ⏳ planned | M10.H carryover — requires H1 to measure |
+| P4 — Pre-pass gap-safe screening | Performance | ✅ closed (subsumed by existing screening cascade) | Implemented and A/B-measured 2026-05-21; pre-pass screen at λ_k entry reuses the M13.2 `prev_grad` cache to invoke `gap_safe_screen_with_grad` before the first inner-CD pass. At large (n=50k, p=5k) the change registered as a **+11–15 % regression** in both deep and sparse regimes despite identical iter / KKT-pass counts; the cascade of M13.1 saturation bypass + M13.2 priority rule + post-pass `compute_outer_state.safely_inactive` already prunes everything the pre-pass would catch, so the only net effect is the screen's O(p) overhead repeated per λ. Implementation + tests reverted; closeout below records what was tried and why it didn't pay. |
 | P5 — M13.1 saturation-threshold tuning | Performance | ⏳ planned | conservative 0.5 may leave headroom on deep regime; cheap ablation, gated on H1 |
-| P6 — Inner-CD column batching at large n | Performance | ⏳ planned | M13.6 follow-up — memory-bandwidth wall confirmed at n=50k, p=5k; structural change to `cd_solve_subset` |
+| P6 — Inner-CD column batching at large n | Performance | ✅ closed (no measurable lever) | M13.6's 1.5× super-linearity does not reproduce on current HEAD — full-path large (n=50k, p=5k) scales 15.79× wall for 25× n×p growth (0.63× factor, sub-linear), and per-coord-visit BLAS cost is *lowest* at large (0.37 ns/elem vs 0.82 at medium — Accelerate amortises call overhead over longer vectors). Both the bandwidth-wall premise and the path-level super-linearity premise are falsified; the M14.x perf work between M13.6 and v1.0 appears to have already closed the gap. |
 | O1 — `cargo-semver-checks` in CI | Operability | ✅ done | v1.0 stability promise machine-checked on every PR via `--baseline-rev v1.0.0`; 222 checks vs the freeze surface |
 | O2 — `cargo-audit` + `pip-audit` + dependabot | Operability | ✅ done | supply-chain hygiene baseline; weekly cron + per-PR on dep-manifest changes; 1 documented advisory ignore (RUSTSEC-2025-0020, pyo3 unreachable API) |
 | O3 — Python 3.13 + NumPy 2.x in CI matrix | Operability | ✅ done | 3.13 added to the `python` job matrix; local pytest on 3.13 + NumPy 2.4.6 green (506 passed). NumPy 2.x was already the resolver default at v1.0 — `numpy>=1.24` floor stays; no API-removal hazards in the Python codebase |
@@ -41,7 +41,9 @@ open v0.x lever.
 Test count at v1.0.0: **358 cargo lib + 8 cargo integration + 455
 pytest, all green.** Each milestone below either keeps this number
 flat (perf work) or grows it (hardening). Current HEAD: **448 cargo
-lib + 605 pytest** (post-P1; P1 is a perf-swap, counts unchanged from H4).
+lib + 605 pytest** (post-P4 closeout; P2, P6, and P4 are all no-lever
+closeouts whose implementation work — when there was any — was reverted,
+counts unchanged from H4).
 
 ---
 
@@ -454,17 +456,119 @@ Acceptance: a published wheel that lacks BLAS prints a one-line
 runtime notice on first import (or in `skein_glm.__version__` /
 `__build_features__`) so users know what they have.
 
-### P4 — Pre-pass gap-safe screening
+### ✅ P4 — Pre-pass gap-safe screening
 
-**Carries M10.H forward.** F-series shipped post-pass screening (run
-after each outer KKT pass). celer's actual pattern is pre-pass — use
-λ\_{k-1}'s last gap + gradient to prune the priority working set at
-λ\_k entry. Modest extension; most upside is on sparse-regime GLM
-paths where post-pass screening fires after the (single) pass has
-already converged.
+**Closed 2026-05-21 with a "subsumed by existing screening cascade"
+outcome.** Third milestone this week to close as a no-lever after
+implementation + measurement (P2, P6, P4); same pattern of carrying
+forward a roadmap premise that intervening v0.x work had already
+addressed via a different mechanism.
 
-Gated on H1 — without large-n / long-path scenarios the win is below
-measurement noise.
+Background framing (now stale): F-series shipped post-pass
+gap-safe screening (`compute_outer_state.safely_inactive`, fires
+inside the KKT loop after each inner CD pass). celer's documented
+pattern is pre-pass — at λ_k entry, use the cached gradient from
+λ_{k-1}'s converged state to prune the priority working set
+*before* the first inner-CD pass instead of waiting one CD pass.
+The proposed lever was to add this pre-pass step to
+`Screening::Strong`, intersecting the priority WS with the
+gap-safe inactive set, using the M13.2 `prev_grad` cache so the
+screen costs only an O(p) dual-feasibility sweep rather than an
+extra O(np) matvec.
+
+**What was implemented and reverted.** A two-stage refactor of
+`crates/skein-core/src/solver/path.rs`: (1) `gap_safe_screen` split
+into `gap_safe_screen_with_grad` (takes precomputed gradient) plus
+a thin wrapper that recomputes the gradient for the existing
+`Screening::GapSafe` callers; (2) a pre-pass block in the
+`Strong` branch that — when `prev_grad.is_some()`, the penalty has
+a lasso-form dual gap (`pen.has_lasso_form_dual_gap()`), and the
+datafit is unweighted — calls the helper at λ_k entry and seeds
+the per-λ `screened` mask with the resulting inactive set. Three
+new tests pinned soundness: Lasso ↔ `Screening::Off` equivalence
+at `tol=1e-12`, ElasticNet (α=0.5) ↔ `Off` equivalence, and a
+cold-start no-op assertion (pre-pass is gated out when
+`prev_grad.is_none()` at k=0). `SKEIN_DISABLE_PRE_PASS=1` was
+added as an A/B kill switch.
+
+**Measurements** (medians of 3-5 runs per condition, A/B from the
+same release binary, host = macOS arm64 + Accelerate):
+
+| cell                 | P4 on    | P4 off   | delta            |
+|----------------------|---------:|---------:|:-----------------|
+| small (1k × 200) / deep   |    44.2 ms |    44.5 ms | −0.7 % (noise)         |
+| small (1k × 200) / sparse |    10.3 ms |    11.3 ms | −8.9 %                 |
+| medium (10k × 1k) / deep   |    1.57 s  |    1.52 s  | +3.0 % (noise band)    |
+| medium (10k × 1k) / sparse |     616 ms |     618 ms | −0.3 % (noise)         |
+| **large (50k × 5k) / deep**   | **27.55 s**  | **24.77 s**  | **+11.2 % regression** |
+| **large (50k × 5k) / sparse** | **17.46 s**  | **15.19 s**  | **+14.9 % regression** |
+
+Iter counts and KKT-pass counts are **identical** between P4 on
+and P4 off across every cell. The pre-pass screen is changing
+which features land in the first-pass WS, but not the
+convergence trajectory — same total work, just rearranged.
+
+Phase breakdown on large/sparse with `SKEIN_PROFILE_PATH=1`
+isolates where the regression lives:
+
+| phase             | P4 on    | P4 off   | delta   |
+|-------------------|---------:|---------:|:--------|
+| screening (init WS) | 156 ms   | 131 ms   | +19 %   (expected — pre-pass O(p) cost) |
+| inner_cd          | 10626 ms | 9544 ms  | **+11 %** (~+1 s)                          |
+| outer_state (KKT) | 4188 ms  | 3788 ms  | **+11 %** (~+0.4 s)                        |
+
+Both `inner_cd` and `outer_state` grow proportionally by ~11 %.
+Pre-pass overhead alone is ~25 ms; nowhere near the +1.5 s
+tracked delta. Same KKT-pass count, same total work counted in
+iterations, yet wall is consistently higher — most likely
+memory-layout / allocation interactions from carrying the larger
+`screened` mask through the loop, but not localised by the
+existing phase counters.
+
+**Why the cascade was already complete.** Three earlier
+milestones, taken together, leave essentially no work for a
+pre-pass screen to do:
+
+1. **M13.1 saturation bypass** (50 % active-density threshold)
+   routes the entire dense tail through `Screening::Off`, so the
+   second half of the deep-regime path never sees screening at
+   all — pre-pass included.
+2. **M13.2 prev_grad cache** feeds the priority rule with the
+   exact KKT-violation gradient at the warm-start residual, so
+   the rule's top-`max(p0, 2·|support|)` features are already a
+   gradient-driven candidate set, not a generic correlation
+   sample.
+3. **Post-pass `safely_inactive`** in `compute_outer_state` runs
+   gap-safe sphere screening on the WS at the FIRST KKT
+   verification — one pass *after* what P4 would do, but with a
+   tighter gap (the inner CD has run; the gap evaluated at the
+   converged inner-iterate is much smaller than the gap evaluated
+   at the warm-start residual). The tighter gap prunes more
+   aggressively than P4's pre-pass ever could.
+
+P4's pre-pass at λ_k entry uses the *loose* gap from the
+warm-start residual; the post-pass at the same λ uses the
+*tight* gap from the just-converged inner iterate. The latter
+strictly dominates, and the cost of running both is the
+overhead we measured.
+
+**Investigation artifacts.** The `lasso_ls_scaling.rs` example
+already in tree was the regression detector; the
+`SKEIN_DISABLE_PRE_PASS=1` kill switch was reverted with the rest
+of the implementation. No new examples or test files survive the
+revert. Closeout itself is in this entry and `git log` (the
+implementation branch lived locally, never landed on `main`).
+
+**What this implies for the v1.x perf queue.** Same conclusion
+the P6 closeout reached from a different angle: skein's screening
+machinery is mature enough that further pre-pass / mid-pass
+tweaks face diminishing returns. The remaining open perf
+candidates — P3 (Windows BLAS) and P5 (saturation-threshold
+tuning) — both target different surfaces (wheel build, scalar
+hyperparameter) and aren't subject to the same cascade
+saturation. P5 in particular is a cheap ablation that adjusts
+how often the M13.1 bypass fires, which is closer to a
+threshold-tuning experiment than a structural change.
 
 ### P5 — M13.1 saturation-threshold tuning
 
@@ -475,29 +579,99 @@ thresholds are safer on borderline-saturated cells. Ablation cell in
 `benches/v2/` to measure at every regime × scenario; gate on H1
 landing first so the ablation has scale to measure against.
 
-### P6 — Inner-CD column batching at large n
+### ✅ P6 — Inner-CD column batching at large n
 
-**Carries M13.6 forward.** The medium → large transition is 1.5×
-super-linear in `cd_solve_subset` (37.6× wall for a 25× problem
-growth, with the entire excess in inner-CD coord-visit cost). At
-n=50k the per-column X-vector exceeds L2; `col_dot` shifts from
-compute-bound to memory-bandwidth-bound, and each coord visit
-streams a fresh column from main memory.
+**Closed 2026-05-21 with a "no measurable lever" outcome.** Same
+disposition as P2: the original framing carried an M13.6
+measurement forward without re-validating against current HEAD;
+once the gates (H1 + P1 + P2) cleared and we re-measured, the
+super-linearity the milestone was meant to attack had already been
+closed by the M14.x perf work that landed between M13.6 and v1.0.
+There is no structural lever to ship.
 
-The lever is processing multiple coords per X-column scan
-(reorder the inner CD loop so a column is touched once for a batch
-of pending updates). Structural change to `cd_solve_subset`;
-explicitly the M10.I "Cython-grade rewrite" lever the v0.x roadmap
-called out and parked.
+Background framing (now stale): M13.6 reportedly saw a 37.6× wall
+for the medium → large (n=50k, p=5k) transition vs a 25× n×p
+growth — i.e. 1.5× super-linear — and attributed the excess to a
+column-streaming bandwidth wall as per-column vectors exceed L2.
+The proposed lever was to process multiple coords per X-column
+scan, structurally reworking `cd_solve_subset` (the M10.I
+"Cython-grade rewrite" parked back in v0.x).
 
-Gated on:
+**Investigation artifacts** (kept as reusable scaling-attribution
+tools for future perf work):
 
-1. H1 landing so we have a regression gate.
-2. P1 + P2 landing so the LLA-side overhead is out of the way and
-   the residual gap really does live in inner CD.
+- `crates/skein-core/examples/lasso_cd_attribution_scaling.rs` —
+  re-implements the `cd_solve_subset` inner loop with per-call
+  `Instant` timers and runs the canonical small / medium / large
+  cells. Reports per-element ns for `col_dot` (gradient) and
+  `col_axpy` separately so the bandwidth premise — whether per-call
+  cost spikes as the column outgrows cache — is directly testable.
+- `crates/skein-core/examples/lasso_ls_scaling.rs` already shipped
+  with M13.6; re-run with `SKEIN_PROFILE_PATH=1 SKEIN_SCALING_LARGE=1`
+  produces the path-level phase breakdown reported below.
 
-If after (1)+(2) the medium→large super-linearity is still >1.3×,
-this milestone proceeds; otherwise it stays parked.
+**Findings** (host = macOS arm64 + Accelerate, 2026-05-21):
+
+Single-sweep cold-start at λ_max × 1e-3, full feature set:
+
+```
+              wall      visits   grad ns/elem   axpy ns/elem
+  small         4.8 ms    3600    0.583          0.466
+  medium      178   ms   11000    0.818          0.771
+  large      1797   ms   50000    0.365          0.392
+```
+
+Per-element column-streaming cost is *lowest* at large, not
+highest — BLAS amortises call overhead over the longer vectors,
+and the column read is at peak memory throughput regardless of
+whether it fits in L2. No headroom to recover.
+
+Full-path scaling (100 λs, warm-start, `SKEIN_PROFILE_PATH=1`):
+
+```
+                  total wall   wall ratio   n×p ratio   factor
+  small            44.85 ms       —           —          —
+  medium            1.43 s     31.92×       50×        0.64×   sub-linear
+  large            22.61 s     15.79×       25×        0.63×   sub-linear
+```
+
+Both transitions are strongly sub-linear in n×p. M13.6's 37.6× ÷
+25× = 1.504× super-linear reading is replaced by today's 15.79× ÷
+25× = 0.63× sub-linear. The reduction came in over the v0.x M14.x
+window without an attributable single commit (the perf work was
+spread across several milestones — native penalty BCD swaps,
+`weighted_col_sq_norms` batching, BLAS hot-path tightening).
+
+At large, the per-phase share also shifts: `inner_cd` drops from
+94.7 % (small) → 89.1 % (medium) → 79.2 % (large) of tracked time,
+with `outer_state (KKT)` taking the relative weight (5.3 % → 10.4 %
+→ 20.2 %). KKT per-pass cost scales 30.3× medium→large (vs 25×
+n×p, mildly super-linear at 1.21×) but on the smaller phase the
+net path total stays sub-linear.
+
+**Levers considered and rejected:**
+
+- *Fused `col_dot + col_axpy` in a single column pass.* Premise
+  was that the second column read on each nonzero update compounds
+  the bandwidth tax. Falsified by the per-element data: the
+  per-update cost is already at peak BLAS throughput at large, so
+  there's nothing to fuse against.
+- *Sample-block (row-tiled) CD.* Premise was that processing the
+  inner sweep in row blocks improves L2 hit rate. Falsified by
+  the same data — column streaming is not the bottleneck.
+- *Gram-cache CD for LS* (covariance-update rule, glmnet-style).
+  Would help at n ≫ p but is LS-only (GLM weighted-LS surrogate
+  has changing W per outer iter) and duplicates the existing
+  `GramLeastSquares` opt-in path. Out of P6 scope; a separate
+  "when to use Gram path" docs / dispatch question.
+
+**What this implies for the remaining v1.x perf queue.** The
+outer KKT phase is now the only sub-component growing in relative
+weight at large, which is exactly the surface P4 (pre-pass
+gap-safe screening) attacks. That milestone's premise — "most
+upside is on sparse-regime paths where post-pass screening fires
+after the (single) pass has already converged" — is reinforced
+by the 20.2 % share `outer_state` carries at large.
 
 ---
 
