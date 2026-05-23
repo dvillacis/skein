@@ -71,7 +71,7 @@ jobs:
         if: matrix.cibw_archs == 'aarch64'
         uses: docker/setup-qemu-action@v3
 
-      - uses: pypa/cibuildwheel@v2.21
+      - uses: pypa/cibuildwheel@v3.4
         env:
           # ABI3 wheels: one wheel per platform covers cp310+.
           CIBW_BUILD: "cp310-*"
