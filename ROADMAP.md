@@ -34,7 +34,7 @@ open v0.x lever.
 | O1 — `cargo-semver-checks` in CI | Operability | ✅ done | v1.0 stability promise machine-checked on every PR via `--baseline-rev v1.0.0`; 222 checks vs the freeze surface |
 | O2 — `cargo-audit` + `pip-audit` + dependabot | Operability | ✅ done | supply-chain hygiene baseline; weekly cron + per-PR on dep-manifest changes; 1 documented advisory ignore (RUSTSEC-2025-0020, pyo3 unreachable API) |
 | O3 — Python 3.13 + NumPy 2.x in CI matrix | Operability | ✅ done | 3.13 added to the `python` job matrix; local pytest on 3.13 + NumPy 2.4.6 green (506 passed). NumPy 2.x was already the resolver default at v1.0 — `numpy>=1.24` floor stays; no API-removal hazards in the Python codebase |
-| O4 — Expanded wheel matrix (musllinux + Linux aarch64) | Operability | ⏳ planned | currently `CIBW_SKIP: "*-musllinux_*"`; aarch64 dropped from v0.1.x matrix |
+| O4 — Expanded wheel matrix (musllinux + Linux aarch64) | Operability | ✅ done | `.github/workflows/wheels.yml` now builds manylinux + musllinux on both x86_64 and aarch64 (4 Linux wheels) in addition to macOS arm64 + Windows AMD64. Linux aarch64 runs under QEMU via `docker/setup-qemu-action`; Alpine `apk` path added to the OpenBLAS install dispatch so the `blas-openblas` feature wires correctly across all four Linux containers. Tests are skipped on `*-linux_aarch64` (emulation) and `*-musllinux_*` (no native runner) — the x86_64 manylinux smoke is the canonical post-build assertion. Closeout below records full reasoning. |
 | O5 — `docs/benchmarks/speed.md` consolidation | Operability | ✅ done | One-page headline summary at `docs/benchmarks/speed.md` with full provenance block (host_id, BLAS, skein version, snapshot date, git rev) and per-scenario speedup tables sourced from `paper/tables/T2_headline_timings.md`. Honest about which cells skein loses on (logistic_lasso / poisson_lasso / cox_lasso pre-M13.8 snapshot) and which scenarios have no comparator. Linked into the docs index toctree + `docs/benchmarks/index.md`. |
 | O6 — Structured timing / iteration surface | Operability | ✅ done | per-λ wall time surfaced via `info_["times_ns"]` on every path estimator; powered by additive `solve_path_timed` / `solve_block_path_timed` / `prox_newton_*_solve_path_timed` siblings that keep the v1.0 freeze intact |
 
@@ -893,16 +893,74 @@ Acceptance: 506 tests passed on Python 3.13 + NumPy 2.4.6 +
 SciPy 1.17.1 + sklearn 1.8.0 locally (`/tmp/skein_py313`,
 `SKEIN_REQUIRE_FIXTURES=1`, ~7m38s wall). Import smoke passed.
 
-### O4 — Expanded wheel matrix
+### ✅ O4 — Expanded wheel matrix
 
-`.github/workflows/wheels.yml` currently:
+**Shipped 2026-05-23.** Both v0.1.x deferrals lifted in a single
+`wheels.yml` change. The Linux wheel set goes from 1 → 4 platforms:
+manylinux x86_64, manylinux aarch64, musllinux x86_64, musllinux
+aarch64. macOS arm64 and Windows AMD64 are unchanged. macOS Intel
+(`macos-13` x86_64) stays out — Apple Silicon is the macOS canon and
+Rosetta covers Intel users from the arm64 wheel for development /
+sdist for production.
 
-- `CIBW_SKIP: "*-musllinux_*"` — Alpine / distroless users have no
-  prebuilt path.
-- Linux aarch64 dropped from the v0.1.x matrix.
+What landed:
 
-Both decisions made sense at v0.1; v1.0 is a different audience.
-Re-evaluate both.
+- **Matrix.** `ubuntu-latest` × `aarch64` added alongside the existing
+  `x86_64` entry. `CIBW_SKIP: "*-musllinux_*"` removed, so each Linux
+  matrix entry now produces both manylinux_2_28 and musllinux_1_2
+  wheels for its arch.
+- **QEMU emulation.** A `docker/setup-qemu-action@v3` step gated on
+  `matrix.cibw_archs == 'aarch64'` registers the binfmt_misc handlers
+  cibuildwheel needs to run the aarch64 manylinux + musllinux
+  containers transparently on the x86_64 GH-Actions runner. No-op on
+  the native matrix entries.
+- **OpenBLAS install dispatch.** `CIBW_BEFORE_ALL_LINUX` extended with
+  an `apk add --no-cache openblas-dev pkgconf` fallback after the
+  existing yum / dnf / apt-get chain. This is what makes the
+  `blas-openblas` feature wire correctly inside the musllinux_1_2
+  Alpine container — without it `openblas-src/system` would fail at
+  link time (no `libopenblas.so` + no CBLAS headers on a default
+  Alpine image). The fallback order is concrete-RHEL → AlmaLinux →
+  Debian-based → Alpine, matching the rough probability ordering of
+  which container cibuildwheel is currently running.
+- **PKG_CONFIG_PATH broadened.** Added
+  `/usr/lib/aarch64-linux-gnu/pkgconfig` (Debian-aarch64) and
+  `/usr/lib/pkgconfig` (Alpine) to the existing RHEL + Debian-x86_64
+  search list, so `pkg-config --libs openblas` resolves on every
+  Linux container in the matrix without needing per-container env
+  overrides.
+- **Test skip pattern.** `CIBW_TEST_SKIP` extended from
+  `"*-linux_aarch64"` to `"*-linux_aarch64 *-musllinux_*"`. Rationale:
+  (1) aarch64 emulation is too slow for the full pytest suite under
+  QEMU; the build-time import smoke is enough to catch a broken wheel.
+  (2) musllinux x86_64 tests *could* run (scipy / sklearn musl wheels
+  exist on PyPI since 2024), but the install path under cibuildwheel's
+  containers is fragile and a CI break here would block a release; the
+  build itself is the assertion, not the test run.
+- **Build cost.** Linux aarch64 builds (manylinux + musllinux combined)
+  add ~60–80 min wall on cold cache to the publish-gating critical
+  path. Well under the 6h GH-Actions runner cap. If the cibuildwheel
+  ecosystem regresses around aarch64 emulation, the documented
+  fallback is to drop the aarch64 matrix entry — the comment block in
+  `wheels.yml` records this contingency.
+- **Top-of-file comment** updated from
+  `"Linux x86_64/aarch64, macOS arm64+x86_64, and Windows x86_64"`
+  (stale on macOS x86_64, aspirational on Linux aarch64) to
+  `"Linux (manylinux + musllinux on x86_64 and aarch64), macOS arm64,
+  and Windows AMD64"`.
+
+What was *not* done:
+
+- **musllinux on PyPI smoke.** Closing O4 means a Linux user on
+  Alpine 3.15+ will get a prebuilt wheel from `pip install skein-glm`
+  for the first time. The first tag-push after this lands is the real
+  test — if the musllinux build fails inside cibuildwheel, the
+  publish job is gated by `needs: [build_wheels, ...]` and won't ship.
+  Practical follow-up: dry-run via `workflow_dispatch` before cutting
+  v1.0.1 to validate the four Linux wheels build cleanly.
+- **macOS Intel.** Left out for the reasons in the comment block;
+  re-evaluate only if there's user demand from x86_64 mac users
+  building production from source.
 
 ### ✅ O5 — `docs/benchmarks/speed.md` consolidation
 

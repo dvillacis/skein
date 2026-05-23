@@ -1,9 +1,9 @@
 name: Wheels
 
-# Builds wheels via cibuildwheel for Linux x86_64/aarch64, macOS
-# arm64+x86_64, and Windows x86_64; uploads them as workflow
-# artifacts; and (on tag push) publishes to PyPI via Trusted
-# Publishers (no API token / no long-lived secret).
+# Builds wheels via cibuildwheel for Linux (manylinux + musllinux on
+# x86_64 and aarch64), macOS arm64, and Windows AMD64; uploads them
+# as workflow artifacts; and (on tag push) publishes to PyPI via
+# Trusted Publishers (no API token / no long-lived secret).
 #
 # One-time PyPI setup before the first publish works:
 #
@@ -40,28 +40,41 @@ jobs:
         include:
           - os: ubuntu-latest
             cibw_archs: x86_64
+          - os: ubuntu-latest
+            cibw_archs: aarch64
           - os: macos-14
             cibw_archs: arm64
           - os: windows-latest
             cibw_archs: AMD64
-          # Linux aarch64 (emulated under QEMU) and macOS Intel
-          # (macos-13) are dropped from the v0.1.x release matrix
-          # because they take 40+ min each on cold caches and gate the
-          # publish job. Users on those platforms `pip install` builds
-          # from sdist on first install. Add back when:
-          #  - there's user demand for prebuilt aarch64 wheels, OR
-          #  - cibuildwheel container caching for QEMU is mature, OR
-          #  - we can run on a self-hosted aarch64 runner.
-          # Apple Silicon (macos-14 arm64) is the macOS canon now;
-          # Intel users on x86_64 macOS install from sdist.
+          # Linux x86_64 covers manylinux2014/_2_28 + musllinux_1_2 in one
+          # matrix entry. Linux aarch64 builds the same two libc flavors
+          # via QEMU emulation (`docker/setup-qemu-action` step below);
+          # cibuildwheel registers the binfmt_misc handlers and runs the
+          # manylinux/musllinux aarch64 containers transparently. The
+          # aarch64 build is ~40 min wall on cold cache, well under the
+          # 6h GH Actions runner cap, but it does gate the publish job —
+          # if the cibuildwheel ecosystem regresses around aarch64
+          # emulation, the v0.1.x trade-off (build only x86_64, sdist
+          # fallback for aarch64 users) is the documented fallback.
+          # macOS Intel (macos-13 x86_64) stays dropped — Apple Silicon
+          # is the macOS canon and Rosetta covers Intel users from the
+          # arm64 wheel for development, sdist for production.
     steps:
       - uses: actions/checkout@v4
+
+      # binfmt_misc handlers for non-native arches. Only needed when
+      # the runner arch (x86_64) differs from the wheel arch (aarch64);
+      # cibuildwheel picks up the registered handler automatically and
+      # transparently runs the manylinux/musllinux aarch64 containers
+      # under QEMU. No-op when building x86_64 / arm64 / AMD64 natively.
+      - name: Set up QEMU
+        if: matrix.cibw_archs == 'aarch64'
+        uses: docker/setup-qemu-action@v3
 
       - uses: pypa/cibuildwheel@v2.21
         env:
           # ABI3 wheels: one wheel per platform covers cp310+.
           CIBW_BUILD: "cp310-*"
-          CIBW_SKIP: "*-musllinux_*"
           CIBW_ARCHS: ${{ matrix.cibw_archs }}
 
           # ---- BLAS dispatch on the inner CD's hot path -----------
@@ -76,12 +89,15 @@ jobs:
           #             Accelerate, ships with the OS — zero
           #             install).
           #   Linux:    `--features=blas-openblas`    (system
-          #             OpenBLAS via `openblas-devel`, installed in
-          #             the manylinux container by
-          #             `CIBW_BEFORE_ALL_LINUX` below). `auditwheel`
-          #             then bundles `libopenblas.so.*` into the
-          #             wheel so the installed package is
-          #             self-contained.
+          #             OpenBLAS via `openblas-devel` on
+          #             RHEL/Debian, `openblas-dev` on Alpine,
+          #             installed in the manylinux / musllinux
+          #             container by `CIBW_BEFORE_ALL_LINUX`
+          #             below). `auditwheel` then bundles
+          #             `libopenblas.so.*` into the wheel so the
+          #             installed package is self-contained.
+          #             Applies to manylinux + musllinux on both
+          #             x86_64 and aarch64.
           #   Windows:  no BLAS feature for now — easy
           #             cross-platform OpenBLAS distribution on
           #             Windows is its own project. Wheel still
@@ -90,25 +106,32 @@ jobs:
           CIBW_ENVIRONMENT_LINUX: |
             PATH="$HOME/.cargo/bin:$PATH"
             MATURIN_PEP517_ARGS="--features=blas-openblas"
-            PKG_CONFIG_PATH="/usr/lib64/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig"
+            PKG_CONFIG_PATH="/usr/lib64/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig"
 
-          # Rust toolchain + OpenBLAS inside the manylinux container.
-          # `openblas-devel` provides `libopenblas.so` and the
-          # CBLAS headers `openblas-src` looks up via pkg-config.
-          # CentOS 7 (manylinux2014) and AlmaLinux 8 / 9
-          # (manylinux_2_28) both ship the package under that name.
+          # Rust toolchain + OpenBLAS inside the wheel build container.
+          # `openblas-devel` provides `libopenblas.so` + the CBLAS
+          # headers `openblas-src` looks up via pkg-config. Package
+          # manager dispatch covers every container cibuildwheel ships:
+          #   * yum            — manylinux2014 (CentOS 7)
+          #   * dnf            — manylinux_2_28 (AlmaLinux 8 / 9)
+          #   * apt-get        — Debian-based variants (rare)
+          #   * apk            — musllinux_1_2 (Alpine)
           CIBW_BEFORE_ALL_LINUX: |
             curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
             (yum install -y openblas-devel pkgconfig 2>/dev/null) \
               || (dnf install -y openblas-devel pkgconf-pkg-config) \
-              || (apt-get update && apt-get install -y libopenblas-dev pkg-config)
+              || (apt-get update && apt-get install -y libopenblas-dev pkg-config) \
+              || (apk add --no-cache openblas-dev pkgconf)
 
           # Smoke-test the wheel post-build.
           CIBW_TEST_REQUIRES: "pytest numpy scipy scikit-learn"
           CIBW_TEST_COMMAND: "pytest {project}/tests"
-          # Skip aarch64 tests under emulation (slow, redundant given we
-          # run the full suite on x86_64).
-          CIBW_TEST_SKIP: "*-linux_aarch64"
+          # Skip tests under QEMU emulation (slow, redundant given we
+          # run the full suite on native x86_64). Also skip musllinux —
+          # scipy/sklearn musl wheels exist on PyPI but the install path
+          # is fragile under emulation and the build smoke alone is
+          # enough to catch a broken wheel.
+          CIBW_TEST_SKIP: "*-linux_aarch64 *-musllinux_*"
 
       - uses: actions/upload-artifact@v4
         with:

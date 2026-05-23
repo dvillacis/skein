@@ -99,6 +99,14 @@ release-notes completeness:
 - **O2** — `cargo-audit` + `pip-audit` + dependabot for
   supply-chain hygiene.
 - **O3** — Python 3.13 + NumPy 2.x in the CI matrix.
+- **O4** — expanded wheel matrix. `wheels.yml` now builds manylinux +
+  musllinux on both x86_64 and aarch64 (4 Linux wheels, up from 1) in
+  addition to macOS arm64 + Windows AMD64. Linux aarch64 runs under
+  QEMU via `docker/setup-qemu-action`; Alpine `apk add openblas-dev
+  pkgconf` added to `CIBW_BEFORE_ALL_LINUX` so the `blas-openblas`
+  feature wires across all four Linux containers. Tests stay skipped
+  on `*-linux_aarch64` (emulation) and `*-musllinux_*` (fragile
+  install path).
 - **O6** — per-λ wall-clock surfaced on every path estimator via
   `info_["times_ns"]`, powered by additive `solve_*_path_timed`
   siblings that keep the v1.0 freeze intact.
