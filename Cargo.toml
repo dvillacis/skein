@@ -12,7 +12,7 @@ rust-version = "1.75"
 
 [workspace.dependencies]
 ndarray = "0.16"
-rayon = "1.10"
+rayon = "1.12"
 num-traits = "0.2"
 thiserror = "1"
 
