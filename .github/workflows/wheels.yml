@@ -60,7 +60,7 @@ jobs:
           # is the macOS canon and Rosetta covers Intel users from the
           # arm64 wheel for development, sdist for production.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # binfmt_misc handlers for non-native arches. Only needed when
       # the runner arch (x86_64) differs from the wheel arch (aarch64);
@@ -142,7 +142,7 @@ jobs:
     name: sdist
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
