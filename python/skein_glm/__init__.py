@@ -588,7 +588,7 @@ __all__ = [
     "mb_stability_threshold",
 ]
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 # BLAS feature flags this wheel was built with. Empty tuple ⇒ no
 # hardware BLAS (uses ndarray's pure-Rust `matrixmultiply` fallback;
