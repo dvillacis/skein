@@ -14,7 +14,7 @@ rust-version = "1.75"
 ndarray = "0.16"
 rayon = "1.10"
 num-traits = "0.2"
-thiserror = "1"
+thiserror = "2"
 
 [profile.release]
 lto = "thin"
