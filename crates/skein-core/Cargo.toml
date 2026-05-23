@@ -12,7 +12,7 @@ rayon = { workspace = true }
 num-traits = { workspace = true }
 thiserror = { workspace = true }
 memmap2 = "0.9"
-blas-src = { version = "0.11", default-features = false, optional = true }
+blas-src = { version = "0.14", default-features = false, optional = true }
 accelerate-src = { version = "0.3", optional = true }
 openblas-src = { version = "0.10", default-features = false, optional = true }
 
