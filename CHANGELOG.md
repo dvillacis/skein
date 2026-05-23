@@ -4,11 +4,14 @@ All notable changes to `skein-glm` are recorded here. The project
 follows semantic versioning. The stable Rust API surface is frozen as
 of v1.0.0; see `docs/extending/rust-api.md` for the contract.
 
-## [Unreleased]
+## [1.0.1] — 2026-05-23
 
-Post-v1.0 hardening & operability work. The public API surface is
-unchanged; everything below is additive (new tests, new CI gates,
-new wall-clock instrumentation).
+Post-v1.0 hardening, performance, and operability work. The Rust
+`skein-core` public API surface (the v1.0 freeze contract) is
+unchanged; everything below is additive — new tests, new CI gates,
+new wall-clock instrumentation, an expanded wheel matrix, and two
+loose Python-side conveniences (`skein_glm.__build_features__` and
+the per-λ `info_["times_ns"]` dict key).
 
 ### Hardening
 

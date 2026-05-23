@@ -18,25 +18,46 @@ per-group.
 
 ## Status
 
-**v1.0.0** — the stable-API release. The `skein-core` public surface
-is now frozen per semver: items listed in
-[`docs/extending/rust-api.md`](docs/extending/rust-api.md) follow the
-v1.x stability contract, and ~16 incidental `pub` items moved to
-`pub(crate)` during the M8.5 audit. Carries over v0.10.0's celer-style
-gap-safe screening on the GLM prox-Newton surrogate (3–8× wall-clock
-on `logistic_lasso` v2 cells), adds **M14h** native block-CD for LS
-group SCAD and sparse-group MCP / SCAD, ships the **marginal-FDR**
-selection layer, the **per-block group orthonormalization** (Breheny–
-Huang) preprocess, the **composite-MCP** and **group-exponential-lasso**
-bilevel penalties, a post-fit **`convex.min`** diagnostic on nonconvex
-paths, and the **v2 benchmark expansion** that adds direct-comparator
-coverage across the full GLM × {lasso, MCP} matrix. The supporting
-manuscript at [`paper/manuscript.tex`](paper/manuscript.tex) compiles
-against the JMLR class file with post-M14e/f numbers folded into
-§Results and §Ablation. M5 model selection + inference + threaded
-CV folds + M11 graphical lasso (single + joint) + M12 hardening all
-carried over from v0.8. See [ROADMAP.md](ROADMAP.md) for the full
-plan.
+**v1.0.1** (2026-05-23) — patch release on the v1.0 stable-API line.
+The `skein-core` public surface remains frozen per the v1.0.0 audit
+([`docs/extending/rust-api.md`](docs/extending/rust-api.md), v1.x
+stability contract); this release ships the post-v1.0 hardening,
+performance, and operability slate against that frozen surface.
+
+Hardening: at-scale fixtures (n ≥ 100k) with R-anchored regression
+coverage; numerical-stability sweep across solver pathologies
+(collinear designs, extreme weight spreads, GLM saturation,
+rank-deficient glasso); property-based & fuzz tests on prox /
+surrogate / standardize (30 Rust `proptest`s + 4 Python `hypothesis`
+tests); reproducibility audit pinning every randomized estimator.
+
+Performance: native sparse-group SCAD block-CD for the GLM family
+(dropped the LLA layer for logistic / Poisson / Cox); M13.1
+saturation-threshold tuning closed (0.5 strictly dominates); three
+performance milestones closed as "no structural lever" after
+implementation + measurement.
+
+Operability: `cargo-semver-checks` in CI against `v1.0.0`;
+supply-chain hygiene via cargo-audit + pip-audit + dependabot;
+Python 3.13 + NumPy 2.x in the CI matrix; expanded wheel matrix
+(manylinux + musllinux × x86_64 + aarch64, plus macOS arm64 and
+Windows AMD64); consolidated headline benchmarks at
+[`docs/benchmarks/speed.md`](docs/benchmarks/speed.md); structured
+per-λ wall-clock on every path estimator via `info_["times_ns"]`;
+`skein_glm.__build_features__` to introspect what BLAS the wheel
+ships with.
+
+v1.0.0 carried forward: M14h native block-CD for LS group SCAD and
+sparse-group MCP / SCAD, the marginal-FDR selection layer, per-block
+group orthonormalization (Breheny–Huang), composite-MCP and
+group-exponential-lasso bilevel penalties, post-fit `convex.min`
+diagnostic on nonconvex paths, v2 benchmark expansion across the
+GLM × {lasso, MCP} matrix, the supporting manuscript at
+[`paper/manuscript.tex`](paper/manuscript.tex). M5 model selection
++ inference + threaded CV folds + M11 graphical lasso (single +
+joint) + M12 hardening carried over from v0.8. See
+[CHANGELOG.md](CHANGELOG.md) for the per-release narrative and
+[ROADMAP.md](ROADMAP.md) for the forward plan.
 
 **Done so far:**
 
